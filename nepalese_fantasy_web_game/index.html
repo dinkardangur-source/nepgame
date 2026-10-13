@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Himalayan Realms — Isometric Strategy Prototype</title>
+  <link rel="stylesheet" href="./style.css">
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <div class="brand-mark">HR</div>
+      <div class="brand-copy">
+        <div class="eyebrow">REALM COMMAND</div>
+        <h1>Himalayan Realms</h1>
+      </div>
+      <div class="top-resources">
+        <div class="resource"><span class="resource-icon wood">♣</span><span><b id="woodCount">1,250</b><small>WOOD</small></span></div>
+        <div class="resource"><span class="resource-icon stone">◆</span><span><b id="stoneCount">860</b><small>STONE</small></span></div>
+        <div class="resource"><span class="resource-icon iron">⬟</span><span><b id="ironCount">420</b><small>IRON</small></span></div>
+        <div class="resource"><span class="resource-icon food">✦</span><span><b id="foodCount">2,100</b><small>FOOD</small></span></div>
+      </div>
+      <div class="profile">
+        <div class="profile-avatar">⚔</div>
+        <div><b>Lord Dangol</b><small>LEVEL 18 · VIP 3</small></div>
+        <span class="online-dot"></span>
+      </div>
+    </header>
+
+    <main class="layout">
+      <aside class="left-panel panel">
+        <div class="panel-heading"><span>WORLD ATLAS</span><span class="live-dot"></span></div>
+        <div class="kingdom-list">
+          <button class="kingdom active" data-map="valley">
+            <span class="kingdom-art valley-art">♜</span><span class="kingdom-copy"><b>Gorkha Valley</b><small>Home Kingdom · Safe</small></span><span class="chevron">›</span>
+          </button>
+          <button class="kingdom" data-map="snow">
+            <span class="kingdom-art snow-art">❄</span><span class="kingdom-copy"><b>Himshikhar</b><small>Snow Kingdom · Lvl 12+</small></span><span class="chevron">›</span>
+          </button>
+          <button class="kingdom" data-map="mountain">
+            <span class="kingdom-art mountain-art">▲</span><span class="kingdom-copy"><b>Ironcrest</b><small>Mountain Kingdom · Lvl 15+</small></span><span class="chevron">›</span>
+          </button>
+          <button class="kingdom" data-map="forest">
+            <span class="kingdom-art forest-art">♣</span><span class="kingdom-copy"><b>Green Mandala</b><small>Forest Kingdom · Lvl 8+</small></span><span class="chevron">›</span>
+          </button>
+        </div>
+        <div class="panel-divider"></div>
+        <div class="panel-heading">SELECTED ARMY <span class="tiny-tag">A-01</span></div>
+        <div class="army-card">
+          <div class="army-portrait">🛡️</div>
+          <div class="army-details"><b>Magar Vanguard</b><small>Himalayan Infantry</small><div class="power">✦ 12,480 POWER</div></div>
+        </div>
+        <div class="army-stats">
+          <div><small>INFANTRY</small><b id="infantryCount">120</b></div>
+          <div><small>CAVALRY</small><b id="cavalryCount">24</b></div>
+          <div><small>ARCHERS</small><b id="archerCount">60</b></div>
+        </div>
+        <div class="health-label"><span>ARMY HEALTH</span><b id="healthText">100%</b></div>
+        <div class="health-track"><div id="healthBar" class="health-fill"></div></div>
+        <div class="mission-box">
+          <div class="mission-top"><span class="status-pip" id="missionPip"></span><b id="missionState">IDLE</b></div>
+          <p id="missionDescription">Your army is awaiting orders at the kingdom gate.</p>
+          <div class="mission-progress"><div id="missionProgress"></div></div>
+          <small id="missionTimer">No active mission</small>
+        </div>
+        <div class="panel-divider"></div>
+        <div class="panel-heading">COMMANDS <span class="command-hint">SELECT A TARGET</span></div>
+        <button class="command primary" id="marchBtn"><span>➤</span><span><b>March</b><small>Move to selected target</small></span><kbd>M</kbd></button>
+        <button class="command" id="mineBtn"><span>⛏</span><span><b>Gather Resources</b><small>Work at a resource node</small></span><kbd>G</kbd></button>
+        <button class="command" id="attackBtn"><span>⚔</span><span><b>Attack Target</b><small>Engage monster or enemy</small></span><kbd>A</kbd></button>
+        <button class="command" id="returnBtn"><span>↶</span><span><b>Return Home</b><small>Bring army back to base</small></span><kbd>R</kbd></button>
+      </aside>
+
+      <section class="map-area">
+        <div class="map-toolbar">
+          <div class="map-title"><span class="map-pin">⌖</span><div><h2 id="mapName">Gorkha Valley</h2><p id="mapSubtitle">HOME TERRITORY · CENTRAL HIMALAYAS</p></div></div>
+          <div class="map-tools">
+            <button id="zoomOut" title="Zoom out">−</button><span id="zoomLabel">100%</span><button id="zoomIn" title="Zoom in">+</button>
+            <button id="resetView" title="Reset view">⌂</button>
+          </div>
+        </div>
+        <div id="gameViewport" class="game-viewport">
+          <div class="map-grid"></div>
+          <div class="map-vignette"></div>
+          <div class="scene-label label-north">HIMALAYAN RIDGE <span>▲ ▲ ▲</span></div>
+          <div class="scene-label label-east">ANCIENT TRADE ROUTE</div>
+          <div class="scene-label label-south">GORKHA LOWLANDS</div>
+          <div id="loadingBadge" class="loading-badge"><span class="spinner"></span> PREPARING REALM</div>
+        </div>
+        <div class="map-legend">
+          <span><i class="legend-dot friendly"></i> Friendly territory</span>
+          <span><i class="legend-dot resource"></i> Resource node</span>
+          <span><i class="legend-dot monster"></i> Neutral monster</span>
+          <span><i class="legend-dot army"></i> Your army</span>
+          <span class="legend-tip">Click an object to select · Drag to pan · Scroll to zoom</span>
+        </div>
+      </section>
+
+      <aside class="right-panel panel">
+        <div class="panel-heading">TARGET INTELLIGENCE <span class="scan-icon">⌕</span></div>
+        <div id="targetArtwork" class="target-artwork resource-target">
+          <div class="art-glow"></div><div id="targetEmoji" class="target-emoji">⛏</div><div class="target-badge" id="targetType">RESOURCE NODE</div>
+        </div>
+        <div class="target-info">
+          <h2 id="targetName">Iron Vein</h2>
+          <p id="targetDescription">A rich deposit of mountain iron, ready for gathering.</p>
+          <div class="target-metrics">
+            <div><small>LEVEL</small><b id="targetLevel">08</b></div>
+            <div><small>GUARD</small><b id="targetGuard">None</b></div>
+            <div><small>STATUS</small><b id="targetStatus" class="status-good">Available</b></div>
+          </div>
+          <div class="target-quantity"><span id="quantityLabel">REMAINING ORE</span><b id="targetQuantity">620</b></div>
+          <div class="quantity-track"><div id="quantityBar"></div></div>
+        </div>
+        <div class="panel-divider"></div>
+        <div class="panel-heading">MISSION LOG <span class="tiny-tag">LIVE</span></div>
+        <div id="missionLog" class="mission-log">
+          <div class="log-entry"><span class="log-icon">✦</span><div><b>Realm initialized</b><small>Your forces are ready for orders.</small></div><time>NOW</time></div>
+        </div>
+        <div class="panel-divider"></div>
+        <div class="panel-heading">REALM STATUS</div>
+        <div class="realm-status">
+          <div><span>Kingdom stability</span><b class="status-good">Stable</b></div>
+          <div><span>World connection</span><b class="status-warn"><i></i> Demo mode</b></div>
+          <div><span>Active missions</span><b id="activeMissionCount">0</b></div>
+        </div>
+        <div class="footer-note">HIMALAYAN REALMS <span>WEB PROTOTYPE v0.1</span></div>
+      </aside>
+    </main>
+    <div id="toast" class="toast"></div>
+  </div>
+  <script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.164.1/build/three.module.js"}}</script>
+  <script type="module" src="./src/main.js"></script>
+</body>
+</html>
