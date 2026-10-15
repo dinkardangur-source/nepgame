@@ -3,7 +3,10 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Himalayan Realms — Isometric Strategy Prototype</title>
+  <title>Himalayan Realms</title>
+  <meta name="description" content="Isometric Strategy Prototype set in Himalayan kingdoms">
+  <meta property="og:title" content="Himalayan Realms">
+  <meta property="og:description" content="Isometric Strategy Prototype set in Himalayan kingdoms">
   <link rel="stylesheet" href="./style.css">
 </head>
 <body>
@@ -20,6 +23,17 @@
         <div class="resource"><span class="resource-icon iron">⬟</span><span><b id="ironCount">420</b><small>IRON</small></span></div>
         <div class="resource"><span class="resource-icon food">✦</span><span><b id="foodCount">2,100</b><small>FOOD</small></span></div>
       </div>
+      <div class="topbar-actions">
+        <button id="openBuildingsBtn" class="topbar-btn bldg-btn" title="Inspect all kingdom building asset requirements, manage upgrades, and construct blueprints">
+          <span class="veo-icon">🏛️</span>
+          <span class="veo-text"><b>Building Asset Requirements</b><small>Upgrades & Blueprints</small></span>
+          <span class="badge-req" id="readyUpgradesBadge">READY</span>
+        </button>
+        <button id="btnTopbarFullscreen" class="topbar-btn fs-btn" title="Expand Game Mainland to Fullscreen [F]">
+          <span class="veo-icon">⛶</span>
+          <span class="veo-text"><b>Fullscreen Realm</b><small>Expanded Mainland</small></span>
+        </button>
+      </div>
       <div class="profile">
         <div class="profile-avatar">⚔</div>
         <div><b>Lord Dangol</b><small>LEVEL 18 · VIP 3</small></div>
@@ -29,26 +43,28 @@
 
     <main class="layout">
       <aside class="left-panel panel">
-        <div class="panel-heading"><span>WORLD ATLAS</span><span class="live-dot"></span></div>
+        <div class="panel-heading"><span>WORLD ATLAS · MAINLAND KINGDOM</span><span class="live-dot"></span></div>
         <div class="kingdom-list">
-          <button class="kingdom active" data-map="valley">
-            <span class="kingdom-art valley-art">♜</span><span class="kingdom-copy"><b>Gorkha Valley</b><small>Home Kingdom · Safe</small></span><span class="chevron">›</span>
+          <button class="kingdom active" data-province="valley" title="Focus Central Gorkha Valley">
+            <span class="kingdom-art valley-art">♜</span><span class="kingdom-copy"><b>Gorkha Valley</b><small>Central Capital · Citadel & Barracks</small></span><span class="chevron">›</span>
           </button>
-          <button class="kingdom" data-map="snow">
-            <span class="kingdom-art snow-art">❄</span><span class="kingdom-copy"><b>Himshikhar</b><small>Snow Kingdom · Lvl 12+</small></span><span class="chevron">›</span>
+          <button class="kingdom" data-province="snow" title="Focus Northern Himshikhar Glaciers">
+            <span class="kingdom-art snow-art">❄</span><span class="kingdom-copy"><b>Himshikhar Glaciers</b><small>Northern Snow Peaks · Lvl 12+</small></span><span class="chevron">›</span>
           </button>
-          <button class="kingdom" data-map="mountain">
-            <span class="kingdom-art mountain-art">▲</span><span class="kingdom-copy"><b>Ironcrest</b><small>Mountain Kingdom · Lvl 15+</small></span><span class="chevron">›</span>
+          <button class="kingdom" data-province="mountain" title="Focus Western Ironcrest Ridges">
+            <span class="kingdom-art mountain-art">▲</span><span class="kingdom-copy"><b>Ironcrest Ridges</b><small>Western Mountain Ore · Lvl 15+</small></span><span class="chevron">›</span>
           </button>
-          <button class="kingdom" data-map="forest">
-            <span class="kingdom-art forest-art">♣</span><span class="kingdom-copy"><b>Green Mandala</b><small>Forest Kingdom · Lvl 8+</small></span><span class="chevron">›</span>
+          <button class="kingdom" data-province="forest" title="Focus Southern Green Mandala Woods">
+            <span class="kingdom-art forest-art">♣</span><span class="kingdom-copy"><b>Green Mandala</b><small>Southern Deepwood · Lvl 8+</small></span><span class="chevron">›</span>
           </button>
         </div>
         <div class="panel-divider"></div>
         <div class="panel-heading">SELECTED ARMY <span class="tiny-tag">A-01</span></div>
         <div class="army-card">
-          <div class="army-portrait">🛡️</div>
-          <div class="army-details"><b>Magar Vanguard</b><small>Himalayan Infantry</small><div class="power">✦ 12,480 POWER</div></div>
+          <div class="army-portrait" id="armyPortraitBox" title="Click to view/edit Magar Infantry character design">
+            <img id="armyPortraitImg" src="/assets/images/magar_infantry_tpose.jpg" alt="Level 1 Magar Infantry T-Pose">
+          </div>
+          <div class="army-details"><b>Magar Vanguard</b><small>Level 1 Himalayan Infantry</small><div class="power" id="armyPower">✦ 12,480 POWER</div></div>
         </div>
         <div class="army-stats">
           <div><small>INFANTRY</small><b id="infantryCount">120</b></div>
@@ -64,35 +80,194 @@
           <small id="missionTimer">No active mission</small>
         </div>
         <div class="panel-divider"></div>
-        <div class="panel-heading">COMMANDS <span class="command-hint">SELECT A TARGET</span></div>
-        <button class="command primary" id="marchBtn"><span>➤</span><span><b>March</b><small>Move to selected target</small></span><kbd>M</kbd></button>
-        <button class="command" id="mineBtn"><span>⛏</span><span><b>Gather Resources</b><small>Work at a resource node</small></span><kbd>G</kbd></button>
-        <button class="command" id="attackBtn"><span>⚔</span><span><b>Attack Target</b><small>Engage monster or enemy</small></span><kbd>A</kbd></button>
-        <button class="command" id="returnBtn"><span>↶</span><span><b>Return Home</b><small>Bring army back to base</small></span><kbd>R</kbd></button>
+        <div class="panel-heading">ARMY ORDERS <span class="command-hint">ON-OBJECT CONTROLS</span></div>
+        <button class="command" id="returnBtn"><span>↶</span><span><b>Recall Army to Citadel</b><small>Rally force back at home base</small></span><kbd>R</kbd></button>
+        <button class="command bldg-command" id="btnQuickOpenBuildings"><span>🏛️</span><span><b>Kingdom Architecture</b><small>Asset requirements & blueprints</small></span><kbd>B</kbd></button>
+        <div class="command-tactical-note">
+          <small>⚔️ Click any monster for <b>Attack & Scout</b></small>
+          <small>⛏️ Click any resource node to <b>Mine</b></small>
+        </div>
+
+        <div class="panel-divider"></div>
+        <div class="panel-heading">TRAIN RECRUITS <span class="tiny-tag" id="queueBadge">CITADEL BARRACKS</span></div>
+        <div class="train-panel">
+          <div class="train-item">
+            <div class="train-info">
+              <span class="train-badge infantry-badge">⚔</span>
+              <div>
+                <b>Magar Infantry</b>
+                <small>Sword Slash · 60 ✦ Food, 30 ⬟ Iron</small>
+              </div>
+            </div>
+            <div class="train-actions">
+              <button class="btn-train" data-unit="infantry" data-count="1">+1</button>
+              <button class="btn-train" data-unit="infantry" data-count="5">+5</button>
+            </div>
+          </div>
+          <div class="train-item">
+            <div class="train-info">
+              <span class="train-badge cavalry-badge">🏇</span>
+              <div>
+                <b>Mountain Cavalry</b>
+                <small>Spear Thrust · 120 ✦ Food, 75 ⬟ Iron</small>
+              </div>
+            </div>
+            <div class="train-actions">
+              <button class="btn-train" data-unit="cavalry" data-count="1">+1</button>
+              <button class="btn-train" data-unit="cavalry" data-count="5">+5</button>
+            </div>
+          </div>
+          <div class="train-item">
+            <div class="train-info">
+              <span class="train-badge archer-badge">🏹</span>
+              <div>
+                <b>Himalayan Archer</b>
+                <small>Bow Volley · 80 ✦ Food, 45 ♣ Wood</small>
+              </div>
+            </div>
+            <div class="train-actions">
+              <button class="btn-train" data-unit="archer" data-count="1">+1</button>
+              <button class="btn-train" data-unit="archer" data-count="5">+5</button>
+            </div>
+          </div>
+          <div class="training-queue-box" id="trainingQueueBox" style="display:none;">
+            <div class="queue-status-line">
+              <span class="queue-spinner"></span>
+              <span id="queueItemName">Training Infantry…</span>
+              <b id="queueItemTimer">4s</b>
+            </div>
+            <div class="queue-progress-track"><div id="queueProgressBar" class="queue-progress-fill"></div></div>
+            <div id="queuePendingList" class="queue-pending-list"></div>
+          </div>
+        </div>
       </aside>
 
       <section class="map-area">
         <div class="map-toolbar">
-          <div class="map-title"><span class="map-pin">⌖</span><div><h2 id="mapName">Gorkha Valley</h2><p id="mapSubtitle">HOME TERRITORY · CENTRAL HIMALAYAS</p></div></div>
+          <div class="map-title"><span class="map-pin">⌖</span><div><h2 id="mapName">Himalayan Mainland Kingdom</h2><p id="mapSubtitle">UNIFIED GREATER REALM · CENTRAL HIMALAYAS</p></div></div>
+          
+          <!-- Permanent Clear Skies Atmosphere (Weather change option removed) -->
+          <div class="weather-widget permanent-clear" id="weatherWidget" title="Atmosphere: Permanently Clear Skies across Unified Mainland">
+            <span class="weather-icon" id="weatherIcon">☀️</span>
+            <div class="weather-details">
+              <div class="weather-header"><b id="weatherName">Clear Skies</b><span class="weather-tag">PERMANENT</span></div>
+              <small id="weatherEffects">Speed 100% · Gather 100% · Azure Sunshine</small>
+            </div>
+          </div>
+
           <div class="map-tools">
             <button id="zoomOut" title="Zoom out">−</button><span id="zoomLabel">100%</span><button id="zoomIn" title="Zoom in">+</button>
             <button id="resetView" title="Reset view">⌂</button>
+            <button id="btnToggleMinimapQuick" title="Toggle Kingdom Minimap [M]">🧭</button>
+            <button id="btnTogglePanels" class="btn-tool-accent" title="Maximize Map / Toggle Side Panels [Tab]">◫ Panels</button>
+            <button id="btnToggleFullscreenMap" class="btn-tool-accent" title="Fullscreen Realm [F]">⛶ Fullscreen</button>
           </div>
         </div>
         <div id="gameViewport" class="game-viewport">
           <div class="map-grid"></div>
           <div class="map-vignette"></div>
-          <div class="scene-label label-north">HIMALAYAN RIDGE <span>▲ ▲ ▲</span></div>
-          <div class="scene-label label-east">ANCIENT TRADE ROUTE</div>
-          <div class="scene-label label-south">GORKHA LOWLANDS</div>
+          <div id="weatherOverlay" class="weather-overlay weather-clear"></div>
+          <div class="scene-label label-north">HIMALAYAN GLACIER CREST <span>▲ ▲ ▲</span></div>
+          <div class="scene-label label-east">EASTERN SILK GATEWAY</div>
+          <div class="scene-label label-south">TERRACED LOWLANDS & BASIN</div>
+          <div class="scene-label label-west">WESTERN IRON RIDGES</div>
           <div id="loadingBadge" class="loading-badge"><span class="spinner"></span> PREPARING REALM</div>
+          <div id="combatFloaters" class="combat-floaters"></div>
+
+          <!-- Floating On-Object Contextual Action HUD -->
+          <div id="selectedObjectHud" class="selected-object-hud" style="display:none;">
+            <div class="so-header">
+              <span id="soEmoji">⚔️</span>
+              <div class="so-info">
+                <b id="soName">Selected Object</b>
+                <small id="soSubtitle">Level 1 · Ready</small>
+              </div>
+            </div>
+            <div class="so-actions">
+              <!-- Contextual action buttons: Attack and Scout for monsters, Mine only for resources -->
+              <button id="soBtnAttack" class="so-btn so-btn-attack" title="Select troops and attack this target">
+                <span>⚔️ Attack</span>
+              </button>
+              <button id="soBtnScout" class="so-btn so-btn-scout" title="Reconnaissance scout mission">
+                <span>👁️ Scout</span>
+              </button>
+              <button id="soBtnMine" class="so-btn so-btn-mine" title="Select troops and start mining">
+                <span>⛏️ Mine</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- Interactive Kingdom Minimap Overlay -->
+          <div id="minimapOverlay" class="minimap-overlay">
+            <div class="minimap-header">
+              <div class="minimap-title-wrap">
+                <span class="minimap-crest">🧭</span>
+                <div class="minimap-headings">
+                  <span class="minimap-title">KINGDOM MINIMAP</span>
+                  <span id="minimapCoords" class="minimap-coords">X: -14 · Z: +10</span>
+                </div>
+              </div>
+              <div class="minimap-actions">
+                <button id="btnCenterArmyMinimap" class="minimap-btn" title="Center camera on Magar Vanguard Army">
+                  <span>🛡️</span>
+                </button>
+                <button id="btnToggleMinimapLayers" class="minimap-btn" title="Filter Layers (Resources, Structures, Army, Threats)">
+                  <span>👁️</span>
+                </button>
+                <button id="btnExpandMinimap" class="minimap-btn" title="Toggle Expanded / Standard Minimap View">
+                  <span id="btnExpandIcon">⤢</span>
+                </button>
+                <button id="btnCollapseMinimap" class="minimap-btn" title="Minimize Minimap">
+                  <span>▾</span>
+                </button>
+              </div>
+            </div>
+
+            <!-- Minimap Layer Filter Bar -->
+            <div id="minimapFilterBar" class="minimap-filter-bar" style="display:none;">
+              <button class="minimap-filter-btn active" data-filter="all">All</button>
+              <button class="minimap-filter-btn" data-filter="resources">Nodes ♣</button>
+              <button class="minimap-filter-btn" data-filter="buildings">Bldgs 🏛️</button>
+              <button class="minimap-filter-btn" data-filter="army">Army 🛡️</button>
+              <button class="minimap-filter-btn" data-filter="threats">Threats ⚔️</button>
+            </div>
+
+            <!-- Minimap Viewport Canvas -->
+            <div class="minimap-canvas-container" id="minimapCanvasContainer">
+              <canvas id="minimapCanvas" width="260" height="195"></canvas>
+              <span class="minimap-compass comp-n">▲ NORTH GLACIER</span>
+              <span class="minimap-compass comp-s">▼ SOUTH TERRACES</span>
+              <span class="minimap-compass comp-w">◄ WEST</span>
+              <span class="minimap-compass comp-e">EAST GATE ►</span>
+              <div id="minimapTooltip" class="minimap-tooltip" style="display:none;"></div>
+            </div>
+
+            <!-- Minimap Legend Strip -->
+            <div class="minimap-footer">
+              <div class="minimap-legend-pills">
+                <span class="m-pill m-army"><i class="m-dot dot-army"></i> Army</span>
+                <span class="m-pill m-wood"><i class="m-dot dot-wood"></i> Wood</span>
+                <span class="m-pill m-stone"><i class="m-dot dot-stone"></i> Stone</span>
+                <span class="m-pill m-iron"><i class="m-dot dot-iron"></i> Iron</span>
+                <span class="m-pill m-gold"><i class="m-dot dot-gold"></i> Gold</span>
+                <span class="m-pill m-threat"><i class="m-dot dot-monster"></i> Threat</span>
+              </div>
+              <span class="minimap-help-hint">Click/Drag to Pan</span>
+            </div>
+          </div>
+
+          <!-- Collapsed Minimap Quick Launcher Button -->
+          <button id="minimapRestoreBtn" class="minimap-restore-btn" style="display:none;" title="Open Kingdom Minimap">
+            <span>🧭</span><b>MINIMAP</b>
+          </button>
         </div>
         <div class="map-legend">
           <span><i class="legend-dot friendly"></i> Friendly territory</span>
           <span><i class="legend-dot resource"></i> Resource node</span>
-          <span><i class="legend-dot monster"></i> Neutral monster</span>
+          <span><i class="legend-dot monster"></i> Neutral / hostile</span>
           <span><i class="legend-dot army"></i> Your army</span>
-          <span class="legend-tip">Click an object to select · Drag to pan · Scroll to zoom</span>
+          <span class="weather-legend-indicator" id="weatherLegendIndicator">☁ Normal Conditions</span>
+          <span class="legend-tip">Click an object to select · Drag to pan (or WASD / arrows) · Scroll to zoom</span>
         </div>
       </section>
 
@@ -111,6 +286,45 @@
           </div>
           <div class="target-quantity"><span id="quantityLabel">REMAINING ORE</span><b id="targetQuantity">620</b></div>
           <div class="quantity-track"><div id="quantityBar"></div></div>
+
+          <!-- Contextual Target Actions: Attack, Mine, Scout with Troop Selection -->
+          <div id="targetActionBox" class="target-action-box">
+            <div class="target-action-label">TARGET ACTIONS</div>
+            <div class="target-action-buttons">
+              <!-- For Monster: Attack and Scout -->
+              <button id="btnTargetAttack" class="btn-target-act btn-act-attack" style="display:none;" title="Select troops and commence battle">
+                <span>⚔️</span><div><b>Attack Target</b><small>Select Troops & Assault</small></div>
+              </button>
+              <button id="btnTargetScout" class="btn-target-act btn-act-scout" style="display:none;" title="Reconnaissance scout mission">
+                <span>👁️</span><div><b>Scout Threat</b><small>Recon Intel & Weaknesses</small></div>
+              </button>
+              <!-- For Resource: Mining only -->
+              <button id="btnTargetMine" class="btn-target-act btn-act-mine" style="display:none;" title="Select troops and start mining">
+                <span>⛏️</span><div><b>Mine Resources</b><small>Select Troops & Gather</small></div>
+              </button>
+            </div>
+          </div>
+
+          <!-- Building Asset Requirements & Upgrade Card -->
+          <div id="buildingRequirementsBox" class="building-req-box" style="display:none;">
+            <div class="req-header">
+              <span>UPGRADE ASSET REQUIREMENTS (LVL <span id="reqNextLevel">19</span>)</span>
+              <span class="req-bonus" id="reqBonus">+500 Power</span>
+            </div>
+            <div class="req-resources-grid">
+              <div class="req-pill" id="reqWoodPill"><span class="resource-icon wood tiny">♣</span><span id="reqWoodText">0 / 250</span></div>
+              <div class="req-pill" id="reqStonePill"><span class="resource-icon stone tiny">◆</span><span id="reqStoneText">0 / 350</span></div>
+              <div class="req-pill" id="reqIronPill"><span class="resource-icon iron tiny">⬟</span><span id="reqIronText">0 / 200</span></div>
+              <div class="req-pill" id="reqFoodPill"><span class="resource-icon food tiny">✦</span><span id="reqFoodText">0 / 400</span></div>
+            </div>
+            <button id="btnUpgradeBuilding" class="btn-upgrade-building">
+              <span>🔨</span><b>Upgrade Structure</b><small id="reqUpgradeStatus">Ready to Build</small>
+            </button>
+            <div class="req-action-row">
+              <button id="btnOpenFromTarget" type="button" class="btn-quick-req-dir">🏛️ All Building Req.</button>
+              <button id="btnGatherShortage" type="button" class="btn-gather-shortage">⛏️ Gather Shortage</button>
+            </div>
+          </div>
         </div>
         <div class="panel-divider"></div>
         <div class="panel-heading">MISSION LOG <span class="tiny-tag">LIVE</span></div>
@@ -121,12 +335,225 @@
         <div class="panel-heading">REALM STATUS</div>
         <div class="realm-status">
           <div><span>Kingdom stability</span><b class="status-good">Stable</b></div>
-          <div><span>World connection</span><b class="status-warn"><i></i> Demo mode</b></div>
+          <div><span>World connection</span><b class="status-warn"><i></i> Live Prototype</b></div>
           <div><span>Active missions</span><b id="activeMissionCount">0</b></div>
         </div>
-        <div class="footer-note">HIMALAYAN REALMS <span>WEB PROTOTYPE v0.1</span></div>
+        <div class="footer-note">HIMALAYAN REALMS <span>WEB PROTOTYPE v0.2</span></div>
       </aside>
     </main>
+
+    <!-- Modal: Tactical Scout Intelligence Report -->
+    <div id="scoutReportModal" class="modal-backdrop" style="display:none;">
+      <div class="modal-window modal-scout">
+        <div class="modal-header">
+          <div class="modal-title">
+            <span class="scout-report-icon">👁️</span>
+            <div>
+              <h3 id="scoutReportTitle">Tactical Scout Intelligence Report</h3>
+              <p id="scoutReportSubtitle">Fast Vanguard Reconnaissance Confirmed</p>
+            </div>
+          </div>
+          <button id="closeScoutReportModal" class="modal-close">&times;</button>
+        </div>
+        <div class="modal-body scout-modal-body">
+          <div class="scout-intel-grid">
+            <div class="scout-target-card">
+              <span class="scout-badge" id="scoutBadge">HOSTILE MONSTER</span>
+              <h2 id="scoutTargetName">Target Threat</h2>
+              <p id="scoutTargetDesc">Reconnaissance report on target defenses and behavior.</p>
+              <div class="scout-metrics">
+                <div><small>TARGET LEVEL</small><b id="scoutTargetLevel">Lvl 10</b></div>
+                <div><small>ESTIMATED HP</small><b id="scoutTargetHp">160 HP</b></div>
+                <div><small>COMBAT GUARD</small><b id="scoutTargetGuard">Hostile</b></div>
+              </div>
+            </div>
+            <div class="scout-recon-summary">
+              <div class="recon-bonus-box">
+                <span class="recon-star">★</span>
+                <div>
+                  <b>TACTICAL VULNERABILITY DETECTED</b>
+                  <p id="scoutWeakness">Target exposed to Archer arrow volleys and Khukuri flank charges. Your assault force gains a <b>+30% Damage & Loot Bonus</b>!</p>
+                </div>
+              </div>
+              <div class="recon-loot-box">
+                <small>POTENTIAL SPOILS</small>
+                <b id="scoutSpoils">+140 Food, +56 Iron & Royal Renown</b>
+              </div>
+            </div>
+          </div>
+          <div class="modal-actions-row">
+            <button id="btnScoutAssault" class="btn-primary-dispatch">
+              <span>⚔️</span><b>Deploy Assault Squad (+30% DMG)</b>
+            </button>
+            <button id="btnDismissScout" class="btn-secondary-action">
+              <span>✓</span><b>Acknowledge Recon</b>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <!-- Modal: Kingdom Architecture & Building Asset Requirements -->
+    <div id="buildingsModal" class="modal-backdrop" style="display:none;">
+      <div class="bldg-modal-window">
+        <div class="bldg-modal-header">
+          <div class="bldg-modal-title">
+            <span style="font-size:24px;">🏛️</span>
+            <div>
+              <h3>Kingdom Architecture & Asset Requirements</h3>
+              <p>Manage structure tiers, verify Wood, Stone, Iron & Food asset requirements, and construct blueprints</p>
+            </div>
+          </div>
+          <div style="display:flex;align-items:center;gap:12px;">
+            <div class="bldg-tabs">
+              <button type="button" class="bldg-tab-btn active" id="tabBldgOverview">Structures & Upgrades</button>
+              <button type="button" class="bldg-tab-btn" id="tabBldgBlueprints">Construct Blueprints</button>
+            </div>
+            <button id="closeBuildingsModal" class="modal-close">&times;</button>
+          </div>
+        </div>
+
+        <div class="bldg-modal-body">
+          <div class="bldg-summary-bar">
+            <div><b>Kingdom Treasury & Assets Available:</b></div>
+            <div class="bldg-summary-res">
+              <span id="bldgModalWood">♣ 1,250 Wood</span>
+              <span id="bldgModalStone">◆ 860 Stone</span>
+              <span id="bldgModalIron">⬟ 420 Iron</span>
+              <span id="bldgModalFood">✦ 2,100 Food</span>
+              <span id="bldgModalStructures" style="color:var(--gold);">🏛️ 14 Structures</span>
+            </div>
+          </div>
+
+          <!-- Tab 1: Structures & Upgrades -->
+          <div id="panelBldgOverview">
+            <div class="buildings-grid" id="buildingsGrid"></div>
+          </div>
+
+          <!-- Tab 2: Construct Blueprints -->
+          <div id="panelBldgBlueprints" style="display:none;">
+            <div class="blueprints-grid" id="blueprintsGrid"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Modal: Troop Selection & Tactical Dispatch (Attack & Mine) -->
+    <div id="troopDispatchModal" class="modal-backdrop" style="display:none;">
+      <div class="modal-window modal-dispatch">
+        <div class="modal-header">
+          <div class="modal-title">
+            <span class="dispatch-modal-icon" id="dispatchModalIcon">⚔️</span>
+            <div>
+              <h3 id="dispatchModalTitle">Deploy Assault Force</h3>
+              <p id="dispatchModalSubtitle">Target: Himalayan Snow Bear (Level 10)</p>
+            </div>
+          </div>
+          <button id="closeDispatchModal" class="modal-close">&times;</button>
+        </div>
+        <div class="modal-body dispatch-modal-body">
+          <div class="dispatch-target-strip" id="dispatchTargetStrip">
+            <div class="strip-badge" id="stripBadge">MONSTER</div>
+            <div class="strip-details">
+              <b id="stripName">Himalayan Snow Bear</b>
+              <span id="stripMetrics">Level 10 · Guard: Apex Beast · Health: 160</span>
+            </div>
+            <div class="strip-reward" id="stripReward">+140 Food, +56 Iron</div>
+          </div>
+
+          <div class="dispatch-presets-row">
+            <span>QUICK PRESETS:</span>
+            <button type="button" class="btn-preset-troop" data-pct="25">25%</button>
+            <button type="button" class="btn-preset-troop" data-pct="50">50%</button>
+            <button type="button" class="btn-preset-troop" data-pct="75">75%</button>
+            <button type="button" class="btn-preset-troop active" data-pct="100">Max All</button>
+          </div>
+
+          <div class="troop-select-card">
+            <!-- Magar Infantry -->
+            <div class="troop-select-row">
+              <div class="troop-kind">
+                <span class="train-badge infantry-badge">⚔</span>
+                <div>
+                  <b>Magar Infantry</b>
+                  <small>Available: <span id="dispInfantryAvail">120</span></small>
+                </div>
+              </div>
+              <div class="troop-slider-wrap">
+                <input type="range" id="sliderInfantry" min="0" max="120" value="60" class="troop-range">
+                <div class="troop-counter">
+                  <button type="button" class="btn-step-troop" data-unit="infantry" data-delta="-5">−5</button>
+                  <span id="countInfantry">60</span>
+                  <button type="button" class="btn-step-troop" data-unit="infantry" data-delta="5">+5</button>
+                </div>
+              </div>
+            </div>
+
+            <!-- Mountain Cavalry -->
+            <div class="troop-select-row">
+              <div class="troop-kind">
+                <span class="train-badge cavalry-badge">🏇</span>
+                <div>
+                  <b>Mountain Cavalry</b>
+                  <small>Available: <span id="dispCavalryAvail">24</span></small>
+                </div>
+              </div>
+              <div class="troop-slider-wrap">
+                <input type="range" id="sliderCavalry" min="0" max="24" value="12" class="troop-range">
+                <div class="troop-counter">
+                  <button type="button" class="btn-step-troop" data-unit="cavalry" data-delta="-2">−2</button>
+                  <span id="countCavalry">12</span>
+                  <button type="button" class="btn-step-troop" data-unit="cavalry" data-delta="2">+2</button>
+                </div>
+              </div>
+            </div>
+
+            <!-- Himalayan Archers -->
+            <div class="troop-select-row">
+              <div class="troop-kind">
+                <span class="train-badge archer-badge">🏹</span>
+                <div>
+                  <b>Himalayan Archers</b>
+                  <small>Available: <span id="dispArcherAvail">60</span></small>
+                </div>
+              </div>
+              <div class="troop-slider-wrap">
+                <input type="range" id="sliderArcher" min="0" max="60" value="30" class="troop-range">
+                <div class="troop-counter">
+                  <button type="button" class="btn-step-troop" data-unit="archer" data-delta="-5">−5</button>
+                  <span id="countArcher">30</span>
+                  <button type="button" class="btn-step-troop" data-unit="archer" data-delta="5">+5</button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Tactical / Mining Forecast -->
+          <div class="dispatch-forecast-box">
+            <div class="forecast-col">
+              <small id="forecastStat1Label">TOTAL FORCE POWER</small>
+              <b id="forecastStat1Value">✦ 8,420</b>
+            </div>
+            <div class="forecast-col">
+              <small id="forecastStat2Label">MARCH DURATION</small>
+              <b id="forecastStat2Value">5s (Clear Skies)</b>
+            </div>
+            <div class="forecast-col">
+              <small id="forecastStat3Label">OUTCOME PROJECTION</small>
+              <b id="forecastStat3Value" class="status-good">Decisive Win (96%)</b>
+            </div>
+          </div>
+
+          <div class="dispatch-modal-actions">
+            <button type="button" id="btnCancelDispatch" class="btn-secondary">Cancel</button>
+            <button type="button" id="btnConfirmDispatch" class="btn-primary-dispatch">
+              <span id="dispatchBtnIcon">⚔️</span>
+              <b id="dispatchBtnText">Commence Attack</b>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <div id="toast" class="toast"></div>
   </div>
   <script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.164.1/build/three.module.js"}}</script>

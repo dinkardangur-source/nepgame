@@ -1,0 +1,16 @@
+{
+  "name": "himalayan-realms",
+  "version": "1.0.0",
+  "description": "Isometric Strategy Prototype set in Himalayan kingdoms",
+  "type": "module",
+  "scripts": {
+    "dev": "node server.js",
+    "start": "node server.js",
+    "build": "echo 'Static build ready'",
+    "lint": "node -c server.js"
+  },
+  "dependencies": {
+    "@google/genai": "^2.29.1",
+    "express": "^4.21.0"
+  }
+}

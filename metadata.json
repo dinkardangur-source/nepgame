@@ -1,0 +1,8 @@
+{
+  "name": "Himalayan Realms",
+  "description": "Isometric Strategy Prototype set in Himalayan kingdoms",
+  "prompt": "Himalayan Realms — Isometric Strategy Prototype",
+  "capabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
