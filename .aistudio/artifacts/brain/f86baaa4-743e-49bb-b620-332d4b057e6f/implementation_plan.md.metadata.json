@@ -1,0 +1,6 @@
+{
+  "summary": "Implementation plan to fix real-time combat impact synchronization (ensuring white flash and smoke only occur upon troop arrival), add a dual-tab World and Alliance tactical chat dock, and implement a floating compass radar search for resources (Wood, Farm, Gold, Stone/Crystal) and monsters (Bear, Rabbit, Wolf, Tree Monster) with levels 1 to 5.",
+  "updatedAt": "2026-10-20T11:42:07.980341589Z",
+  "requestFeedback": true,
+  "userFacing": true
+}

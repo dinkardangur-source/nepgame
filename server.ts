@@ -1,4 +1,4 @@
-import express from 'express';
+import express, { Request, Response, NextFunction } from 'express';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { GoogleGenAI, GenerateVideosOperation } from '@google/genai';
@@ -7,15 +7,13 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = Number(process.env.PORT) || 3000;
 const HOST = '0.0.0.0';
 
-// Parse json and urlencoded with generous body limits for image uploads
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
-// Enable CORS and security-friendly headers
-app.use((req, res, next) => {
+app.use((req: Request, res: Response, next: NextFunction) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, HEAD, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', '*');
@@ -25,18 +23,16 @@ app.use((req, res, next) => {
   next();
 });
 
-// Initialize Gemini API
+let ai: GoogleGenAI | null = null;
 const apiKey = process.env.GEMINI_API_KEY;
-let ai = null;
 if (apiKey) {
   ai = new GoogleGenAI({ apiKey });
 } else {
-  console.warn('[Himalayan Realms] GEMINI_API_KEY not found in environment. Veo video generation will require key.');
+  console.warn('[Himalayan Realms] GEMINI_API_KEY not found in environment.');
 }
 
 // Veo Video Generation API
-// 1. Start generation
-app.post('/api/generate-video', async (req, res) => {
+app.post('/api/generate-video', async (req: Request, res: Response) => {
   try {
     if (!ai) {
       if (process.env.GEMINI_API_KEY) {
@@ -52,7 +48,6 @@ app.post('/api/generate-video', async (req, res) => {
     }
 
     const validAspectRatio = (aspectRatio === '9:16') ? '9:16' : '16:9';
-    // Clean base64 string if it contains data URI prefix
     const cleanBase64 = imageBase64.replace(/^data:[^;]+;base64,/, '');
 
     const operation = await ai.models.generateVideos({
@@ -71,14 +66,14 @@ app.post('/api/generate-video', async (req, res) => {
 
     console.log('[Veo] Video generation started:', operation.name);
     return res.json({ operationName: operation.name });
-  } catch (error) {
+  } catch (error: any) {
     console.error('[Veo] Error starting video generation:', error);
-    return res.status(500).json({ error: error.message || 'Failed to start video generation' });
+    return res.status(500).json({ error: error?.message || 'Failed to start video generation' });
   }
 });
 
-// 2. Poll generation status
-app.post('/api/video-status', async (req, res) => {
+// Video polling
+app.post('/api/video-status', async (req: Request, res: Response) => {
   try {
     if (!ai) {
       return res.status(400).json({ error: 'Gemini AI not initialized' });
@@ -87,19 +82,18 @@ app.post('/api/video-status', async (req, res) => {
     if (!operationName) {
       return res.status(400).json({ error: 'operationName is required' });
     }
-
     const op = new GenerateVideosOperation();
     op.name = operationName;
     const updated = await ai.operations.getVideosOperation({ operation: op });
     return res.json({ done: !!updated.done, error: updated.error || null });
-  } catch (error) {
+  } catch (error: any) {
     console.error('[Veo] Error checking status:', error);
-    return res.status(500).json({ error: error.message || 'Failed to check status' });
+    return res.status(500).json({ error: error?.message || 'Failed to check status' });
   }
 });
 
-// 3. Download generated video
-app.post('/api/video-download', async (req, res) => {
+// Video download
+app.post('/api/video-download', async (req: Request, res: Response) => {
   try {
     if (!ai) {
       return res.status(400).json({ error: 'Gemini AI not initialized' });
@@ -108,39 +102,34 @@ app.post('/api/video-download', async (req, res) => {
     if (!operationName) {
       return res.status(400).json({ error: 'operationName is required' });
     }
-
     const op = new GenerateVideosOperation();
     op.name = operationName;
     const updated = await ai.operations.getVideosOperation({ operation: op });
     const videoUri = updated.response?.generatedVideos?.[0]?.video?.uri;
-
     if (!videoUri) {
       return res.status(404).json({ error: 'Video URI not ready or generation failed' });
     }
 
     const key = process.env.GEMINI_API_KEY;
     const videoRes = await fetch(videoUri, {
-      headers: { 'x-goog-api-key': key }
+      headers: { 'x-goog-api-key': key || '' }
     });
-
     if (!videoRes.ok) {
       throw new Error(`Failed to fetch video stream from Google servers: ${videoRes.statusText}`);
     }
-
     res.setHeader('Content-Type', 'video/mp4');
     res.setHeader('Content-Disposition', 'inline; filename="himalayan_realm_animated.mp4"');
-
     const arrayBuffer = await videoRes.arrayBuffer();
     const buffer = Buffer.from(arrayBuffer);
     res.end(buffer);
-  } catch (error) {
+  } catch (error: any) {
     console.error('[Veo] Error downloading video:', error);
-    return res.status(500).json({ error: error.message || 'Failed to download video' });
+    return res.status(500).json({ error: error?.message || 'Failed to download video' });
   }
 });
 
 // Image Generation & Editing API using gemini-nano-banana-2.1
-app.post('/api/generate-image', async (req, res) => {
+app.post('/api/generate-image', async (req: Request, res: Response) => {
   try {
     if (!ai) {
       if (process.env.GEMINI_API_KEY) {
@@ -155,7 +144,7 @@ app.post('/api/generate-image', async (req, res) => {
       return res.status(400).json({ error: 'prompt is required.' });
     }
 
-    const parts = [];
+    const parts: any[] = [];
     if (imageBase64) {
       const cleanBase64 = imageBase64.replace(/^data:[^;]+;base64,/, '');
       parts.push({
@@ -178,7 +167,7 @@ app.post('/api/generate-image', async (req, res) => {
       }
     });
 
-    let resultImageUrl = null;
+    let resultImageUrl: string | null = null;
     let resultText = '';
     const candidateParts = response.candidates?.[0]?.content?.parts || [];
     for (const part of candidateParts) {
@@ -194,31 +183,38 @@ app.post('/api/generate-image', async (req, res) => {
     }
 
     return res.json({ imageUrl: resultImageUrl, text: resultText });
-  } catch (error) {
+  } catch (error: any) {
     console.error('[ImageStudio] Error generating image:', error);
-    return res.status(500).json({ error: error.message || 'Failed to generate image' });
+    return res.status(500).json({ error: error?.message || 'Failed to generate image' });
   }
 });
 
-const gameDir = path.join(__dirname, 'nepalese_fantasy_web_game');
-
+// Static assets route for GLB models & images
 const staticOptions = {
-  setHeaders: (res, filePath) => {
+  setHeaders: (res: Response, filePath: string) => {
     if (filePath.endsWith('.glb')) {
       res.setHeader('Content-Type', 'model/gltf-binary');
     }
   }
 };
+app.use('/assets', express.static(path.join(__dirname, 'public/assets'), staticOptions));
+app.use('/assets', express.static(path.join(__dirname, 'assets'), staticOptions));
 
-// Serve static assets
-app.use(express.static(gameDir, staticOptions));
-app.use('/nepalese_fantasy_web_game', express.static(gameDir, staticOptions));
-app.use(express.static(__dirname, staticOptions));
-
-// Single-page fallback
-app.get('*', (req, res) => {
-  res.sendFile(path.join(gameDir, 'index.html'));
-});
+// In development, mount Vite dev server as middleware
+if (process.env.NODE_ENV !== 'production') {
+  const { createServer } = await import('vite');
+  const vite = await createServer({
+    server: { middlewareMode: true },
+    appType: 'spa',
+  });
+  app.use(vite.middlewares);
+} else {
+  // In production, serve built dist files
+  app.use(express.static(path.join(__dirname, 'dist'), staticOptions));
+  app.get('*', (req: Request, res: Response) => {
+    res.sendFile(path.join(__dirname, 'dist', 'index.html'));
+  });
+}
 
 app.listen(PORT, HOST, () => {
   console.log(`Himalayan Realms server running at http://${HOST}:${PORT}/`);

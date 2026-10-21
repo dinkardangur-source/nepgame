@@ -1,63 +1,54 @@
-# Himalayan Realms — Isometric Web Prototype
+# Himalayan Realms — React Isometric Strategy Application
 
-A browser-based HTML/CSS/JavaScript prototype for a Nepalese-inspired fantasy kingdom strategy game.
+A modern full-stack React + TypeScript + Three.js kingdom strategy simulation set in mythical Himalayan realms, powered by Vite and Node.js.
 
-## Run locally
+## Architecture & Technology Stack
 
-This project uses ES modules and imports Three.js from jsDelivr, so serve it over HTTP rather than opening `index.html` directly.
+- **Frontend**: React 19, TypeScript, Three.js (WebGL 3D Isometric Viewport, Orthographic Camera, GLTF loader)
+- **Styling**: Tailored Himalayan Kingdom UI with Barlow Condensed typography and tactical overlays
+- **Backend**: Express + Node.js (with live Vite middleware mode in development and static asset serving in production)
+- **AI Integrations**:
+  - **Veo 3.1 Fast**: Generates dynamic cinematic fantasy video sequences from realm snapshots and photographs
+  - **Gemini Nano Banana 2.1**: Synthesizes and edits 3D character art, concepts, and custom army portraits
 
-### Option A: Python
+## Key Features
+
+1. **3D Isometric Kingdom Mainland**:
+   - Interactive Himalayan terrain with 4 distinct provinces: Gorkha Central Valley, Himshikhar Glaciers, Ironcrest Ridges, and Green Mandala.
+   - 3D models (`.glb`) loaded for Himalayan pines, the Gorkha hill-fort keep, and gold, iron, stone, and timber resource nodes with procedural fallback.
+   - Smooth camera controls: drag-to-pan, scroll-to-zoom, reset view, and smooth pan-to-province.
+
+2. **Army Vanguard & Tactical Command**:
+   - Magar Vanguard squad consisting of Infantry, Mountain Cavalry, and Himalayan Archers.
+   - Dynamic power calculation, health bars, and articulated squad marching/combat/mining animations.
+   - Orders: March to target, Gather resources, Attack threats, and Recall to Citadel (`M`, `G`, `A`, `R`, `B`, `F`, `Tab`).
+
+3. **Recruitment & Barracks Queue**:
+   - Active recruitment queue for Magar Infantry, Mountain Cavalry, and Himalayan Archers with real-time countdowns and progress bars.
+
+4. **Interactive Kingdom Minimap**:
+   - 2D Canvas radar displaying terrain, citadel, resource nodes, threats, army location, and camera view frustum.
+   - Layer toggling (All, Nodes, Buildings, Army, Threats) and click-to-pan navigation.
+
+5. **Contextual On-Object Action HUD & Modals**:
+   - Floating contextual action bubble anchored above clicked 3D objects.
+   - **Troop Dispatch Modal**: Custom troop ratio sliders, power forecasts, and victory projections.
+   - **Tactical Scout Intelligence Report**: Weakness scans, counter unit recommendations, and +30% assault bonuses.
+   - **Kingdom Architecture & Blueprints**: Upgrade structures and build new economic/military blueprints (Watermill, Foundry, Timber Mill, Masonry, Stables, Archery Range, Sentinel Bastion, Chorten Shrine).
+
+6. **AI Realm Studios**:
+   - **AI Realm Art Studio**: Generate or edit character concepts with Nano Banana 2.1 and apply them directly as the Vanguard portrait.
+   - **Veo 3.1 Video Animator**: Animate static snapshots into high-definition atmospheric video sequences.
+
+## Development
+
 ```bash
-cd nepalese_fantasy_web_game
-python -m http.server 8000
+# Start full-stack dev server on http://0.0.0.0:3000
+npm run dev
+
+# Build client production bundle
+npm run build
+
+# Type check
+npm run lint
 ```
-Open http://localhost:8000
-
-### Option B: Node
-```bash
-npx serve .
-```
-
-Internet access is required for the CDN-hosted Three.js modules and Google Fonts.
-
-## Prototype controls
-
-- Click a map object to select it.
-- Choose a kingdom from World Atlas to switch the visible kingdom scene.
-- Drag the map to pan.
-- Mouse wheel or +/- buttons to zoom.
-- Select a resource node and press Gather Resources.
-- Select a monster and press Attack Target.
-- Use Return Home or press R to recall the army.
-- Keyboard shortcuts: M = march, G = gather, A = attack, R = return.
-
-## Scope and limitations
-
-This is a local single-browser gameplay prototype. It includes an interactive Three.js isometric environment, procedural 3D trees, rock and ore resource nodes, hill-fort castle, village buildings, wildlife, and a 15-unit troop formation with marching, attack, and mining action animations; kingdom switching, army commands, demo gathering/combat logic, and a mission log.
-
-The project now includes original GLB models under `assets/models/` for Himalayan pine trees, a Gorkha hill-fort castle, iron/stone/gold/wood resource nodes, a Magar-inspired infantry concept, and a mountain horse. Tree, castle, and resource GLBs load automatically through Three.js GLTFLoader, with procedural placeholders retained as a fallback. The 15-unit army has group marching, attack, and mining action animation using articulated procedural mesh parts.
-
-It does NOT yet include:
-- Online multiplayer, authentication, or a server-authoritative simulation.
-- PostgreSQL persistence, anti-cheat validation, or reconnect-safe missions.
-- Skeletal-rigged GLB troop clips; the included Magar infantry and horse GLBs are static art assets, while live squad actions currently use procedural mesh animation.
-- Production pathfinding, sophisticated tactical combat, or cross-kingdom army travel.
-
-The troop and monster models are procedural placeholders. Replace them with licensed or original GLB assets and connect a server (e.g. Node.js + Colyseus + PostgreSQL) before treating missions, combat, or rewards as authoritative.
-
-## Project structure
-
-```text
-nepalese-fantasy-web-game/
-├── index.html
-├── style.css
-├── src/main.js
-├── assets/
-│   └── models/       # Original GLB environment/resource/troop assets
-└── README.md
-```
-
-
-## Startup fix
-
-The page includes an import map for Three.js so the GLTFLoader bare `three` import resolves correctly in modern browsers. Keep internet access enabled for the CDN modules.
