@@ -68,6 +68,54 @@ export const App: React.FC = () => {
   });
 
   const [toastText, setToastText] = useState<string | null>(null);
+  const [isMobilePortrait, setIsMobilePortrait] = useState<boolean>(false);
+  const [landscapeHintDismissed, setLandscapeHintDismissed] = useState<boolean>(false);
+
+  const tryLockLandscape = useCallback(async (withFullscreen = false) => {
+    try {
+      const isTouchMobile =
+        window.matchMedia('(pointer: coarse)').matches ||
+        /android|iphone|ipad|ipod|mobile/i.test(navigator.userAgent);
+      if (!isTouchMobile) return;
+      if (withFullscreen && !document.fullscreenElement && document.documentElement.requestFullscreen) {
+        await document.documentElement.requestFullscreen().catch(() => {});
+      }
+      const orientation = screen.orientation as ScreenOrientation & {
+        lock?: (orientation: string) => Promise<void>;
+      };
+      if (orientation && typeof orientation.lock === 'function') {
+        await orientation.lock('landscape').catch(() => {});
+      }
+    } catch {
+      // Orientation lock may require fullscreen or installed PWA on mobile browsers
+    }
+  }, []);
+
+  useEffect(() => {
+    const updateOrientationState = () => {
+      const isTouchMobile =
+        window.matchMedia('(pointer: coarse)').matches ||
+        /android|iphone|ipad|ipod|mobile/i.test(navigator.userAgent);
+      setIsMobilePortrait(isTouchMobile && window.innerHeight > window.innerWidth);
+    };
+
+    updateOrientationState();
+    void tryLockLandscape(false);
+
+    const handleFirstTouch = () => {
+      void tryLockLandscape(false);
+    };
+
+    window.addEventListener('resize', updateOrientationState);
+    window.addEventListener('orientationchange', updateOrientationState);
+    window.addEventListener('pointerdown', handleFirstTouch, { once: true, passive: true });
+
+    return () => {
+      window.removeEventListener('resize', updateOrientationState);
+      window.removeEventListener('orientationchange', updateOrientationState);
+      window.removeEventListener('pointerdown', handleFirstTouch);
+    };
+  }, [tryLockLandscape]);
 
   const showToast = useCallback((msg: string) => {
     setToastText(msg);
@@ -324,6 +372,8 @@ export const App: React.FC = () => {
         background: '#0a0e14',
         fontFamily: "'Inter', sans-serif",
         userSelect: 'none',
+        WebkitUserSelect: 'none',
+        touchAction: 'none',
       }}
     >
       {/* 1. Main 3D WebGL Canvas Container */}
@@ -460,6 +510,7 @@ export const App: React.FC = () => {
       {/* 4B. Live Scrolling Bullet Notification Ticker (Battle, Rally, Monster & Conquest Feed) */}
       {bulletNotifications.length > 0 && (
         <div
+          className="bullet-ticker-lane"
           style={{
             position: 'absolute',
             top: '112px',
@@ -543,8 +594,71 @@ export const App: React.FC = () => {
         </div>
       )}
 
+      {/* 5B. Non-blocking Mobile Portrait -> Landscape Quick Switcher */}
+      {isMobilePortrait && !landscapeHintDismissed && (
+        <div
+          style={{
+            position: 'fixed',
+            top: '54px',
+            left: '50%',
+            transform: 'translateX(-50%)',
+            zIndex: 105,
+            display: 'flex',
+            alignItems: 'center',
+            gap: '6px',
+            background: 'rgba(10, 16, 28, 0.94)',
+            border: '1.5px solid #dfba6e',
+            borderRadius: '9px',
+            padding: '5px 8px',
+            boxShadow: '0 8px 24px rgba(0,0,0,0.75)',
+          }}
+        >
+          <button
+            type="button"
+            onClick={() => void tryLockLandscape(true)}
+            style={{
+              background: 'linear-gradient(180deg, #b45309 0%, #78350f 100%)',
+              border: '1px solid #fde047',
+              borderRadius: '6px',
+              color: '#fef08a',
+              font: "800 11px 'Barlow Condensed', sans-serif",
+              letterSpacing: '0.04em',
+              padding: '5px 10px',
+              cursor: 'pointer',
+              touchAction: 'manipulation',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            📱↻ LOCK LANDSCAPE
+          </button>
+          <button
+            type="button"
+            onClick={() => setLandscapeHintDismissed(true)}
+            aria-label="Dismiss landscape hint"
+            style={{
+              background: 'rgba(30, 41, 59, 0.9)',
+              border: '1px solid rgba(255,255,255,0.2)',
+              borderRadius: '6px',
+              color: '#cbd5e1',
+              fontSize: '12px',
+              padding: '4px 7px',
+              cursor: 'pointer',
+              touchAction: 'manipulation',
+            }}
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
       {/* CSS Keyframes for Combat Floaters & Scrolling Bullet Ticker */}
       <style>{`
+        @media (max-height: 540px) {
+          .bullet-ticker-lane {
+            top: 66px !important;
+            height: 60px !important;
+          }
+        }
         @keyframes combatFloatUp {
           0% {
             opacity: 0;

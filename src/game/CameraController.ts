@@ -63,6 +63,7 @@ export class CameraController {
   private lastPinchDistance = 0;
   private lastPinchMidpoint = { x: 0, y: 0 };
   private activeKeys = new Set<string>();
+  private resizeObserver: ResizeObserver | null = null;
 
   // Callbacks
   private onUpdate?: (info: { x: number; y: number; z: number; zoom: number }) => void;
@@ -99,9 +100,11 @@ export class CameraController {
       this.homeCoords = { x: options.initialTarget[0], z: options.initialTarget[2] };
     }
 
-    const aspect = this.domElement.clientWidth / this.domElement.clientHeight || 1.6;
+    const aspect = (this.domElement.clientWidth || 16) / (this.domElement.clientHeight || 9);
     this.camera = new THREE.PerspectiveCamera(35, aspect, 1.5, 8500);
     this.domElement.style.touchAction = 'none';
+    this.domElement.style.userSelect = 'none';
+    (this.domElement.style as unknown as Record<string, string>).webkitUserSelect = 'none';
 
     this.bindEvents();
     this.updateCameraTransform();
@@ -209,9 +212,36 @@ export class CameraController {
     this.clampDesiredTargetToMap();
   }
 
+  private onTouchMovePrevent = (e: TouchEvent) => {
+    if (e.cancelable) e.preventDefault();
+  };
+
+  private onOrientationChange = () => {
+    setTimeout(this.onWindowResize, 60);
+    setTimeout(this.onWindowResize, 220);
+  };
+
+  private clearAllPointers = () => {
+    this.activePointers.clear();
+    this.isPointerDown = false;
+    this.isRightDrag = false;
+    this.isDragging = false;
+    this.lastWorldPoint = null;
+    this.primaryPointerId = null;
+    this.lastPinchDistance = 0;
+    this.hadMultiTouch = false;
+  };
+
+  private onVisibilityChange = () => {
+    if (document.hidden) {
+      this.clearAllPointers();
+    }
+  };
+
   private bindEvents() {
     this.domElement.addEventListener('pointerdown', this.onPointerDown);
     this.domElement.addEventListener('contextmenu', this.onContextMenu);
+    this.domElement.addEventListener('touchmove', this.onTouchMovePrevent, { passive: false });
     window.addEventListener('pointermove', this.onPointerMove);
     window.addEventListener('pointerup', this.onPointerUp);
     window.addEventListener('pointercancel', this.onPointerCancel);
@@ -220,11 +250,22 @@ export class CameraController {
     window.addEventListener('keydown', this.onKeyDown);
     window.addEventListener('keyup', this.onKeyUp);
     window.addEventListener('resize', this.onWindowResize);
+    window.addEventListener('orientationchange', this.onOrientationChange);
+    window.addEventListener('blur', this.clearAllPointers);
+    document.addEventListener('visibilitychange', this.onVisibilityChange);
+
+    if (typeof ResizeObserver !== 'undefined') {
+      this.resizeObserver = new ResizeObserver(() => {
+        this.onWindowResize();
+      });
+      this.resizeObserver.observe(this.domElement);
+    }
   }
 
   public dispose() {
     this.domElement.removeEventListener('pointerdown', this.onPointerDown);
     this.domElement.removeEventListener('contextmenu', this.onContextMenu);
+    this.domElement.removeEventListener('touchmove', this.onTouchMovePrevent);
     window.removeEventListener('pointermove', this.onPointerMove);
     window.removeEventListener('pointerup', this.onPointerUp);
     window.removeEventListener('pointercancel', this.onPointerCancel);
@@ -233,6 +274,11 @@ export class CameraController {
     window.removeEventListener('keydown', this.onKeyDown);
     window.removeEventListener('keyup', this.onKeyUp);
     window.removeEventListener('resize', this.onWindowResize);
+    window.removeEventListener('orientationchange', this.onOrientationChange);
+    window.removeEventListener('blur', this.clearAllPointers);
+    document.removeEventListener('visibilitychange', this.onVisibilityChange);
+    this.resizeObserver?.disconnect();
+    this.resizeObserver = null;
   }
 
   private onContextMenu = (e: MouseEvent) => {
@@ -361,6 +407,10 @@ export class CameraController {
         const curWorldPoint = this.getGroundIntersection(e.clientX, e.clientY);
         if (this.lastWorldPoint && curWorldPoint) {
           this._deltaWorld.subVectors(this.lastWorldPoint, curWorldPoint);
+          const maxPanStep = Math.max(40, (this.BASE_DISTANCE / this.zoom) * 0.45);
+          if (this._deltaWorld.length() > maxPanStep) {
+            this._deltaWorld.setLength(maxPanStep);
+          }
           this.desiredTarget.add(this._deltaWorld);
           this.clampDesiredTargetToMap();
 
@@ -405,9 +455,25 @@ export class CameraController {
     }
 
     if (this.activePointers.size === 1) {
-      // Dropped from 2 fingers to 1 finger; keep multi-touch guard until all lift
-      this.isPointerDown = false;
-      this.lastWorldPoint = null;
+      // Dropped from 2 fingers to 1 finger; smoothly resume single-finger panning without triggering tap selection
+      const entry = this.activePointers.entries().next().value as
+        | [number, { clientX: number; clientY: number; pointerType: string; button: number }]
+        | undefined;
+      if (entry) {
+        const [remId, rem] = entry;
+        this.primaryPointerId = remId;
+        this.primaryPointerType = rem.pointerType || 'touch';
+        this.isPointerDown = true;
+        this.isDragging = true;
+        this.hadMultiTouch = true;
+        this.lastPointer.x = rem.clientX;
+        this.lastPointer.y = rem.clientY;
+        const hit = this.getGroundIntersection(rem.clientX, rem.clientY);
+        this.lastWorldPoint = hit ? hit.clone() : null;
+      } else {
+        this.isPointerDown = false;
+        this.lastWorldPoint = null;
+      }
       return;
     }
 
@@ -416,6 +482,7 @@ export class CameraController {
     const wasDragging = this.isDragging;
     const wasMultiTouch = this.hadMultiTouch;
     const wasPrimary = this.primaryPointerId === e.pointerId;
+    const isTouchTap = (e.pointerType || this.primaryPointerType) === 'touch';
 
     this.isPointerDown = false;
     this.isRightDrag = false;
@@ -426,7 +493,7 @@ export class CameraController {
     this.hadMultiTouch = false;
 
     if (allowSelection && wasPrimary && !wasRight && !wasDragging && !wasMultiTouch) {
-      this.handleObjectSelection(e.clientX, e.clientY);
+      this.handleObjectSelection(e.clientX, e.clientY, isTouchTap);
     }
   }
 
@@ -466,6 +533,7 @@ export class CameraController {
     if (!this.domElement) return;
     const w = this.domElement.clientWidth;
     const h = this.domElement.clientHeight;
+    if (w <= 0 || h <= 0) return;
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
   };
@@ -475,6 +543,7 @@ export class CameraController {
    */
   private getGroundIntersection(clientX: number, clientY: number): THREE.Vector3 | null {
     const rect = this.domElement.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return null;
     this._ndc.set(
       ((clientX - rect.left) / rect.width) * 2 - 1,
       -((clientY - rect.top) / rect.height) * 2 + 1
@@ -486,22 +555,47 @@ export class CameraController {
   }
 
   /**
-   * Raycast against pickable objects upon clicking
+   * Raycast against pickable objects upon clicking/tapping (with generous touch hit-radius fallback)
    */
-  private handleObjectSelection(clientX: number, clientY: number) {
+  private handleObjectSelection(clientX: number, clientY: number, isTouch = false) {
     if (!this.onSelectObject) return;
 
     const rect = this.domElement.getBoundingClientRect();
-    this._ndc.set(
-      ((clientX - rect.left) / rect.width) * 2 - 1,
-      -((clientY - rect.top) / rect.height) * 2 + 1
-    );
+    if (rect.width <= 0 || rect.height <= 0) return;
 
-    this.raycaster.setFromCamera(this._ndc, this.camera);
-    const intersects = this.raycaster.intersectObjects(this.pickableObjects, true);
+    const probeOffsets: Array<[number, number]> = isTouch
+      ? [
+          [0, 0],
+          [0, -14],
+          [14, 0],
+          [0, 14],
+          [-14, 0],
+          [10, -10],
+          [-10, -10],
+          [10, 10],
+          [-10, 10],
+          [0, -26],
+          [24, 0],
+          [-24, 0],
+        ]
+      : [[0, 0]];
 
-    if (intersects.length > 0) {
-      let hit = intersects[0].object;
+    let hitObj: THREE.Object3D | null = null;
+    for (const [ox, oy] of probeOffsets) {
+      this._ndc.set(
+        (((clientX + ox) - rect.left) / rect.width) * 2 - 1,
+        -(((clientY + oy) - rect.top) / rect.height) * 2 + 1
+      );
+      this.raycaster.setFromCamera(this._ndc, this.camera);
+      const intersects = this.raycaster.intersectObjects(this.pickableObjects, true);
+      if (intersects.length > 0) {
+        hitObj = intersects[0].object;
+        break;
+      }
+    }
+
+    if (hitObj) {
+      let hit = hitObj;
       while (
         hit.parent &&
         !hit.userData?.gameEntity &&

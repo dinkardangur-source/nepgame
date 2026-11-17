@@ -332,6 +332,7 @@ export class WorldMap {
   // 3D Inside Kingdom Walled Courtyard & Merge System
   public insideKingdom3D!: InsideKingdom3D;
   public currentSceneMode: 'world' | 'kingdom' = 'world';
+  private resizeObserver: ResizeObserver | null = null;
 
   constructor(options: WorldMapOptions) {
     this.container = options.container;
@@ -432,6 +433,7 @@ export class WorldMap {
     this.scene.environment = pmremGenerator.fromScene(new RoomEnvironment(), 0.04).texture;
     pmremGenerator.dispose();
 
+    this.renderer.domElement.style.touchAction = 'none';
     this.container.appendChild(this.renderer.domElement);
 
     // Panoramic Himalayan Mountain Skyline Background Dome (sized for full 100% Zoom Out)
@@ -2475,6 +2477,13 @@ export class WorldMap {
     });
 
     window.addEventListener('resize', this.onResize);
+    window.addEventListener('orientationchange', this.onOrientationChange);
+    if (typeof ResizeObserver !== 'undefined') {
+      this.resizeObserver = new ResizeObserver(() => {
+        this.onResize();
+      });
+      this.resizeObserver.observe(this.container);
+    }
   }
 
   private handleObjectSelection = (
@@ -3440,10 +3449,16 @@ export class WorldMap {
     loop();
   }
 
+  private onOrientationChange = () => {
+    setTimeout(this.onResize, 60);
+    setTimeout(this.onResize, 220);
+  };
+
   private onResize = () => {
     if (!this.container || !this.renderer) return;
     const w = this.container.clientWidth;
     const h = this.container.clientHeight;
+    if (w <= 0 || h <= 0) return;
     this.renderer.setSize(w, h);
   };
 
@@ -3599,6 +3614,9 @@ export class WorldMap {
     cancelAnimationFrame(this.animFrameId);
     clearTimeout(this.animFrameId);
     window.removeEventListener('resize', this.onResize);
+    window.removeEventListener('orientationchange', this.onOrientationChange);
+    this.resizeObserver?.disconnect();
+    this.resizeObserver = null;
     this.cameraController.dispose();
     this.renderer.dispose();
     if (this.container && this.container.contains(this.renderer.domElement)) {

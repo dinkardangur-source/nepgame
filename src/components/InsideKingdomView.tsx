@@ -610,6 +610,35 @@ export const InsideKingdomView: React.FC<InsideKingdomViewProps> = ({
       </div>
 
       <style>{`
+        @media (max-height: 540px) {
+          .inside-top-banner {
+            margin-top: 6px !important;
+            padding: 4px 10px !important;
+            gap: 6px !important;
+            max-width: calc(100vw - 290px) !important;
+          }
+          .inside-inspector-card {
+            left: 8px !important;
+            bottom: 54px !important;
+            width: 245px !important;
+            padding: 7px 9px !important;
+          }
+          .inside-inspector-card button {
+            min-height: 32px;
+          }
+          .inside-summon-deck {
+            margin-bottom: 52px !important;
+            max-width: 62vw !important;
+            overflow-x: auto !important;
+            -webkit-overflow-scrolling: touch;
+            padding: 4px 6px !important;
+          }
+          .inside-summon-deck button {
+            min-height: 32px;
+            flex-shrink: 0;
+            touch-action: manipulation;
+          }
+        }
         @media (max-width: 768px) {
           .inside-top-banner {
             max-width: calc(100vw - 16px) !important;

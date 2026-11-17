@@ -4754,6 +4754,95 @@ export const MapNavigationUI: React.FC<MapNavigationUIProps> = ({
             opacity: 0;
           }
         }
+        @media (max-height: 540px) {
+          .hud-top-left-stack {
+            top: 6px !important;
+            left: 6px !important;
+            gap: 3px !important;
+            max-width: 44vw;
+          }
+          .hud-profile-card {
+            padding: 3px 7px !important;
+            gap: 5px !important;
+          }
+          .hud-profile-card > div:first-child {
+            width: 24px !important;
+            height: 24px !important;
+            min-width: 24px !important;
+            font-size: 12px !important;
+          }
+          .hud-minimap-box {
+            width: 72px !important;
+            height: 72px !important;
+          }
+          .hud-coords-bookmark-row {
+            gap: 4px !important;
+            flex-wrap: nowrap !important;
+          }
+          .hud-top-right-stack {
+            top: 6px !important;
+            right: 6px !important;
+            max-width: 54vw;
+            gap: 3px !important;
+          }
+          .hud-resource-bar {
+            max-width: 100%;
+            overflow-x: auto !important;
+            -webkit-overflow-scrolling: touch;
+            padding: 3px 7px !important;
+            gap: 6px !important;
+          }
+          .hud-camera-toolbar {
+            max-width: 100%;
+            overflow-x: auto !important;
+            flex-wrap: nowrap !important;
+            -webkit-overflow-scrolling: touch;
+            gap: 3px !important;
+          }
+          .hud-bottom-left-chat {
+            bottom: 6px !important;
+            left: 6px !important;
+            height: 40px !important;
+            padding: 4px 8px !important;
+            max-width: 190px !important;
+          }
+          .hud-bottom-center-radar {
+            bottom: 6px !important;
+            height: 40px !important;
+            min-width: 48px !important;
+            padding: 3px 8px !important;
+          }
+          .hud-bottom-right-dock {
+            bottom: 6px !important;
+            right: 6px !important;
+            padding: 3px 5px !important;
+            gap: 4px !important;
+          }
+          .hud-bottom-right-dock > button {
+            width: 42px !important;
+            height: 42px !important;
+          }
+          .hud-castle-corner-btn {
+            width: 52px !important;
+            height: 44px !important;
+          }
+          .bottom-1x1-troop-card {
+            bottom: 54px !important;
+            padding: 7px 10px !important;
+            max-width: 72vw !important;
+          }
+          .hud-floating-drawer {
+            bottom: 54px !important;
+            max-height: 62dvh !important;
+            overflow-y: auto;
+            touch-action: pan-y;
+          }
+          .hud-mail-grid {
+            max-height: 62dvh;
+            overflow-y: auto;
+            touch-action: pan-y;
+          }
+        }
         @media (max-width: 768px) {
           .hud-top-left-stack {
             top: 8px !important;
@@ -4841,11 +4930,13 @@ export const MapNavigationUI: React.FC<MapNavigationUIProps> = ({
             transform: none !important;
             bottom: 68px !important;
             max-height: 48dvh !important;
+            touch-action: pan-y;
           }
           .hud-mail-grid {
             grid-template-columns: 1fr !important;
             max-height: 55dvh;
             overflow-y: auto;
+            touch-action: pan-y;
           }
         }
         @media (max-width: 520px) {

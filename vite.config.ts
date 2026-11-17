@@ -43,6 +43,7 @@ export default defineConfig({
         theme_color: '#0a0e14',
         background_color: '#0a0e14',
         display: 'fullscreen',
+        orientation: 'landscape',
         start_url: '/',
         scope: '/',
         icons: [

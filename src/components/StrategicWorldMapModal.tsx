@@ -514,6 +514,7 @@ export const StrategicWorldMapModal: React.FC<StrategicWorldMapModalProps> = ({
   };
 
   const handleCanvasPointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    if (e.pointerType === 'touch') return;
     const canvas = canvasRef.current;
     if (!canvas) return;
     const rect = canvas.getBoundingClientRect();
@@ -1015,6 +1016,22 @@ export const StrategicWorldMapModal: React.FC<StrategicWorldMapModalProps> = ({
           justify-content: space-between;
           gap: 10px;
           overflow-y: auto;
+        }
+        @media (max-height: 540px) {
+          .worldmap-modal-grid {
+            grid-template-columns: 1fr 220px !important;
+          }
+          .worldmap-canvas-wrap {
+            padding: 6px !important;
+          }
+          .worldmap-canvas-wrap canvas {
+            max-height: 76dvh !important;
+            max-width: 76dvh !important;
+          }
+          .worldmap-sidebar {
+            padding: 6px 8px !important;
+            touch-action: pan-y;
+          }
         }
         @media (max-width: 768px) {
           .worldmap-modal-grid {
