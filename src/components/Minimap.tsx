@@ -31,11 +31,11 @@ export const Minimap: React.FC<MinimapProps> = ({
   const [showFilters, setShowFilters] = useState(false);
   const isDraggingRef = useRef(false);
 
-  // Map world bounds: roughly -75 to +75 in X, -60 to +60 in Z
-  const WORLD_MIN_X = -75;
-  const WORLD_MAX_X = 75;
-  const WORLD_MIN_Z = -60;
-  const WORLD_MAX_Z = 60;
+  // Map world bounds scaled to 0-800 realm
+  const WORLD_MIN_X = 0;
+  const WORLD_MAX_X = 800;
+  const WORLD_MIN_Z = 0;
+  const WORLD_MAX_Z = 800;
 
   const worldToCanvas = (wx: number, wz: number, w: number, h: number) => {
     const cx = ((wx - WORLD_MIN_X) / (WORLD_MAX_X - WORLD_MIN_X)) * w;
@@ -59,25 +59,55 @@ export const Minimap: React.FC<MinimapProps> = ({
     const w = canvas.width;
     const h = canvas.height;
 
-    // Background terrain
-    ctx.fillStyle = '#1c2826';
+    // Background terrain: Alpine meadow baseline
+    ctx.fillStyle = '#22382c';
     ctx.fillRect(0, 0, w, h);
 
-    // River curve
-    ctx.strokeStyle = '#39575e';
-    ctx.lineWidth = 4;
+    // Biome Sector: Northern Himshikhar Glaciers (top/upper Z)
+    const snowTop = worldToCanvas(0, 520, w, h);
+    const snowBottom = worldToCanvas(420, 800, w, h);
+    ctx.fillStyle = '#cbd5e1';
+    ctx.fillRect(snowTop.cx, snowTop.cy, snowBottom.cx - snowTop.cx, snowBottom.cy - snowTop.cy);
+
+    // Biome Sector: Western Ironcrest Bastions
+    const ironTop = worldToCanvas(520, 0, w, h);
+    const ironBottom = worldToCanvas(800, 420, w, h);
+    ctx.fillStyle = '#374151';
+    ctx.fillRect(ironTop.cx, ironTop.cy, ironBottom.cx - ironTop.cx, ironBottom.cy - ironTop.cy);
+
+    // Biome Sector: Verdant Deepwood
+    const woodTop = worldToCanvas(460, 460, w, h);
+    const woodBottom = worldToCanvas(800, 800, w, h);
+    ctx.fillStyle = '#164e33';
+    ctx.fillRect(woodTop.cx, woodTop.cy, woodBottom.cx - woodTop.cx, woodBottom.cy - woodTop.cy);
+
+    // Riverlands winding across realm
+    ctx.strokeStyle = '#38bdf8';
+    ctx.lineWidth = 3.5;
     ctx.beginPath();
-    const rStart = worldToCanvas(-40, -10, w, h);
-    const rMid = worldToCanvas(0, -6, w, h);
-    const rEnd = worldToCanvas(45, 15, w, h);
-    ctx.moveTo(rStart.cx, rStart.cy);
-    ctx.quadraticCurveTo(rMid.cx, rMid.cy, rEnd.cx, rEnd.cy);
+    const r1 = worldToCanvas(0, 180, w, h);
+    const r2 = worldToCanvas(360, 320, w, h);
+    const r3 = worldToCanvas(540, 460, w, h);
+    const r4 = worldToCanvas(800, 720, w, h);
+    ctx.moveTo(r1.cx, r1.cy);
+    ctx.bezierCurveTo(r2.cx, r2.cy, r3.cx, r3.cy, r4.cx, r4.cy);
+    ctx.stroke();
+
+    // Sector border grid lines
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.08)';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(0, 0, w, h);
+    ctx.beginPath();
+    ctx.moveTo(w / 2, 0);
+    ctx.lineTo(w / 2, h);
+    ctx.moveTo(0, h / 2);
+    ctx.lineTo(w, h / 2);
     ctx.stroke();
 
     // Objects
     objects.forEach((obj) => {
       const isRes = obj.type === 'resource';
-      const isBldg = obj.type === 'citadel' || obj.type === 'fort';
+      const isBldg = obj.type === 'citadel' || obj.type === 'fort' || obj.type === 'tower';
       const isThreat = obj.type === 'monster';
 
       if (filter === 'resources' && !isRes) return;
@@ -87,20 +117,20 @@ export const Minimap: React.FC<MinimapProps> = ({
       const { cx, cy } = worldToCanvas(obj.position[0], obj.position[2], w, h);
 
       if (isBldg) {
-        ctx.fillStyle = '#dfba6e';
+        ctx.fillStyle = '#f59e0b';
         ctx.fillRect(cx - 3, cy - 3, 6, 6);
       } else if (isRes) {
         if (obj.subtype === 'wood') ctx.fillStyle = '#48a85a';
-        else if (obj.subtype === 'stone') ctx.fillStyle = '#a6b0a8';
+        else if (obj.subtype === 'stone' || obj.subtype === 'stonecrystal') ctx.fillStyle = '#a6b0a8';
         else if (obj.subtype === 'iron') ctx.fillStyle = '#6f92ab';
         else ctx.fillStyle = '#f5c842';
         ctx.beginPath();
-        ctx.arc(cx, cy, 2.5, 0, Math.PI * 2);
+        ctx.arc(cx, cy, 2.2, 0, Math.PI * 2);
         ctx.fill();
       } else if (isThreat) {
-        ctx.fillStyle = '#e8453c';
+        ctx.fillStyle = '#ef4444';
         ctx.beginPath();
-        ctx.arc(cx, cy, 3, 0, Math.PI * 2);
+        ctx.arc(cx, cy, 2.8, 0, Math.PI * 2);
         ctx.fill();
       }
     });
@@ -108,7 +138,7 @@ export const Minimap: React.FC<MinimapProps> = ({
     // Army position
     if (filter === 'all' || filter === 'army') {
       const { cx, cy } = worldToCanvas(armyPos[0], armyPos[2], w, h);
-      ctx.fillStyle = '#429bf5';
+      ctx.fillStyle = '#38bdf8';
       ctx.beginPath();
       ctx.arc(cx, cy, 4.5, 0, Math.PI * 2);
       ctx.fill();
@@ -119,8 +149,8 @@ export const Minimap: React.FC<MinimapProps> = ({
 
     // Camera view frustum indicator
     const camPos = worldToCanvas(-cameraPan.x, -cameraPan.z, w, h);
-    const boxW = Math.max(16, (40 / zoom) * (w / (WORLD_MAX_X - WORLD_MIN_X)));
-    const boxH = Math.max(12, (30 / zoom) * (h / (WORLD_MAX_Z - WORLD_MIN_Z)));
+    const boxW = Math.max(16, (80 / zoom) * (w / (WORLD_MAX_X - WORLD_MIN_X)));
+    const boxH = Math.max(12, (60 / zoom) * (h / (WORLD_MAX_Z - WORLD_MIN_Z)));
     ctx.strokeStyle = '#f5dfa2';
     ctx.lineWidth = 1.5;
     ctx.strokeRect(camPos.cx - boxW / 2, camPos.cy - boxH / 2, boxW, boxH);
@@ -237,30 +267,6 @@ export const Minimap: React.FC<MinimapProps> = ({
         <span className="minimap-compass comp-s">▼ SOUTH TERRACES</span>
         <span className="minimap-compass comp-w">◄ WEST</span>
         <span className="minimap-compass comp-e">EAST GATE ►</span>
-      </div>
-
-      <div className="minimap-footer">
-        <div className="minimap-legend-pills">
-          <span className="m-pill m-army">
-            <i className="m-dot dot-army"></i> Army
-          </span>
-          <span className="m-pill m-wood">
-            <i className="m-dot dot-wood"></i> Wood
-          </span>
-          <span className="m-pill m-stone">
-            <i className="m-dot dot-stone"></i> Stone
-          </span>
-          <span className="m-pill m-iron">
-            <i className="m-dot dot-iron"></i> Iron
-          </span>
-          <span className="m-pill m-gold">
-            <i className="m-dot dot-gold"></i> Gold
-          </span>
-          <span className="m-pill m-threat">
-            <i className="m-dot dot-monster"></i> Threat
-          </span>
-        </div>
-        <span className="minimap-help-hint">Click/Drag to Pan</span>
       </div>
     </div>
   );

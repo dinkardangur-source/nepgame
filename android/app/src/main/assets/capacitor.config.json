@@ -1,0 +1,12 @@
+{
+	"appId": "com.himalayanrealms.strategy",
+	"appName": "Himalayan Realms",
+	"webDir": "dist",
+	"android": {
+		"allowMixedContent": true,
+		"backgroundColor": "#0a0e14"
+	},
+	"server": {
+		"androidScheme": "https"
+	}
+}

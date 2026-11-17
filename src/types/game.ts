@@ -16,7 +16,7 @@ export type ArmyState = 'IDLE' | 'MARCHING' | 'GATHERING' | 'ATTACKING' | 'RETUR
 export interface InteractiveObject {
   id: string;
   name: string;
-  type: 'citadel' | 'resource' | 'monster' | 'fort';
+  type: 'citadel' | 'resource' | 'monster' | 'fort' | 'tower';
   subtype:
     | 'wood'
     | 'farm'
@@ -29,6 +29,7 @@ export interface InteractiveObject {
     | 'wolf'
     | 'treemonster'
     | 'yeti'
+    | 'dragon'
     | 'rebel'
     | 'citadel'
     | 'tower'
@@ -39,7 +40,7 @@ export interface InteractiveObject {
   health?: number;
   maxHealth?: number;
   yieldAmount?: number;
-  resourceType?: 'wood' | 'stone' | 'iron' | 'food';
+  resourceType?: 'wood' | 'stone' | 'iron' | 'food' | 'gold' | 'stonecrystal' | 'farm';
   defenseRating?: string;
   counterUnit?: string;
   description?: string;
@@ -59,9 +60,8 @@ export interface ChatMessage {
   isPlayer?: boolean;
 }
 
-
 export interface Province {
-  id: 'valley' | 'snow' | 'mountain' | 'forest';
+  id: 'valley' | 'snow' | 'mountain' | 'forest' | 'riverlands' | 'ruins' | string;
   name: string;
   subtitle: string;
   description: string;

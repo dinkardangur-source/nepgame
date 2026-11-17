@@ -75,11 +75,13 @@ export const ObjectHud: React.FC<ObjectHudProps> = ({
 
   return (
     <div
-      className="selected-object-hud"
+      className="selected-object-hud downward-hud"
       style={{
-        transform: `translate(${screenPos.x}px, ${screenPos.y - 70}px) translate(-50%, -100%)`,
+        transform: `translate(${screenPos.x}px, ${screenPos.y + 16}px) translate(-50%, 0%)`,
       }}
     >
+      <div className="so-notch-upward">▲</div>
+
       <div className="so-header">
         <span id="soEmoji">{emoji}</span>
         <div className="so-info">
@@ -121,8 +123,8 @@ export const ObjectHud: React.FC<ObjectHudProps> = ({
         {/* MONSTER CONTEXTUAL ACTIONS */}
         {isMonster && !isDefeated && (
           <>
-            <button className="so-btn so-btn-attack" onClick={onAttack} title="Deploy Vanguard Army via 3D Dial">
-              <span>⚔️ Deploy Dial</span>
+            <button className="so-btn so-btn-attack" onClick={onAttack} title="Deploy Vanguard Army to Attack">
+              <span>⚔️ Attack</span>
             </button>
 
             {onQuickStrike && (

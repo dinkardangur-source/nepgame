@@ -1,0 +1,16 @@
+Himalayan Realms original GLB asset kit
+
+These assets were generated for this project and can be loaded with Three.js GLTFLoader:
+- himalayan_pine.glb — faceted Himalayan pine tree
+- gorkha_hillfort.glb — Nepal-inspired hill-fort castle
+- iron_vein.glb — metallic mountain ore node
+- stone_quarry.glb — stone deposit
+- timber_node.glb — wood/timber resource tree
+- gold_seam.glb — gold deposit
+- magar_infantry.glb — static Magar-inspired infantry concept with khukuri and round shield
+- mountain_horse.glb — static mountain horse concept
+
+Current game behavior:
+- Environment and resource GLBs are loaded automatically; procedural placeholders remain visible if a model fails to load.
+- Group movement, attack, and mining action animations are currently mesh-driven procedural animations in src/main.js. The infantry GLB is a static asset reference and is not yet a skeletal rig/animation clip.
+- These are stylized low-poly / mid-poly game prototypes, not final high-polygon production assets.

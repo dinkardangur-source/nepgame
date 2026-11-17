@@ -5,11 +5,16 @@
   "type": "module",
   "scripts": {
     "dev": "tsx server.ts",
-    "start": "tsx server.ts",
+    "start": "node server.ts",
     "build": "vite build",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "android:sync": "npm run build && npx cap sync android",
+    "android:apk": "npm run build && npx cap sync android && cd android && chmod +x gradlew && ./gradlew assembleDebug && cd .. && mkdir -p android-apk && cp android/app/build/outputs/apk/debug/app-debug.apk android-apk/Himalayan-Realms-debug.apk"
   },
   "dependencies": {
+    "@capacitor/android": "^8.6.2",
+    "@capacitor/cli": "^8.6.2",
+    "@capacitor/core": "^8.6.2",
     "@google/genai": "^2.29.1",
     "@types/express": "^5.0.6",
     "@types/node": "^26.6.5",
@@ -20,9 +25,11 @@
     "express": "^4.21.0",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
+    "sharp": "^0.35.5",
     "three": "^0.186.1",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2",
-    "vite": "^8.3.4"
+    "vite": "^8.3.4",
+    "vite-plugin-pwa": "^2.0.0"
   }
 }

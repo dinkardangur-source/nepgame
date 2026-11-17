@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Himalayan Realms</string>
+    <string name="title_activity_main">Himalayan Realms</string>
+    <string name="package_name">com.himalayanrealms.strategy</string>
+    <string name="custom_url_scheme">com.himalayanrealms.strategy</string>
+</resources>

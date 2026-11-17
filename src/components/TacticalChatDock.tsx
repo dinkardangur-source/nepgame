@@ -4,6 +4,9 @@ import { ChatMessage } from '../types/game';
 interface TacticalChatDockProps {
   onAddToast?: (msg: string) => void;
   lastCombatEvent?: string | null;
+  onToggleSearch?: () => void;
+  isSearchOpen?: boolean;
+  onOpenAntigravity?: () => void;
 }
 
 const INITIAL_MESSAGES: ChatMessage[] = [
@@ -76,7 +79,12 @@ const INITIAL_MESSAGES: ChatMessage[] = [
   },
 ];
 
-export const TacticalChatDock: React.FC<TacticalChatDockProps> = ({ lastCombatEvent }) => {
+export const TacticalChatDock: React.FC<TacticalChatDockProps> = ({
+  lastCombatEvent,
+  onToggleSearch,
+  isSearchOpen,
+  onOpenAntigravity,
+}) => {
   const [isOpen, setIsOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<'world' | 'alliance'>('world');
   const [messages, setMessages] = useState<ChatMessage[]>(INITIAL_MESSAGES);
@@ -194,8 +202,50 @@ export const TacticalChatDock: React.FC<TacticalChatDockProps> = ({ lastCombatEv
 
   return (
     <>
-      {/* 3D TACTICAL CHAT OPTION ICON BUTTON (BOTTOM-LEFT DOCK) */}
+      {/* 3D TACTICAL DOCK (BOTTOM-LEFT DOCK: RADAR SEARCH ICON STACKED ABOVE CHAT ICON) */}
       <div className="tactical-3d-dock bottom-left">
+        {onOpenAntigravity && (
+          <button
+            type="button"
+            onClick={onOpenAntigravity}
+            className="btn-3d-tactical btn-3d-antigravity"
+            title="Antigravity War Advisor & Kingdom Intelligence"
+          >
+            <div className="icon-3d-antigravity-wrap">
+              <span className="icon-3d-antigravity-orb">⚡</span>
+            </div>
+            <div className="btn-3d-label">
+              <span className="btn-3d-title">Antigravity</span>
+              <span className="btn-3d-sub">War Strategist</span>
+            </div>
+          </button>
+        )}
+
+        {onToggleSearch && (
+          <button
+            type="button"
+            onClick={onToggleSearch}
+            className={`btn-3d-tactical btn-3d-search ${isSearchOpen ? 'active' : ''}`}
+            title="Toggle Realm Radar Search"
+          >
+            <div className="icon-3d-compass-wrap">
+              <div className="icon-3d-compass-face">
+                <div className="compass-radar-sweep"></div>
+                <div className="compass-needle-3d">
+                  <div className="compass-needle-north"></div>
+                  <div className="compass-needle-south"></div>
+                  <div className="compass-center-rivet"></div>
+                </div>
+              </div>
+            </div>
+
+            <div className="btn-3d-label">
+              <span className="btn-3d-title">Realm Radar</span>
+              <span className="btn-3d-sub">Target & Recon</span>
+            </div>
+          </button>
+        )}
+
         <button
           type="button"
           onClick={() => {

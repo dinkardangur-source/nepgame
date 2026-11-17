@@ -1,948 +1,588 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
-import {
-  Resources,
-  UnitCounts,
-  ArmyState,
-  InteractiveObject,
-  TrainingQueueItem,
-  KingdomBuilding,
-  Blueprint,
-  CombatFloater,
-  ToastMessage,
-} from './types/game';
-import {
-  INITIAL_RESOURCES,
-  INITIAL_UNITS,
-  PROVINCES,
-  INITIAL_BUILDINGS,
-  INITIAL_BLUEPRINTS,
-} from './data/initialData';
-import { Minimap } from './components/Minimap';
-import { ObjectHud } from './components/ObjectHud';
-import { RadialTroopDial } from './components/RadialTroopDial';
-import { ScoutReportModal } from './components/ScoutReportModal';
-import { BuildingsModal } from './components/BuildingsModal';
-import { ImageStudioModal } from './components/ImageStudioModal';
-import { VeoModal } from './components/VeoModal';
-import { TacticalChatDock } from './components/TacticalChatDock';
-import { WorldSearchRadar } from './components/WorldSearchRadar';
-import { AllianceRallyModal } from './components/AllianceRallyModal';
-import { GameCanvas } from './game/GameCanvas';
+import React, { useEffect, useRef, useState, useCallback } from 'react';
+import { WorldMap } from './game/WorldMap';
+import { MapNavigationUI } from './components/MapNavigationUI';
+import { WorldEntity, EntityAction, CastleSpawnData } from './game/WorldCoordinates';
+import { InsideKingdomView } from './components/InsideKingdomView';
+import { InsideKingdomState, MergeBuildingCategory } from './game/InsideKingdom3D';
+import { StrategicWorldMapModal } from './components/StrategicWorldMapModal';
 
-interface LogEntry {
+interface CombatFloater {
   id: string;
-  icon: string;
-  title: string;
-  desc: string;
-  time: string;
+  text: string;
+  color: string;
+  x: number;
+  y: number;
+}
+
+interface BulletNotification {
+  id: string;
+  text: string;
+  category: 'attack' | 'conquest' | 'monster' | 'rally';
+  lane: number;
 }
 
 export const App: React.FC = () => {
-  // Core game states
-  const [resources, setResources] = useState<Resources>(INITIAL_RESOURCES);
-  const [units, setUnits] = useState<UnitCounts>(INITIAL_UNITS);
-  const [armyHealth, setArmyHealth] = useState(100);
-  const [armyState, setArmyState] = useState<ArmyState>('IDLE');
-  const [armyPortraitUrl, setArmyPortraitUrl] = useState('/assets/images/magar_infantry_tpose.jpg');
+  const mapContainerRef = useRef<HTMLDivElement | null>(null);
+  const worldMapRef = useRef<WorldMap | null>(null);
 
-  // Mission state
-  const [missionDesc, setMissionDesc] = useState('Your army is awaiting orders at the citadel gate.');
-  const [missionProgress, setMissionProgress] = useState(0);
-  const [missionTimerText, setMissionTimerText] = useState('No active mission');
-  const [activeTarget, setActiveTarget] = useState<InteractiveObject | null>(null);
+  // View Mode: 'world' (World Map) or 'kingdom' (3D Walled Inside Kingdom Merge Courtyard)
+  const [viewMode, setViewMode] = useState<'world' | 'kingdom'>('world');
+  const [kingdomState, setKingdomState] = useState<InsideKingdomState | null>(null);
 
-  // Training queue
-  const [trainingQueue, setTrainingQueue] = useState<TrainingQueueItem[]>([]);
+  // Randomized Castles (My Castle + 10 Alliance Member Castles + 6 Rival Enemy Castles) & Strategic WorldMap Modal / Filter
+  const [castles, setCastles] = useState<CastleSpawnData[]>([]);
+  const [conqueredPlots, setConqueredPlots] = useState<Record<string, 'neutral' | 'enemy' | 'alliance'>>({});
+  const [isStrategicWorldMapOpen, setIsStrategicWorldMapOpen] = useState<boolean>(false);
+  const [isStrategicFilterActive, setIsStrategicFilterActive] = useState<boolean>(false);
 
-  // Buildings & blueprints
-  const [buildings, setBuildings] = useState<KingdomBuilding[]>(INITIAL_BUILDINGS);
-  const [blueprints, setBlueprints] = useState<Blueprint[]>(INITIAL_BLUEPRINTS);
+  // Live camera status (Default zoom 0.5016 corresponds to Zoom Out 84/100)
+  const [cameraInfo, setCameraInfo] = useState<{ x: number; y: number; z: number; zoom: number }>({
+    x: 800,
+    y: 10.0,
+    z: 768,
+    zoom: 0.5016,
+  });
 
-  // Selected territory & objects
-  const [currentProvince, setCurrentProvince] = useState<string>('valley');
-  const [selectedObject, setSelectedObject] = useState<InteractiveObject | null>(null);
+  // Selected Entity and contextual screen anchor
+  const [selectedEntity, setSelectedEntity] = useState<WorldEntity | null>(null);
   const [selectedScreenPos, setSelectedScreenPos] = useState<{ x: number; y: number } | null>(null);
-  const [allObjects, setAllObjects] = useState<InteractiveObject[]>([]);
 
-  // Camera & view controls
-  const [cameraPan, setCameraPan] = useState<{ x: number; z: number }>({ x: 14, z: -10 });
-  const [zoom, setZoom] = useState(1.0);
+  // Live Army State & 3D Coordinates
+  const [armyPos, setArmyPos] = useState<[number, number, number]>([800, 10.0, 751]);
+  const [armyStatusText, setArmyStatusText] = useState<string>('Garrisoned inside My Castle');
+  const [armyProgressPct, setArmyProgressPct] = useState<number>(100);
 
-  // Minimap & UI toggles
-  const [isMinimapOpen, setIsMinimapOpen] = useState(true);
-  const [isMinimapExpanded, setIsMinimapExpanded] = useState(false);
-  const [isPanelsVisible, setIsPanelsVisible] = useState(true);
-  const [isFullscreen, setIsFullscreen] = useState(false);
-
-  // Modals
-  const [isDispatchOpen, setIsDispatchOpen] = useState(false);
-  const [dispatchMode, setDispatchMode] = useState<'attack' | 'gather'>('attack');
-  const [isScoutReportOpen, setIsScoutReportOpen] = useState(false);
-  const [isBuildingsOpen, setIsBuildingsOpen] = useState(false);
-  const [isImageStudioOpen, setIsImageStudioOpen] = useState(false);
-  const [isVeoOpen, setIsVeoOpen] = useState(false);
-  const [isSearchRadarOpen, setIsSearchRadarOpen] = useState(false);
-  const [isRallyModalOpen, setIsRallyModalOpen] = useState(false);
-  const [rallyTarget, setRallyTarget] = useState<InteractiveObject | null>(null);
-  const [lastCombatChatEvent, setLastCombatChatEvent] = useState<string | null>(null);
-
-  // Floating feedback
-  const [logs, setLogs] = useState<LogEntry[]>([
-    {
-      id: 'log-0',
-      icon: '✦',
-      title: 'Realm Command Initialized',
-      desc: 'Magar Vanguard regiment assembled under Lord Dangol.',
-      time: 'NOW',
-    },
-  ]);
+  // Floating RPG Combat Numbers / Clash effects
   const [combatFloaters, setCombatFloaters] = useState<CombatFloater[]>([]);
-  const [toasts, setToasts] = useState<ToastMessage[]>([]);
+  const [bulletNotifications, setBulletNotifications] = useState<BulletNotification[]>([]);
+  const bulletLaneRef = useRef<number>(0);
 
-  const snapshotFnRef = useRef<(() => string | null) | null>(null);
-  const damageMonsterIn3DRef = useRef<((monsterId: string, damage: number, forceFatal?: boolean) => { remainingHp: number; isDead: boolean }) | null>(null);
+  // Player Resource Vault
+  const [resources, setResources] = useState({
+    wood: 125400,
+    stone: 98200,
+    iron: 64500,
+    food: 42800,
+    gold: 18500,
+    gems: 2450,
+  });
 
-  // Calculate Army Power dynamically
-  const armyPower = units.infantry * 85 + units.cavalry * 220 + units.archer * 140;
+  const [toastText, setToastText] = useState<string | null>(null);
 
-  // Add toast helper
-  const addToast = useCallback((text: string) => {
-    const id = `toast-${Date.now()}-${Math.random()}`;
-    setToasts((prev) => [...prev, { id, text }]);
+  const showToast = useCallback((msg: string) => {
+    setToastText(msg);
     setTimeout(() => {
-      setToasts((prev) => prev.filter((t) => t.id !== id));
+      setToastText((prev) => (prev === msg ? null : prev));
     }, 3500);
   }, []);
 
-  // Add log helper
-  const addLog = useCallback((title: string, desc: string, icon = '✦') => {
-    const id = `log-${Date.now()}-${Math.random()}`;
-    const now = new Date();
-    const timeStr = `${now.getHours()}:${String(now.getMinutes()).padStart(2, '0')}`;
-    setLogs((prev) => [{ id, icon, title, desc, time: timeStr }, ...prev.slice(0, 19)]);
-  }, []);
+  const handlePushBullet = useCallback(
+    (msg: { text: string; category: 'attack' | 'conquest' | 'monster' | 'rally' }) => {
+      const id = `bullet-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+      const lane = bulletLaneRef.current % 3;
+      bulletLaneRef.current += 1;
+      setBulletNotifications((prev) => [...prev.slice(-3), { id, ...msg, lane }]);
+      setTimeout(() => {
+        setBulletNotifications((prev) => prev.filter((b) => b.id !== id));
+      }, 7200);
+    },
+    []
+  );
 
-  // Add combat floater helper
-  const addCombatFloater = useCallback((text: string, color = '#dfba6e', x = 0, y = 0) => {
-    const id = `floater-${Date.now()}-${Math.random()}`;
+  const handleEnterKingdom = useCallback(() => {
+    setSelectedEntity(null);
+    setSelectedScreenPos(null);
+    setViewMode('kingdom');
+    worldMapRef.current?.setSceneMode('kingdom');
+    showToast('🏰 Entered 3D Walled Imperial Citadel — Click matching 3D buildings to merge!');
+  }, [showToast]);
+
+  const handleReturnToWorld = useCallback(() => {
+    setViewMode('world');
+    worldMapRef.current?.setSceneMode('world');
+    showToast('🌍 Returned to Himalayan World Map (Zoom Out 85)');
+  }, [showToast]);
+
+  const handleToggleViewMode = useCallback(() => {
+    setViewMode((prev) => {
+      if (prev === 'world') {
+        setSelectedEntity(null);
+        setSelectedScreenPos(null);
+        worldMapRef.current?.setSceneMode('kingdom');
+        showToast('🏰 Entered 3D Walled Imperial Citadel — Click matching 3D buildings to merge!');
+        return 'kingdom';
+      } else {
+        worldMapRef.current?.setSceneMode('world');
+        showToast('🌍 Returned to Himalayan World Map (Zoom Out 85)');
+        return 'world';
+      }
+    });
+  }, [showToast]);
+
+  const handleToggleStrategicFilter = useCallback(
+    (enabled: boolean) => {
+      setIsStrategicFilterActive(enabled);
+      worldMapRef.current?.setStrategicFilterMode(enabled);
+      showToast(
+        enabled
+          ? '🎯 3D World Filter ON: Showing ONLY The Congress, Shrines (A/B/C), Alliance Castles & My Castle!'
+          : '🌍 3D World Filter OFF: Showing all Realm Monsters, Resources, Shrines & Castles'
+      );
+    },
+    [showToast]
+  );
+
+  const handleRelocateCastles = useCallback(() => {
+    if (!worldMapRef.current) return;
+    if (viewMode === 'kingdom') {
+      setViewMode('world');
+      worldMapRef.current.setSceneMode('world');
+    }
+    const updated = worldMapRef.current.relocateCastles(true);
+    setCastles([...updated]);
+    const myCastle = updated.find((c) => c.isMyCastle);
+    if (myCastle) {
+      showToast(
+        `🎲 Castles Relocated! My Castle spawned at [${myCastle.position[0]}, ${myCastle.position[2]}] alongside 10 Alliance Castles.`
+      );
+    }
+  }, [viewMode, showToast]);
+
+  const handleSpendResources = useCallback(
+    (cost: { wood: number; stone: number; iron: number; food: number }): boolean => {
+      if (
+        resources.wood < cost.wood ||
+        resources.stone < cost.stone ||
+        resources.iron < cost.iron ||
+        resources.food < cost.food
+      ) {
+        return false;
+      }
+      setResources((prev) => ({
+        ...prev,
+        wood: prev.wood - cost.wood,
+        stone: prev.stone - cost.stone,
+        iron: prev.iron - cost.iron,
+        food: prev.food - cost.food,
+      }));
+      return true;
+    },
+    [resources]
+  );
+
+  const handleGrantInnerReward = useCallback(
+    (
+      type: 'wood' | 'stone' | 'iron' | 'food' | 'gold' | 'gems',
+      amount: number,
+      buildingName: string
+    ) => {
+      setResources((prev) => ({
+        ...prev,
+        [type]: prev[type] + amount,
+      }));
+      showToast(`📦 Collected +${amount.toLocaleString()} ${type.toUpperCase()} from ${buildingName}!`);
+    },
+    [showToast]
+  );
+
+  const handleAddCombatFloater = useCallback((text: string, color: string, x: number, y: number) => {
+    const id = `${Date.now()}-${Math.random()}`;
     setCombatFloaters((prev) => [...prev, { id, text, color, x, y }]);
     setTimeout(() => {
       setCombatFloaters((prev) => prev.filter((f) => f.id !== id));
-    }, 1800);
+    }, 1600);
   }, []);
 
-  // Check how many upgrades are currently affordable
-  const readyUpgradesCount = buildings.filter((b) => {
-    return (
-      resources.wood >= b.cost.wood &&
-      resources.stone >= b.cost.stone &&
-      resources.iron >= b.cost.iron &&
-      resources.food >= b.cost.food &&
-      b.level < b.maxLevel
-    );
-  }).length;
-
-  // Training queue recruitment tick
-  useEffect(() => {
-    if (trainingQueue.length === 0) return;
-
-    const interval = setInterval(() => {
-      setTrainingQueue((prev) => {
-        if (prev.length === 0) return prev;
-        const current = { ...prev[0] };
-        current.timeRemaining -= 0.5;
-
-        if (current.timeRemaining <= 0) {
-          // Recruit complete!
-          setUnits((u) => ({
-            ...u,
-            [current.unit]: u[current.unit] + current.count,
-          }));
-          addToast(`Training complete: +${current.count} ${current.name}!`);
-          addLog(
-            'Recruits Graduated',
-            `+${current.count} ${current.name} deployed to Magar Vanguard.`,
-            '⚔️'
-          );
-          return prev.slice(1);
-        }
-        return [current, ...prev.slice(1)];
-      });
-    }, 500);
-
-    return () => clearInterval(interval);
-  }, [trainingQueue, addToast, addLog]);
-
-  // Passive resource income tick (every 8 seconds)
-  useEffect(() => {
-    const interval = setInterval(() => {
-      setResources((prev) => {
-        // Compute passive income from buildings & blueprints
-        const woodBonus = 8;
-        const stoneBonus = 6;
-        const ironBonus = 4;
-        const foodBonus = 12;
-
-        return {
-          wood: prev.wood + woodBonus,
-          stone: prev.stone + stoneBonus,
-          iron: prev.iron + ironBonus,
-          food: prev.food + foodBonus,
-        };
-      });
-    }, 8000);
-
-    return () => clearInterval(interval);
-  }, []);
-
-  // Train Recruits Handler
-  const handleTrainUnit = (unit: 'infantry' | 'cavalry' | 'archer', count: number) => {
-    const costMap = {
-      infantry: { food: 60 * count, iron: 30 * count, wood: 0, stone: 0, name: 'Magar Infantry', time: 4 * count },
-      cavalry: { food: 120 * count, iron: 75 * count, wood: 0, stone: 0, name: 'Mountain Cavalry', time: 7 * count },
-      archer: { food: 80 * count, iron: 0, wood: 45 * count, stone: 0, name: 'Himalayan Archer', time: 5 * count },
-    };
-
-    const cost = costMap[unit];
-    if (
-      resources.food < cost.food ||
-      resources.iron < cost.iron ||
-      resources.wood < cost.wood
-    ) {
-      addToast('Insufficient resources for troop recruitment!');
-      return;
-    }
-
-    // Deduct resources
+  const handleHarvestReward = useCallback((resourceType: string, amount: number) => {
     setResources((prev) => ({
       ...prev,
-      food: prev.food - cost.food,
-      iron: prev.iron - cost.iron,
-      wood: prev.wood - cost.wood,
+      [resourceType]: (prev[resourceType as keyof typeof prev] || 0) + amount,
     }));
+    showToast(`📦 +${amount} ${resourceType.toUpperCase()} safely deposited into My Castle Vault!`);
+  }, [showToast]);
 
-    const queueItem: TrainingQueueItem = {
-      id: `train-${Date.now()}-${Math.random()}`,
-      unit,
-      count,
-      name: cost.name,
-      totalTime: cost.time,
-      timeRemaining: cost.time,
-    };
-
-    setTrainingQueue((prev) => [...prev, queueItem]);
-    addToast(`Queued ${count} ${cost.name} at Citadel Barracks`);
-  };
-
-  // Object Selection Handler
-  const handleSelectObject = (
-    obj: InteractiveObject | null,
-    screenPos: { x: number; y: number } | null
-  ) => {
-    setSelectedObject(obj);
-    setSelectedScreenPos(screenPos);
-  };
-
-  // Province change -> smooth camera pan
-  const handleSelectProvince = (provId: string) => {
-    setCurrentProvince(provId);
-    const prov = PROVINCES[provId];
-    if (prov) {
-      setCameraPan({ x: -prov.center[0], z: -prov.center[2] });
-      addToast(`Focused territory: ${prov.name}`);
-    }
-  };
-
-  // Mission lifecycle
-  const handleDispatchConfirm = (dispatched: UnitCounts) => {
-    if (!selectedObject) return;
-    setActiveTarget(selectedObject);
-
-    // Frame camera between Citadel Gate and Target so player clearly witnesses troops departing and marching
-    const midX = (-10.5 + selectedObject.position[0]) / 2;
-    const midZ = (13.5 + selectedObject.position[2]) / 2;
-    setCameraPan({ x: -midX, z: -midZ });
-
-    if (dispatchMode === 'attack') {
-      setArmyState('ATTACKING');
-      setMissionDesc(`Marching to assault ${selectedObject.name}...`);
-      setMissionProgress(5);
-      setMissionTimerText('Marching');
-      addToast(`Magar Vanguard battalion marching to assault ${selectedObject.name}!`);
-      addLog(
-        'Expedition Launched',
-        `Assaulting ${selectedObject.name} (Lv.${selectedObject.level}) with ${dispatched.infantry + dispatched.cavalry + dispatched.archer} troops.`,
-        '⚔️'
-      );
-      setLastCombatChatEvent(
-        `Vanguard battalion dispatched to assault ${selectedObject.name} (Lv.${selectedObject.level}). Real-time strike imminent upon arrival!`
-      );
-    } else {
-      setArmyState('GATHERING');
-      setMissionDesc(`Marching to harvest at ${selectedObject.name}...`);
-      setMissionProgress(5);
-      setMissionTimerText('Marching');
-      addToast(`Workforce deployed to harvest ${selectedObject.name}!`);
-      addLog(
-        'Harvest Commenced',
-        `Workers deployed to gather at ${selectedObject.name} (Lv.${selectedObject.level}).`,
-        '⛏️'
-      );
-      setLastCombatChatEvent(
-        `Workforce deployed to harvest ${selectedObject.name} (Lv.${selectedObject.level}).`
-      );
-    }
-  };
-
-  // Radar Selection & Quick Dispatch
-  const handleSelectAndLocate = (obj: InteractiveObject) => {
-    handleSelectObject(obj, { x: window.innerWidth / 2, y: window.innerHeight / 2 - 30 });
-    setCameraPan({ x: -obj.position[0], z: -obj.position[2] });
-    addToast(`Radar locked onto ${obj.name} (Lv.${obj.level})`);
-  };
-
-  const handleQuickDispatchFromRadar = (obj: InteractiveObject, mode: 'attack' | 'gather') => {
-    handleSelectObject(obj, { x: window.innerWidth / 2, y: window.innerHeight / 2 - 30 });
-    setCameraPan({ x: -obj.position[0], z: -obj.position[2] });
-    setDispatchMode(mode);
-    setIsDispatchOpen(true);
-  };
-
-
-  // Quick strike damage trigger (testing damage white flash & zero HP smoke transformation)
-  const handleQuickStrike = (targetObj: InteractiveObject) => {
-    if (!damageMonsterIn3DRef.current) return;
-    const res = damageMonsterIn3DRef.current(targetObj.id, 45, false);
-    if (res.isDead) {
-      addToast(`${targetObj.name} reached 0 HP and turned into smoke in the air!`);
-      addLog('Monster Slain', `${targetObj.name} reached 0 HP - dissolved into 3D smoke in the air!`, '💨');
-      setSelectedObject((prev) => (prev && prev.id === targetObj.id ? { ...prev, health: 0, isDefeated: true } : prev));
-    } else {
-      addToast(`${targetObj.name} took damage (-45 HP)! White flash triggered.`);
-      setSelectedObject((prev) => (prev && prev.id === targetObj.id ? { ...prev, health: res.remainingHp } : prev));
-    }
-  };
-
-  // Fast Scout reconnaissance mission
-  const handleScoutTarget = () => {
-    if (!selectedObject) return;
-    addToast(`Scout rider dispatched to reconnoiter ${selectedObject.name}...`);
-    addCombatFloater('👁️ SCOUT RIDER', '#4fa3d1', window.innerWidth / 2, window.innerHeight / 2);
-
-    setTimeout(() => {
-      setIsScoutReportOpen(true);
-      addToast('Tactical intelligence report received!');
-      addLog('Scout Report', `Recon completed on ${selectedObject.name}.`, '👁️');
-    }, 1200);
-  };
-
-  // Alliance Rally Handler
-  const handleOpenRallyModal = (target: InteractiveObject | null) => {
-    if (!target) return;
-    setRallyTarget(target);
-    setIsRallyModalOpen(true);
-  };
-
-  const handleConfirmRally = (rallyData: { totalPower: number; captains: string[] }) => {
-    if (!rallyTarget) return;
-    setActiveTarget(rallyTarget);
-    setArmyState('ATTACKING');
-
-    // Frame camera between Citadel Gate and Target so player witnesses rally march
-    const midX = (-10.5 + rallyTarget.position[0]) / 2;
-    const midZ = (13.5 + rallyTarget.position[2]) / 2;
-    setCameraPan({ x: -midX, z: -midZ });
-
-    setMissionDesc(`Alliance War Rally marching to assault ${rallyTarget.name}...`);
-    setMissionProgress(10);
-    setMissionTimerText('Rally Marching');
-    addToast(`🚩 ALLIANCE RALLY LAUNCHED! 3 Captains marching to assault ${rallyTarget.name}!`);
-    addCombatFloater('🚩 ALLIANCE RALLY!', '#f59e0b', window.innerWidth / 2, window.innerHeight / 2 - 40);
-    addLog(
-      'Alliance Rally Dispatched',
-      `Coordinated Alliance Rally launched against ${rallyTarget.name} (Lv.${rallyTarget.level}) with ${rallyData.totalPower} combined power (${rallyData.captains.join(', ')}).`,
-      '🚩'
-    );
-    setLastCombatChatEvent(
-      `🚩 ALLIANCE WAR RALLY DISPATCHED! All captains converged to assault ${rallyTarget.name} (Lv.${rallyTarget.level}). War horn sounded!`
-    );
-  };
-
-  // Garrison Tower Handler
-  const handleGarrisonTower = (target: InteractiveObject | null) => {
-    if (!target) return;
-    setActiveTarget(target);
-    setArmyState('MARCHING');
-    addToast(`Garrison reinforcement dispatched to fortify ${target.name}!`);
-    addCombatFloater('🛡️ GARRISON DEPLOYED', '#38bdf8', window.innerWidth / 2, window.innerHeight / 2);
-    setMissionDesc(`Reinforcements marching to garrison ${target.name}...`);
-    setMissionProgress(20);
-    setMissionTimerText('Garrisoning');
-    addLog('Tower Fortified', `Sent Vanguard garrison to station at ${target.name}.`, '🛡️');
-  };
-
-  // Direct march order
-  const handleMarchToTarget = () => {
-    if (!selectedObject) {
-      addToast('Select a destination coordinate or object first.');
-      return;
-    }
-    setActiveTarget(selectedObject);
-    setArmyState('MARCHING');
-    setMissionDesc(`Force marching to coordinates (${selectedObject.position[0]}, ${selectedObject.position[2]})...`);
-    setMissionProgress(40);
-    setMissionTimerText('3.5s remaining');
-    addToast(`Vanguard marching to ${selectedObject.name}!`);
-
-    setTimeout(() => {
-      setArmyState('IDLE');
-      setMissionDesc(`Force arrived at ${selectedObject.name}.`);
-      setMissionProgress(0);
-      setMissionTimerText('Awaiting next order');
-      addToast(`Force stationed at ${selectedObject.name}.`);
-    }, 3500);
-  };
-
-  // Direct recall order
-  const handleRecallArmy = () => {
-    setActiveTarget(null);
-    setArmyState('RETURNING');
-    setMissionDesc('Vanguard recalled back to Gorkha Citadel.');
-    setMissionProgress(50);
-    setMissionTimerText('2.5s returning');
-    addToast('Recalling all regiments to citadel!');
-
-    setTimeout(() => {
-      setArmyState('IDLE');
-      setMissionDesc('Your army is awaiting orders at the citadel gate.');
-      setMissionProgress(0);
-      setMissionTimerText('No active mission');
-      addToast('Army rallied at home citadel.');
-    }, 2500);
-  };
-
-  // Building Upgrade
-  const handleUpgradeBuilding = (buildingId: string) => {
-    const b = buildings.find((x) => x.id === buildingId);
-    if (!b) return;
-
-    if (
-      resources.wood < b.cost.wood ||
-      resources.stone < b.cost.stone ||
-      resources.iron < b.cost.iron ||
-      resources.food < b.cost.food
-    ) {
-      addToast('Insufficient assets for structure upgrade!');
-      return;
-    }
-
+  const handleMonsterDefeated = useCallback((monster: WorldEntity) => {
     setResources((prev) => ({
-      wood: prev.wood - b.cost.wood,
-      stone: prev.stone - b.cost.stone,
-      iron: prev.iron - b.cost.iron,
-      food: prev.food - b.cost.food,
+      ...prev,
+      gold: prev.gold + 600,
+      gems: prev.gems + 35,
     }));
+    showToast(`💀 VICTORY! ${monster.name} defeated! +600 Gold and +35 Gems secured!`);
+  }, [showToast]);
 
-    setBuildings((prev) =>
-      prev.map((item) =>
-        item.id === buildingId
-          ? {
-              ...item,
-              level: item.level + 1,
-              cost: {
-                wood: Math.floor(item.cost.wood * 1.25),
-                stone: Math.floor(item.cost.stone * 1.25),
-                iron: Math.floor(item.cost.iron * 1.25),
-                food: Math.floor(item.cost.food * 1.25),
-              },
-            }
-          : item
-      )
-    );
+  const handleStructureConquered = useCallback(
+    (entity: WorldEntity, buffLabel: string) => {
+      setConqueredPlots((prev) => ({ ...prev, [entity.id]: 'alliance' }));
+      setResources((prev) => ({
+        ...prev,
+        gold: prev.gold + (entity.subtype === 'congress' ? 5000 : 1500),
+        gems: prev.gems + (entity.subtype === 'congress' ? 300 : 80),
+      }));
+      showToast(`👑 CONQUERED! ${entity.name} claimed for Alliance (${buffLabel})!`);
+    },
+    [showToast]
+  );
 
-    addToast(`Upgraded ${b.name} to Level ${b.level + 1}!`);
-    addLog('Architecture Upgraded', `${b.name} reached Level ${b.level + 1}.`, '🏛️');
-  };
+  const handleEnemyCastleDefeated = useCallback(
+    (castleEntity: WorldEntity) => {
+      setResources((prev) => ({
+        ...prev,
+        wood: prev.wood + 8000,
+        stone: prev.stone + 6500,
+        gold: prev.gold + 2500,
+        gems: prev.gems + 120,
+      }));
+      showToast(`🔥 PLUNDERED! ${castleEntity.name} fallen! +2,500 Gold, +120 Gems & War Spoils seized!`);
+    },
+    [showToast]
+  );
 
-  // Blueprint Construction
-  const handleConstructBlueprint = (blueprintId: string) => {
-    const bp = blueprints.find((x) => x.id === blueprintId);
-    if (!bp || bp.constructed) return;
-
-    if (
-      resources.wood < bp.cost.wood ||
-      resources.stone < bp.cost.stone ||
-      resources.iron < bp.cost.iron ||
-      resources.food < bp.cost.food
-    ) {
-      addToast('Insufficient assets to construct blueprint!');
-      return;
+  const handleArmyStatusUpdate = useCallback((desc: string, progress: number, _timerText: string, updatedArmyPos?: [number, number, number]) => {
+    setArmyStatusText(desc);
+    setArmyProgressPct(progress);
+    if (updatedArmyPos) {
+      setArmyPos(updatedArmyPos);
     }
+  }, []);
 
-    setResources((prev) => ({
-      wood: prev.wood - bp.cost.wood,
-      stone: prev.stone - bp.cost.stone,
-      iron: prev.iron - bp.cost.iron,
-      food: prev.food - bp.cost.food,
-    }));
+  // Troop action dispatcher: Attack, Mine, Rally, Scout, Garrison, Upgrade
+  const handleExecuteAction = useCallback((target: WorldEntity, action: EntityAction) => {
+    if (!worldMapRef.current) return;
 
-    setBlueprints((prev) =>
-      prev.map((item) => (item.id === blueprintId ? { ...item, constructed: true } : item))
-    );
+    worldMapRef.current.dispatchTroops(target, action);
 
-    addToast(`Constructed ${bp.name}! Benefit activated.`);
-    addLog('Blueprint Built', `Constructed ${bp.name}. Yield bonus: ${bp.benefit}.`, '🏗️');
-  };
+    if (action === 'attack' || action === 'rally') {
+      showToast(`⚔️ Dispatched Vanguard battalion from My Castle to assault ${target.name}!`);
+    } else if (action === 'mine') {
+      showToast(`⛏️ Work party mobilized from My Castle to harvest ${target.name}!`);
+    } else if (action === 'scout') {
+      showToast(`🦅 Falcon scout recon mission complete for ${target.name}!`);
+    } else if (action === 'garrison') {
+      showToast(`🛡️ Royal guard reinforced at ${target.name}!`);
+    } else if (action === 'upgrade') {
+      showToast(`🔨 Imperial architects scheduled upgrades for ${target.name}!`);
+    }
+  }, [showToast]);
 
-  // Keyboard shortcut listener
   useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      // Don't trigger if user is typing in an input or textarea
-      if (['INPUT', 'TEXTAREA'].includes((e.target as HTMLElement).tagName)) return;
+    const container = mapContainerRef.current;
+    if (!container) return;
 
-      if (e.key === 'm' || e.key === 'M') {
-        handleMarchToTarget();
-      } else if (e.key === 'g' || e.key === 'G') {
-        if (selectedObject?.type === 'resource') {
-          setDispatchMode('gather');
-          setIsDispatchOpen(true);
-        } else {
-          addToast('Select a resource node to gather [G]');
-        }
-      } else if (e.key === 'a' || e.key === 'A') {
-        if (selectedObject?.type === 'monster') {
-          setDispatchMode('attack');
-          setIsDispatchOpen(true);
-        } else {
-          addToast('Select a monster or threat to attack [A]');
-        }
-      } else if (e.key === 'r' || e.key === 'R') {
-        handleRecallArmy();
-      } else if (e.key === 'b' || e.key === 'B') {
-        setIsBuildingsOpen((prev) => !prev);
-      } else if (e.key === 'f' || e.key === 'F') {
-        setIsFullscreen((prev) => !prev);
-      } else if (e.key === 'Tab') {
-        e.preventDefault();
-        setIsPanelsVisible((prev) => !prev);
-      }
+    // Initialize the master 3D WorldMap
+    const wm = new WorldMap({
+      container,
+      onCameraUpdate: (info) => {
+        setCameraInfo(info);
+      },
+      onSelectEntity: (entity, screenPos) => {
+        setSelectedEntity(entity);
+        setSelectedScreenPos(screenPos);
+      },
+      onAddCombatFloater: handleAddCombatFloater,
+      onArmyStatusUpdate: handleArmyStatusUpdate,
+      onHarvestReward: handleHarvestReward,
+      onMonsterDefeated: handleMonsterDefeated,
+      onStructureConquered: handleStructureConquered,
+      onEnemyCastleDefeated: handleEnemyCastleDefeated,
+      onBulletNotify: handlePushBullet,
+      onEnterKingdom: handleEnterKingdom,
+      onInsideKingdomStateChange: (state) => {
+        setKingdomState(state);
+      },
+      onCastlesUpdated: (updatedCastles) => {
+        setCastles([...updatedCastles]);
+      },
+    });
+
+    worldMapRef.current = wm;
+    setKingdomState(wm.getInsideKingdomState());
+    setCastles([...wm.getCastlesList()]);
+
+    return () => {
+      wm.dispose();
+      worldMapRef.current = null;
     };
-
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [selectedObject]);
+  }, [
+    handleAddCombatFloater,
+    handleArmyStatusUpdate,
+    handleHarvestReward,
+    handleMonsterDefeated,
+    handleStructureConquered,
+    handleEnemyCastleDefeated,
+    handlePushBullet,
+    handleEnterKingdom,
+  ]);
 
   return (
-    <div className={`app-shell ${isFullscreen ? 'fullscreen-mode' : ''}`}>
-      <main className="layout">
-        <section className="map-area">
-          <div className="map-toolbar">
-            <div className="map-title">
-              <span className="map-pin">⌖</span>
-              <div>
-                <h2>{PROVINCES[currentProvince]?.name || 'Himalayan Mainland Kingdom'}</h2>
-                <p>{PROVINCES[currentProvince]?.subtitle || 'UNIFIED GREATER REALM'}</p>
-              </div>
-            </div>
-
-            {/* Clear HUD Resources */}
-            <div className="clear-hud-resources">
-              <div className="resource">
-                <span className="resource-icon wood">♣</span>
-                <span>
-                  <b>{resources.wood.toLocaleString()}</b>
-                  <small>WOOD</small>
-                </span>
-              </div>
-              <div className="resource">
-                <span className="resource-icon stone">◆</span>
-                <span>
-                  <b>{resources.stone.toLocaleString()}</b>
-                  <small>STONE</small>
-                </span>
-              </div>
-              <div className="resource">
-                <span className="resource-icon iron">⬟</span>
-                <span>
-                  <b>{resources.iron.toLocaleString()}</b>
-                  <small>IRON</small>
-                </span>
-              </div>
-              <div className="resource">
-                <span className="resource-icon food">✦</span>
-                <span>
-                  <b>{resources.food.toLocaleString()}</b>
-                  <small>FOOD</small>
-                </span>
-              </div>
-            </div>
-
-            {/* Permanent Clear Skies Atmosphere */}
-            <div className="weather-widget permanent-clear" title="Atmosphere: Azure Sunshine across Unified Mainland">
-              <span className="weather-icon">☀️</span>
-              <div className="weather-details">
-                <div className="weather-header">
-                  <b>Clear Skies</b>
-                  <span className="weather-tag">PERMANENT</span>
-                </div>
-                <small>Speed 100% · Gather 100%</small>
-              </div>
-            </div>
-
-            <div className="map-tools">
-              <button
-                className="tool-action-btn"
-                onClick={() => setIsBuildingsOpen(true)}
-                title="Building Asset Requirements & Blueprints [B]"
-              >
-                <span>🏛️</span>
-                <span>Buildings</span>
-                {readyUpgradesCount > 0 && (
-                  <span
-                    className="badge-req"
-                    style={{
-                      marginLeft: '4px',
-                      background: 'linear-gradient(135deg,#286e42,#174427)',
-                    }}
-                  >
-                    {readyUpgradesCount}
-                  </span>
-                )}
-              </button>
-
-              <button
-                className="tool-action-btn"
-                onClick={() => setIsImageStudioOpen(true)}
-                title="Create & Edit Character Art (Nano Banana 2.1)"
-              >
-                <span>🎨</span>
-                <span>AI Art</span>
-              </button>
-
-              <button
-                className="tool-action-btn"
-                onClick={() => setIsVeoOpen(true)}
-                title="Animate Video (Veo 3.1 Fast)"
-              >
-                <span>🎥</span>
-                <span>Veo</span>
-              </button>
-
-              <button onClick={() => setZoom((z) => Math.max(0.5, z - 0.1))} title="Zoom out">
-                −
-              </button>
-              <span>{Math.round(zoom * 100)}%</span>
-              <button onClick={() => setZoom((z) => Math.min(2.0, z + 0.1))} title="Zoom in">
-                +
-              </button>
-              <button
-                onClick={() => {
-                  setCameraPan({ x: 14, z: -10 });
-                  setZoom(1.0);
-                }}
-                title="Reset view"
-              >
-                ⌂
-              </button>
-              <button onClick={() => setIsMinimapOpen(!isMinimapOpen)} title="Toggle Kingdom Minimap [M]">
-                🗺️
-              </button>
-              <button
-                className={`tool-action-btn ${isSearchRadarOpen ? 'active' : ''}`}
-                onClick={() => setIsSearchRadarOpen(!isSearchRadarOpen)}
-                title="Search Resources & Monsters Lv 1-5 (3D Radar)"
-              >
-                <span>🧭</span>
-                <span>3D Radar</span>
-              </button>
-
-              <button
-                className={`tool-action-btn ${armyState !== 'IDLE' ? 'active' : ''}`}
-                onClick={() => {
-                  if (activeTarget && armyState !== 'IDLE') {
-                    const midX = (-10.5 + activeTarget.position[0]) / 2;
-                    const midZ = (13.5 + activeTarget.position[2]) / 2;
-                    setCameraPan({ x: -midX, z: -midZ });
-                    addToast('Centered camera on marching Vanguard');
-                  } else {
-                    setCameraPan({ x: 10.5, z: -13.5 });
-                    addToast('Centered on Citadel Gate & Vanguard');
-                  }
-                }}
-                title="Track Magar Vanguard Troops across Map"
-              >
-                <span>🎖️</span>
-                <span>Troops</span>
-              </button>
-
-              <button
-                className="btn-tool-accent"
-                onClick={() => setIsFullscreen(!isFullscreen)}
-                title="Fullscreen Realm [F]"
-              >
-                ⛶ Fullscreen
-              </button>
-            </div>
-          </div>
-
-          <div style={{ position: 'relative', width: '100%', height: 'calc(100vh - 62px - 35px)' }}>
-            <GameCanvas
-              onSelectObject={handleSelectObject}
-              armyState={armyState}
-              activeTarget={activeTarget}
-              onMissionProgressUpdate={(progress, desc, timerText) => {
-                setMissionProgress(progress);
-                setMissionDesc(desc);
-                if (timerText) setMissionTimerText(timerText);
-              }}
-              onArmyReturnHome={() => {
-                setArmyState('IDLE');
-                setActiveTarget(null);
-                setMissionDesc('Your army is awaiting orders at the citadel gate.');
-                setMissionProgress(0);
-                setMissionTimerText('No active mission');
-              }}
-              onMissionStepComplete={(res) => {
-                if (res.type === 'attack') {
-                  const bountyFood = (res.target.level || 1) * 65;
-                  const bountyIron = (res.target.level || 1) * 35;
-                  setResources((prev) => ({
-                    ...prev,
-                    food: prev.food + bountyFood,
-                    iron: prev.iron + bountyIron,
-                  }));
-                  setArmyHealth((h) => Math.max(30, h - 5));
-                  addToast(
-                    `${res.target.name} eliminated! Dissolved into mountain smoke! Claimed +${bountyFood} Food, +${bountyIron} Iron!`
-                  );
-                  addLog(
-                    'Victory in Battle',
-                    `Vanquished ${res.target.name} (Lv.${res.target.level}). Reached 0 HP and dissolved into 3D smoke vapor. Loot: +${bountyFood} Food, +${bountyIron} Iron.`,
-                    '🏆'
-                  );
-                  setLastCombatChatEvent(
-                    `Vanguard eliminated ${res.target.name} (Lv.${res.target.level})! Reached 0 HP and dissolved into 3D smoke vapor!`
-                  );
-                  setArmyState('RETURNING');
-                  setMissionDesc('Vanguard returning victorious to citadel gate.');
-                } else if (res.type === 'gather') {
-                  const sub = res.target.subtype;
-                  const resKey: keyof Resources =
-                    sub === 'wood'
-                      ? 'wood'
-                      : sub === 'farm'
-                      ? 'food'
-                      : sub === 'gold'
-                      ? 'food'
-                      : sub === 'stonecrystal' || sub === 'stone'
-                      ? 'stone'
-                      : 'iron';
-                  const yieldAmt = res.target.yieldAmount || (res.target.level || 1) * 250;
-                  setResources((prev) => ({
-                    ...prev,
-                    [resKey]: prev[resKey] + yieldAmt,
-                  }));
-                  addCombatFloater(`+${yieldAmt} ${resKey.toUpperCase()}`, '#dfba6e', window.innerWidth / 2, window.innerHeight / 2);
-                  addToast(`Gathered +${yieldAmt} ${resKey.toUpperCase()} from ${res.target.name}!`);
-                  addLog('Gather Complete', `Hauling +${yieldAmt} ${resKey.toUpperCase()} back to kingdom storage.`, '📦');
-                  setLastCombatChatEvent(`Workers gathered +${yieldAmt} ${resKey.toUpperCase()} from ${res.target.name}.`);
-                  setArmyState('RETURNING');
-                  setMissionDesc('Workforce returning with harvested assets.');
-                }
-              }}
-              cameraPan={cameraPan}
-              zoom={zoom}
-              onUpdateCamera={(pan, z) => {
-                setCameraPan(pan);
-                setZoom(z);
-              }}
-              onAddCombatFloater={addCombatFloater}
-              registerObjectsRef={(objs) => setAllObjects(objs)}
-              getCanvasSnapshotRef={(fn) => {
-                snapshotFnRef.current = fn;
-              }}
-              selectedObject={selectedObject}
-              registerDamageHandlerRef={(fn) => {
-                damageMonsterIn3DRef.current = fn;
-              }}
-              onUpdateObjectHp={(objectId, newHp, isDead) => {
-                setSelectedObject((prev) => {
-                  if (prev && prev.id === objectId) {
-                    return { ...prev, health: newHp, isDefeated: isDead };
-                  }
-                  return prev;
-                });
-                setAllObjects((prev) =>
-                  prev.map((obj) => (obj.id === objectId ? { ...obj, health: newHp, isDefeated: isDead } : obj))
-                );
-              }}
-            />
-
-            {/* Floating On-Object HUD */}
-            <ObjectHud
-              selectedObject={selectedObject}
-              screenPos={selectedScreenPos}
-              onAttack={() => {
-                setDispatchMode('attack');
-                setIsDispatchOpen(true);
-              }}
-              onQuickStrike={() => {
-                if (selectedObject && selectedObject.type === 'monster') {
-                  handleQuickStrike(selectedObject);
-                }
-              }}
-              onScout={handleScoutTarget}
-              onMine={() => {
-                setDispatchMode('gather');
-                setIsDispatchOpen(true);
-              }}
-              onRally={() => handleOpenRallyModal(selectedObject)}
-              onGarrison={() => handleGarrisonTower(selectedObject)}
-              onInspect={() => setIsBuildingsOpen(true)}
-            />
-
-            {/* Interactive Minimap */}
-            <Minimap
-              objects={allObjects}
-              armyPos={[-14, 0, 10]}
-              cameraPan={cameraPan}
-              zoom={zoom}
-              onPanTo={(x, z) => setCameraPan({ x, z })}
-              onCenterArmy={() => setCameraPan({ x: 14, z: -10 })}
-              isExpanded={isMinimapExpanded}
-              onToggleExpand={() => setIsMinimapExpanded(!isMinimapExpanded)}
-              isOpen={isMinimapOpen}
-              onToggleOpen={() => setIsMinimapOpen(!isMinimapOpen)}
-            />
-
-            {/* Floating combat floaters */}
-            <div className="combat-floaters">
-              {combatFloaters.map((f) => (
-                <div
-                  key={f.id}
-                  className="combat-floater active"
-                  style={{
-                    color: f.color,
-                    left: `${f.x}px`,
-                    top: `${f.y}px`,
-                  }}
-                >
-                  {f.text}
-                </div>
-              ))}
-            </div>
-          </div>
-
-          <div className="map-legend">
-            <span>
-              <i className="legend-dot friendly"></i> Friendly citadel
-            </span>
-            <span>
-              <i className="legend-dot resource"></i> Resource node
-            </span>
-            <span>
-              <i className="legend-dot monster"></i> Hostile monster
-            </span>
-            <span>
-              <i className="legend-dot army"></i> Magar Vanguard
-            </span>
-            <span className="weather-legend-indicator">☀️ Clear Atmospheric Skies</span>
-            <span className="legend-tip">
-              Click object to select · Drag to pan · Scroll to zoom
-            </span>
-          </div>
-        </section>
-      </main>
-
-      {/* 3D Radial Tactical Troop Dial */}
-      <RadialTroopDial
-        isOpen={isDispatchOpen}
-        onClose={() => setIsDispatchOpen(false)}
-        target={selectedObject}
-        mode={dispatchMode}
-        availableUnits={units}
-        targetScreenPos={selectedScreenPos}
-        onConfirm={handleDispatchConfirm}
-      />
-
-      {/* Scout Report Modal */}
-      <ScoutReportModal
-        isOpen={isScoutReportOpen}
-        onClose={() => setIsScoutReportOpen(false)}
-        target={selectedObject}
-        onDeployAssault={() => {
-          setDispatchMode('attack');
-          setIsDispatchOpen(true);
-        }}
-        onDeployMine={() => {
-          setDispatchMode('gather');
-          setIsDispatchOpen(true);
-        }}
-        onLaunchRally={() => {
-          setIsScoutReportOpen(false);
-          handleOpenRallyModal(selectedObject);
+    <div
+      className="strategy-game-app"
+      style={{
+        position: 'relative',
+        width: '100vw',
+        height: '100dvh',
+        overflow: 'hidden',
+        background: '#0a0e14',
+        fontFamily: "'Inter', sans-serif",
+        userSelect: 'none',
+      }}
+    >
+      {/* 1. Main 3D WebGL Canvas Container */}
+      <div
+        ref={mapContainerRef}
+        id="worldCanvasContainer"
+        style={{
+          position: 'absolute',
+          inset: 0,
+          width: '100%',
+          height: '100%',
+          cursor: 'grab',
+          touchAction: 'none',
         }}
       />
 
-      {/* Alliance War Rally Modal */}
-      <AllianceRallyModal
-        isOpen={isRallyModalOpen}
-        onClose={() => setIsRallyModalOpen(false)}
-        target={rallyTarget}
-        onConfirmRally={handleConfirmRally}
+      {/* 2. 3D Inside Kingdom Merge Courtyard HUD (When in Kingdom View) */}
+      {viewMode === 'kingdom' && (
+        <InsideKingdomView
+          kingdomState={kingdomState}
+          resources={resources}
+          onSpendResources={handleSpendResources}
+          onGrantReward={handleGrantInnerReward}
+          onSelectPlot={(plotId) => worldMapRef.current?.selectInsidePlot(plotId)}
+          onMergeSelected={() => worldMapRef.current?.mergeSelectedInsideBuilding() || false}
+          onAutoMergeAll={() => worldMapRef.current?.autoMergeInsideKingdom() || 0}
+          onConstructBuilding={(cat: MergeBuildingCategory, prefPlotId?: string) =>
+            Boolean(worldMapRef.current?.constructInsideBuilding(cat, prefPlotId))
+          }
+          onUpgradeKeep={() => worldMapRef.current?.upgradeInsideImperialKeep() || false}
+          onShowToast={showToast}
+          onReturnToWorld={handleReturnToWorld}
+        />
+      )}
+
+      {/* 2B. Strategic WorldMap Modal (Shows ONLY Towers, Shrines, Emperor Congress Citadel, Alliance Castles & My Castle) */}
+      <StrategicWorldMapModal
+        isOpen={isStrategicWorldMapOpen}
+        onClose={() => setIsStrategicWorldMapOpen(false)}
+        castles={castles}
+        conqueredPlots={conqueredPlots}
+        cameraInfo={cameraInfo}
+        isStrategicFilterActive={isStrategicFilterActive}
+        onToggleStrategicFilter={handleToggleStrategicFilter}
+        onRelocateCastles={handleRelocateCastles}
+        onPanToLocation={(x, z, label) => {
+          if (viewMode === 'kingdom') {
+            setViewMode('world');
+            worldMapRef.current?.setSceneMode('world');
+          }
+          worldMapRef.current?.panTo(x, z);
+          if (label) {
+            showToast(`🎯 Camera focused on ${label} [${Math.round(x)}, ${Math.round(z)}]`);
+          }
+        }}
+        onEnterMyCastle={handleEnterKingdom}
       />
 
-      {/* Buildings & Blueprints Modal */}
-      <BuildingsModal
-        isOpen={isBuildingsOpen}
-        onClose={() => setIsBuildingsOpen(false)}
-        buildings={buildings}
-        blueprints={blueprints}
+      {/* 3. Strategy Game HUD, Single Castle/World Button, WorldMap Button, Zoom Out 100 & 1x1 Troop Selector Overlay */}
+      <MapNavigationUI
+        cameraInfo={cameraInfo}
+        onPanTo={(x, z) => {
+          if (viewMode === 'kingdom') {
+            setViewMode('world');
+            worldMapRef.current?.setSceneMode('world');
+          }
+          worldMapRef.current?.panTo(x, z);
+        }}
+        onZoomIn={() => worldMapRef.current?.zoomIn()}
+        onZoomOut={() => worldMapRef.current?.zoomOut()}
+        onZoomOut100={() => {
+          if (viewMode === 'kingdom') {
+            setViewMode('world');
+            worldMapRef.current?.setSceneMode('world');
+          }
+          worldMapRef.current?.zoomOutTo100();
+          showToast('🔍 Zoom Out 100: Full Himalayan Realm Strategic Overview');
+        }}
+        onResetHome={() => {
+          if (viewMode === 'kingdom') {
+            worldMapRef.current?.focusInsideKingdom();
+          } else {
+            worldMapRef.current?.resetCamera();
+          }
+        }}
+        onSetZoom={(z) => worldMapRef.current?.setZoom(z)}
+        viewMode={viewMode}
+        onToggleViewMode={handleToggleViewMode}
+        castles={castles}
+        isStrategicFilterActive={isStrategicFilterActive}
+        onToggleStrategicFilter={handleToggleStrategicFilter}
+        onOpenStrategicWorldMap={() => setIsStrategicWorldMapOpen(true)}
+        onRelocateCastles={handleRelocateCastles}
+        selectedEntity={selectedEntity}
+        selectedScreenPos={selectedScreenPos}
+        onExecuteAction={handleExecuteAction}
+        onCloseSelection={() => {
+          setSelectedEntity(null);
+          setSelectedScreenPos(null);
+        }}
+        armyPos={armyPos}
+        armyStatusText={armyStatusText}
+        armyProgressPct={armyProgressPct}
         resources={resources}
-        onUpgradeBuilding={handleUpgradeBuilding}
-        onConstructBlueprint={handleConstructBlueprint}
+        conqueredPlots={conqueredPlots}
+        onGrantReward={handleGrantInnerReward}
+        onShowToast={showToast}
       />
 
-      {/* AI Image Studio Modal */}
-      <ImageStudioModal
-        isOpen={isImageStudioOpen}
-        onClose={() => setIsImageStudioOpen(false)}
-        onSetArmyPortrait={(url) => setArmyPortraitUrl(url)}
-        onAddLog={addLog}
-        onToast={addToast}
-      />
+      {/* 4. Floating Combat Hit Numbers & Clash Sparks Overlay */}
+      {combatFloaters.map((floater) => (
+        <div
+          key={floater.id}
+          style={{
+            position: 'absolute',
+            left: `${floater.x}px`,
+            top: `${floater.y}px`,
+            transform: 'translate(-50%, -100%)',
+            pointerEvents: 'none',
+            zIndex: 75,
+            fontFamily: "'Barlow Condensed', sans-serif",
+            fontWeight: 800,
+            fontSize: '15px',
+            color: floater.color,
+            textShadow: '0 2px 8px rgba(0,0,0,0.9), 0 0 10px rgba(0,0,0,0.8)',
+            letterSpacing: '0.04em',
+            animation: 'combatFloatUp 1.5s cubic-bezier(0.16, 1, 0.3, 1) forwards',
+          }}
+        >
+          {floater.text}
+        </div>
+      ))}
 
-      {/* Veo 3.1 Fast Video Animator Modal */}
-      <VeoModal
-        isOpen={isVeoOpen}
-        onClose={() => setIsVeoOpen(false)}
-        onAddLog={addLog}
-        onToast={addToast}
-        onCaptureCanvas={() => (snapshotFnRef.current ? snapshotFnRef.current() : null)}
-      />
+      {/* 4B. Live Scrolling Bullet Notification Ticker (Battle, Rally, Monster & Conquest Feed) */}
+      {bulletNotifications.length > 0 && (
+        <div
+          style={{
+            position: 'absolute',
+            top: '112px',
+            left: 0,
+            right: 0,
+            height: '86px',
+            overflow: 'hidden',
+            pointerEvents: 'none',
+            zIndex: 70,
+          }}
+        >
+          {bulletNotifications.map((item) => {
+            const accent =
+              item.category === 'conquest'
+                ? '#10b981'
+                : item.category === 'rally'
+                  ? '#facc15'
+                  : item.category === 'attack'
+                    ? '#ef4444'
+                    : '#f97316';
+            const textCol =
+              item.category === 'conquest'
+                ? '#a7f3d0'
+                : item.category === 'rally'
+                  ? '#fef08a'
+                  : '#fecaca';
+            return (
+              <div
+                key={item.id}
+                style={{
+                  position: 'absolute',
+                  top: `${item.lane * 28}px`,
+                  left: 0,
+                  whiteSpace: 'nowrap',
+                  background: 'rgba(10, 16, 28, 0.88)',
+                  borderLeft: `3px solid ${accent}`,
+                  borderTop: '1px solid rgba(255, 255, 255, 0.14)',
+                  borderRight: '1px solid rgba(255, 255, 255, 0.14)',
+                  borderBottom: '1px solid rgba(255, 255, 255, 0.14)',
+                  borderRadius: '4px',
+                  padding: '3px 12px',
+                  fontFamily: "'Barlow Condensed', sans-serif",
+                  fontWeight: 700,
+                  fontSize: '13px',
+                  letterSpacing: '0.03em',
+                  color: textCol,
+                  textShadow: '0 1px 4px rgba(0, 0, 0, 0.95)',
+                  boxShadow: '0 4px 12px rgba(0, 0, 0, 0.55)',
+                  animation: 'bulletGlide 7.1s linear forwards',
+                }}
+              >
+                {item.text}
+              </div>
+            );
+          })}
+        </div>
+      )}
 
-      {/* Floating Tactical Compass Search Radar (Resources & Monsters Lv 1-5) */}
-      <WorldSearchRadar
-        isOpen={isSearchRadarOpen}
-        onToggle={() => setIsSearchRadarOpen(!isSearchRadarOpen)}
-        objects={allObjects}
-        playerBasePos={[-14, 0, 10]}
-        onSelectAndLocate={handleSelectAndLocate}
-        onQuickDispatch={handleQuickDispatchFromRadar}
-      />
+      {/* 5. Floating Toast Notification */}
+      {toastText && (
+        <div
+          style={{
+            position: 'fixed',
+            bottom: '84px',
+            left: '50%',
+            transform: 'translateX(-50%)',
+            background: 'rgba(15, 23, 42, 0.95)',
+            border: '1px solid #dfba6e',
+            color: '#fef08a',
+            padding: '8px 18px',
+            borderRadius: '8px',
+            fontSize: '12px',
+            fontWeight: 600,
+            boxShadow: '0 8px 24px rgba(0,0,0,0.6)',
+            zIndex: 99,
+            pointerEvents: 'none',
+            transition: 'bottom 0.25s ease',
+          }}
+        >
+          {toastText}
+        </div>
+      )}
 
-      {/* Bottom-Left Translucent Dual-Tab World & Alliance Chat Dock */}
-      <TacticalChatDock
-        lastCombatEvent={lastCombatChatEvent}
-        onAddToast={addToast}
-      />
-
-      {/* Toast Notification Container */}
-      <div className="toast" style={{ display: toasts.length > 0 ? 'block' : 'none' }}>
-        {toasts[toasts.length - 1]?.text}
-      </div>
+      {/* CSS Keyframes for Combat Floaters & Scrolling Bullet Ticker */}
+      <style>{`
+        @keyframes combatFloatUp {
+          0% {
+            opacity: 0;
+            transform: translate(-50%, 0) scale(0.8);
+          }
+          20% {
+            opacity: 1;
+            transform: translate(-50%, -18px) scale(1.15);
+          }
+          75% {
+            opacity: 0.9;
+            transform: translate(-50%, -42px) scale(1.0);
+          }
+          100% {
+            opacity: 0;
+            transform: translate(-50%, -64px) scale(0.9);
+          }
+        }
+        @keyframes bulletGlide {
+          0% {
+            transform: translateX(100vw);
+            opacity: 0.95;
+          }
+          8% {
+            opacity: 1;
+          }
+          92% {
+            opacity: 1;
+          }
+          100% {
+            transform: translateX(-110%);
+            opacity: 0;
+          }
+        }
+      `}</style>
     </div>
   );
 };
 
 export default App;
+

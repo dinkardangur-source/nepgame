@@ -1,4 +1,5 @@
-import express, { Request, Response, NextFunction } from 'express';
+import express from 'express';
+import type { Request, Response, NextFunction } from 'express';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { GoogleGenAI, GenerateVideosOperation } from '@google/genai';
@@ -23,10 +24,21 @@ app.use((req: Request, res: Response, next: NextFunction) => {
   next();
 });
 
+function getGenAIClient(): GoogleGenAI | null {
+  const key = process.env.GEMINI_API_KEY;
+  if (!key) return null;
+  if (!ai) {
+    ai = new GoogleGenAI({
+      apiKey: key,
+      httpOptions: { headers: { 'User-Agent': 'aistudio-build' } },
+    });
+  }
+  return ai;
+}
+
 let ai: GoogleGenAI | null = null;
-const apiKey = process.env.GEMINI_API_KEY;
-if (apiKey) {
-  ai = new GoogleGenAI({ apiKey });
+if (process.env.GEMINI_API_KEY) {
+  ai = getGenAIClient();
 } else {
   console.warn('[Himalayan Realms] GEMINI_API_KEY not found in environment.');
 }
@@ -34,12 +46,9 @@ if (apiKey) {
 // Veo Video Generation API
 app.post('/api/generate-video', async (req: Request, res: Response) => {
   try {
-    if (!ai) {
-      if (process.env.GEMINI_API_KEY) {
-        ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-      } else {
-        return res.status(400).json({ error: 'GEMINI_API_KEY is not configured on the server.' });
-      }
+    const client = getGenAIClient();
+    if (!client) {
+      return res.status(400).json({ error: 'GEMINI_API_KEY is not configured on the server.' });
     }
 
     const { imageBase64, mimeType = 'image/jpeg', prompt = '', aspectRatio = '16:9' } = req.body;
@@ -50,7 +59,7 @@ app.post('/api/generate-video', async (req: Request, res: Response) => {
     const validAspectRatio = (aspectRatio === '9:16') ? '9:16' : '16:9';
     const cleanBase64 = imageBase64.replace(/^data:[^;]+;base64,/, '');
 
-    const operation = await ai.models.generateVideos({
+    const operation = await client.models.generateVideos({
       model: 'veo-3.1-fast-generate-preview',
       prompt: prompt || 'Cinematic fantasy realm sequence with subtle environmental motion and natural lighting',
       image: {
@@ -75,7 +84,8 @@ app.post('/api/generate-video', async (req: Request, res: Response) => {
 // Video polling
 app.post('/api/video-status', async (req: Request, res: Response) => {
   try {
-    if (!ai) {
+    const client = getGenAIClient();
+    if (!client) {
       return res.status(400).json({ error: 'Gemini AI not initialized' });
     }
     const { operationName } = req.body;
@@ -84,7 +94,7 @@ app.post('/api/video-status', async (req: Request, res: Response) => {
     }
     const op = new GenerateVideosOperation();
     op.name = operationName;
-    const updated = await ai.operations.getVideosOperation({ operation: op });
+    const updated = await client.operations.getVideosOperation({ operation: op });
     return res.json({ done: !!updated.done, error: updated.error || null });
   } catch (error: any) {
     console.error('[Veo] Error checking status:', error);
@@ -95,7 +105,8 @@ app.post('/api/video-status', async (req: Request, res: Response) => {
 // Video download
 app.post('/api/video-download', async (req: Request, res: Response) => {
   try {
-    if (!ai) {
+    const client = getGenAIClient();
+    if (!client) {
       return res.status(400).json({ error: 'Gemini AI not initialized' });
     }
     const { operationName } = req.body;
@@ -104,7 +115,7 @@ app.post('/api/video-download', async (req: Request, res: Response) => {
     }
     const op = new GenerateVideosOperation();
     op.name = operationName;
-    const updated = await ai.operations.getVideosOperation({ operation: op });
+    const updated = await client.operations.getVideosOperation({ operation: op });
     const videoUri = updated.response?.generatedVideos?.[0]?.video?.uri;
     if (!videoUri) {
       return res.status(404).json({ error: 'Video URI not ready or generation failed' });
@@ -131,12 +142,9 @@ app.post('/api/video-download', async (req: Request, res: Response) => {
 // Image Generation & Editing API using gemini-nano-banana-2.1
 app.post('/api/generate-image', async (req: Request, res: Response) => {
   try {
-    if (!ai) {
-      if (process.env.GEMINI_API_KEY) {
-        ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-      } else {
-        return res.status(400).json({ error: 'GEMINI_API_KEY is not configured on the server.' });
-      }
+    const client = getGenAIClient();
+    if (!client) {
+      return res.status(400).json({ error: 'GEMINI_API_KEY is not configured on the server.' });
     }
 
     const { prompt, imageBase64, mimeType = 'image/jpeg', aspectRatio = '1:1', imageSize = '1K' } = req.body;
@@ -156,7 +164,7 @@ app.post('/api/generate-image', async (req: Request, res: Response) => {
     }
     parts.push({ text: prompt });
 
-    const response = await ai.models.generateContent({
+    const response = await client.models.generateContent({
       model: 'gemini-nano-banana-2.1',
       contents: { parts },
       config: {
@@ -199,15 +207,42 @@ const staticOptions = {
 };
 app.use('/assets', express.static(path.join(__dirname, 'public/assets'), staticOptions));
 app.use('/assets', express.static(path.join(__dirname, 'assets'), staticOptions));
+app.use('/android-apk', express.static(path.join(__dirname, 'android-apk'), {
+  setHeaders: (res: Response, filePath: string) => {
+    if (filePath.endsWith('.apk')) {
+      res.setHeader('Content-Type', 'application/vnd.android.package-archive');
+      res.setHeader('Content-Disposition', `attachment; filename="${path.basename(filePath)}"`);
+    }
+  }
+}));
 
-// In development, mount Vite dev server as middleware
+app.get('/api/health', (_req: Request, res: Response) => {
+  res.json({ status: 'ok' });
+});
+
+// In development, mount Vite dev server as middleware with HMR disabled (avoids port 24678 conflicts)
 if (process.env.NODE_ENV !== 'production') {
-  const { createServer } = await import('vite');
-  const vite = await createServer({
-    server: { middlewareMode: true },
-    appType: 'spa',
+  const viteReady = (async () => {
+    const { createServer } = await import('vite');
+    return createServer({
+      server: {
+        middlewareMode: true,
+        hmr: false,
+        ws: false,
+      },
+      appType: 'spa',
+    });
+  })();
+
+  viteReady.catch((err) => {
+    console.error('[Vite] Failed to initialize middleware:', err);
   });
-  app.use(vite.middlewares);
+
+  app.use((req: Request, res: Response, next: NextFunction) => {
+    viteReady
+      .then((vite) => vite.middlewares(req, res, next))
+      .catch(next);
+  });
 } else {
   // In production, serve built dist files
   app.use(express.static(path.join(__dirname, 'dist'), staticOptions));

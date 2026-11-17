@@ -2,6 +2,12 @@ import React, { useEffect, useRef } from 'react';
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { InteractiveObject, ArmyState } from '../types/game';
+import {
+  createStoneBrickTexture,
+  createWoodPlankTexture,
+  createRoofTileTexture,
+  createIceSpikeTexture,
+} from './proceduralTextures';
 
 interface GameCanvasProps {
   onSelectObject: (obj: InteractiveObject | null, screenPos: { x: number; y: number } | null) => void;
@@ -42,6 +48,7 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
   const sceneRef = useRef<THREE.Scene | null>(null);
   const cameraRef = useRef<THREE.OrthographicCamera | null>(null);
+  const sunLightRef = useRef<THREE.DirectionalLight | null>(null);
   const worldRef = useRef<THREE.Group | null>(null);
   const armyGroupRef = useRef<THREE.Group | null>(null);
   const selectionRingRef = useRef<THREE.Mesh | null>(null);
@@ -79,7 +86,7 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
   const totalMarchDistanceRef = useRef<number>(0);
   const groundRef = useRef<THREE.Mesh | null>(null);
 
-  // Live refs to dynamic props so requestAnimationFrame animate() never has stale closures!
+  // Live refs to dynamic props so requestAnimationFrame animate() never has stale closures
   const armyStateRef = useRef<ArmyState>(armyState);
   armyStateRef.current = armyState;
 
@@ -95,9 +102,9 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
   const onArmyReturnHomeRef = useRef(onArmyReturnHome);
   onArmyReturnHomeRef.current = onArmyReturnHome;
 
-  // Internal army state (Assembly Square in front of Citadel Gate)
-  const armyPosRef = useRef<THREE.Vector3>(new THREE.Vector3(-10.5, 0.02, 13.5));
-  const armyHomeRef = useRef<THREE.Vector3>(new THREE.Vector3(-10.5, 0.02, 13.5));
+  // Citadel Gate garrison position: [390, 0.02, 414] inside Gorkha Citadel at [400, 0, 400]
+  const armyPosRef = useRef<THREE.Vector3>(new THREE.Vector3(390, 0.02, 414));
+  const armyHomeRef = useRef<THREE.Vector3>(new THREE.Vector3(390, 0.02, 414));
   const armyTargetPosRef = useRef<THREE.Vector3 | null>(null);
 
   // Drag & interaction state
@@ -109,41 +116,44 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
     const container = containerRef.current;
     if (!container) return;
 
-    // Scene
+    // 1. Scene & Atmospheric Fog
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color('#8ba3a1');
-    scene.fog = new THREE.Fog('#8ba3a1', 60, 220);
+    scene.background = new THREE.Color('#789490');
+    scene.fog = new THREE.Fog('#789490', 90, 420);
     sceneRef.current = scene;
 
-    // Camera
+    // 2. Camera Setup (Orthographic Isometric)
     const width = container.clientWidth;
     const height = container.clientHeight;
     const aspect = width / height;
-    const frustumSize = 52;
+    const frustumSize = 65;
     const camera = new THREE.OrthographicCamera(
       (-frustumSize * aspect) / 2,
       (frustumSize * aspect) / 2,
       frustumSize / 2,
       -frustumSize / 2,
       0.1,
-      500
+      1200
     );
-    camera.position.set(44, 52, 44);
+    // Camera is positioned at isometric angle looking down at origin
+    camera.position.set(55, 68, 55);
     camera.lookAt(0, 0, 0);
     cameraRef.current = camera;
 
-    // Renderer
+    // 3. Renderer with ACES Tone Mapping & PCF Shadows
     const renderer = new THREE.WebGLRenderer({
       antialias: true,
       alpha: false,
       preserveDrawingBuffer: true,
+      powerPreference: 'high-performance',
     });
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.setSize(width, height);
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 1.15;
+    renderer.toneMappingExposure = 1.18;
     container.appendChild(renderer.domElement);
     rendererRef.current = renderer;
 
@@ -154,28 +164,30 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
       return renderer.domElement.toDataURL('image/jpeg', 0.95);
     });
 
-    // Lights
-    const hemiLight = new THREE.HemisphereLight(0xdceeff, 0x354536, 2.0);
+    // 4. Lighting Rig
+    const hemiLight = new THREE.HemisphereLight(0xe0f2fe, 0x22382c, 2.2);
     scene.add(hemiLight);
 
-    const sun = new THREE.DirectionalLight(0xffe2bd, 3.0);
-    sun.position.set(-35, 65, 30);
+    const sun = new THREE.DirectionalLight(0xffecd2, 3.2);
+    sun.position.set(-60, 110, 50);
     sun.castShadow = true;
     sun.shadow.mapSize.set(2048, 2048);
-    sun.shadow.camera.left = -95;
-    sun.shadow.camera.right = 95;
-    sun.shadow.camera.top = 95;
-    sun.shadow.camera.bottom = -95;
+    sun.shadow.camera.left = -110;
+    sun.shadow.camera.right = 110;
+    sun.shadow.camera.top = 110;
+    sun.shadow.camera.bottom = -110;
     sun.shadow.camera.near = 1;
-    sun.shadow.camera.far = 280;
+    sun.shadow.camera.far = 400;
+    sun.shadow.bias = -0.0005;
     scene.add(sun);
+    sunLightRef.current = sun;
 
     // World root group
     const world = new THREE.Group();
     scene.add(world);
     worldRef.current = world;
 
-    // GLTF cache and loader
+    // GLTF cache and optional loader for 3D props
     const gltfLoader = new GLTFLoader();
     const glbCache = new Map<string, Promise<THREE.Group>>();
 
@@ -208,13 +220,45 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
           parentGroup.add(model);
         })
         .catch(() => {
-          // Graceful procedural fallback remains active
+          // Graceful procedural fallback is active
         });
     };
 
-    // Helper materials
-    const mat = (color: string, roughness = 0.8, metalness = 0.1) =>
+    // Procedural PBR Textures
+    const stoneBrickTex = createStoneBrickTexture();
+    const woodPlankTex = createWoodPlankTexture();
+    const roofTileTex = createRoofTileTexture();
+    const iceSpikeTex = createIceSpikeTexture();
+
+    // Helper material creators
+    const mat = (color: string | number, roughness = 0.8, metalness = 0.1) =>
       new THREE.MeshStandardMaterial({ color, roughness, metalness });
+
+    const stonePbrMat = new THREE.MeshStandardMaterial({
+      map: stoneBrickTex,
+      roughness: 0.82,
+      metalness: 0.15,
+    });
+
+    const woodPbrMat = new THREE.MeshStandardMaterial({
+      map: woodPlankTex,
+      roughness: 0.75,
+      metalness: 0.08,
+    });
+
+    const roofPbrMat = new THREE.MeshStandardMaterial({
+      map: roofTileTex,
+      roughness: 0.65,
+      metalness: 0.12,
+    });
+
+    const icePbrMat = new THREE.MeshStandardMaterial({
+      map: iceSpikeTex,
+      roughness: 0.2,
+      metalness: 0.4,
+      transparent: true,
+      opacity: 0.9,
+    });
 
     const addMesh = (
       parent: THREE.Group,
@@ -233,140 +277,168 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
       return mesh;
     };
 
-    // 1. Enhanced Terrain Ground & Biomes
-    const groundGeo = new THREE.PlaneGeometry(175, 145, 1, 1);
-    const groundMat = mat('#4e6d46', 0.9, 0.05); // Rich alpine meadow green
+    // ==========================================
+    // 1. EXPANDED 800x800 TERRAIN & MULTI-BIOMES
+    // ==========================================
+    // Base alpine meadow plane: 800x800 centered at (400, 0, 400)
+    const groundGeo = new THREE.PlaneGeometry(800, 800, 32, 32);
+    const groundMat = mat('#3e5a38', 0.92, 0.05);
     const ground = new THREE.Mesh(groundGeo, groundMat);
     ground.rotation.x = -Math.PI / 2;
+    ground.position.set(400, 0, 400);
     ground.receiveShadow = true;
     world.add(ground);
     groundRef.current = ground;
 
-    // Northern Glacial Snow Tundra Plateau
-    const snowTundraGeo = new THREE.PlaneGeometry(175, 55, 1, 1);
-    const snowTundraMat = new THREE.MeshStandardMaterial({
-      color: 0xf1f5f9,
-      roughness: 0.85,
-      metalness: 0.1,
+    // Northern Himshikhar Glaciers Snow Plateau [160, 0, 660]
+    const snowPlateauGeo = new THREE.PlaneGeometry(420, 280, 16, 16);
+    const snowPlateauMat = new THREE.MeshStandardMaterial({
+      color: 0xecf4f8,
+      roughness: 0.78,
+      metalness: 0.12,
     });
-    const snowTundra = new THREE.Mesh(snowTundraGeo, snowTundraMat);
-    snowTundra.rotation.x = -Math.PI / 2;
-    snowTundra.position.set(0, 0.01, -45);
-    snowTundra.receiveShadow = true;
-    world.add(snowTundra);
+    const snowPlateau = new THREE.Mesh(snowPlateauGeo, snowPlateauMat);
+    snowPlateau.rotation.x = -Math.PI / 2;
+    snowPlateau.position.set(210, 0.015, 660);
+    snowPlateau.receiveShadow = true;
+    world.add(snowPlateau);
 
-    // Western Iron Ridge Rocky Slopes
-    const rockSlopeGeo = new THREE.PlaneGeometry(55, 75, 1, 1);
-    const rockSlopeMat = mat('#38424b', 0.85, 0.2);
-    const rockSlope = new THREE.Mesh(rockSlopeGeo, rockSlopeMat);
-    rockSlope.rotation.x = -Math.PI / 2;
-    rockSlope.position.set(-52, 0.008, 0);
-    rockSlope.receiveShadow = true;
-    world.add(rockSlope);
+    // Western Ironcrest Bastions Rocky Slopes [680, 0, 180]
+    const ironcrestGeo = new THREE.PlaneGeometry(280, 440, 16, 16);
+    const ironcrestMat = mat('#2d3748', 0.88, 0.25);
+    const ironcrestPlateau = new THREE.Mesh(ironcrestGeo, ironcrestMat);
+    ironcrestPlateau.rotation.x = -Math.PI / 2;
+    ironcrestPlateau.position.set(660, 0.015, 220);
+    ironcrestPlateau.receiveShadow = true;
+    world.add(ironcrestPlateau);
 
-    // Southern Terraced Loam
-    const terraceLoamGeo = new THREE.PlaneGeometry(65, 45, 1, 1);
-    const terraceLoamMat = mat('#63482d', 0.92, 0.05);
-    const terraceLoam = new THREE.Mesh(terraceLoamGeo, terraceLoamMat);
-    terraceLoam.rotation.x = -Math.PI / 2;
-    terraceLoam.position.set(22, 0.008, 26);
-    terraceLoam.receiveShadow = true;
-    world.add(terraceLoam);
+    // Southern Verdant Deepwood [640, 0, 640]
+    const deepwoodGeo = new THREE.PlaneGeometry(320, 320, 16, 16);
+    const deepwoodMat = mat('#1e3a29', 0.95, 0.04);
+    const deepwoodPlateau = new THREE.Mesh(deepwoodGeo, deepwoodMat);
+    deepwoodPlateau.rotation.x = -Math.PI / 2;
+    deepwoodPlateau.position.set(640, 0.015, 640);
+    deepwoodPlateau.receiveShadow = true;
+    world.add(deepwoodPlateau);
 
-    // Enhanced Crystalline River with Specular Water & Foam
-    const riverGeo = new THREE.PlaneGeometry(160, 8.5, 1, 1);
+    // Karnali River Basin with Crystalline Water running diagonally through realm
+    const riverGeo = new THREE.PlaneGeometry(880, 26, 1, 1);
     const riverMat = new THREE.MeshStandardMaterial({
       color: 0x38bdf8,
-      roughness: 0.15,
+      roughness: 0.12,
       metalness: 0.45,
       transparent: true,
       opacity: 0.88,
     });
     const river = new THREE.Mesh(riverGeo, riverMat);
     river.rotation.x = -Math.PI / 2;
-    river.rotation.z = 0.22;
-    river.position.set(2, 0.02, -6);
+    river.rotation.z = 0.58;
+    river.position.set(380, 0.02, 400);
     river.receiveShadow = true;
     world.add(river);
 
     // River Foam Edges
     const foamMat = new THREE.MeshStandardMaterial({
       color: 0xe0f2fe,
-      roughness: 0.4,
+      roughness: 0.35,
       transparent: true,
       opacity: 0.65,
     });
-    const foam1 = new THREE.Mesh(new THREE.PlaneGeometry(160, 0.8), foamMat);
+    const foam1 = new THREE.Mesh(new THREE.PlaneGeometry(880, 2.2), foamMat);
     foam1.rotation.x = -Math.PI / 2;
-    foam1.rotation.z = 0.22;
-    foam1.position.set(2 + Math.cos(0.22 + Math.PI / 2) * 3.8, 0.022, -6 + Math.sin(0.22 + Math.PI / 2) * 3.8);
+    foam1.rotation.z = 0.58;
+    foam1.position.set(380 + Math.cos(0.58 + Math.PI / 2) * 12.2, 0.022, 400 + Math.sin(0.58 + Math.PI / 2) * 12.2);
     world.add(foam1);
 
-    const foam2 = new THREE.Mesh(new THREE.PlaneGeometry(160, 0.8), foamMat);
+    const foam2 = new THREE.Mesh(new THREE.PlaneGeometry(880, 2.2), foamMat);
     foam2.rotation.x = -Math.PI / 2;
-    foam2.rotation.z = 0.22;
-    foam2.position.set(2 - Math.cos(0.22 + Math.PI / 2) * 3.8, 0.022, -6 - Math.sin(0.22 + Math.PI / 2) * 3.8);
+    foam2.rotation.z = 0.58;
+    foam2.position.set(380 - Math.cos(0.58 + Math.PI / 2) * 12.2, 0.022, 400 - Math.sin(0.58 + Math.PI / 2) * 12.2);
     world.add(foam2);
 
-    // Scattered Himalayan Wildflowers & Grass Tufts
-    const flowerBlueMat = mat('#38bdf8', 0.7, 0.1); // Himalayan gentians
-    const flowerGoldMat = mat('#fbbf24', 0.7, 0.1); // Alpine poppies
-    const flowerWhiteMat = mat('#ffffff', 0.8, 0.05); // Edelweiss
-    for (let i = 0; i < 90; i++) {
-      const fx = (Math.random() - 0.5) * 130;
-      const fz = (Math.random() - 0.5) * 100;
-      if (Math.hypot(fx - (-14), fz - 10) < 10) continue;
-      if (Math.abs(fz - 0.22 * fx + 6) < 5.5) continue; // avoid river
+    // Ancient Arched Stone Bridge at River Crossing [290, 0, 290]
+    const bridgeGroup = new THREE.Group();
+    bridgeGroup.position.set(290, 0, 290);
+    bridgeGroup.rotation.y = 0.58 + Math.PI / 2;
+    addMesh(bridgeGroup, new THREE.BoxGeometry(10, 1.2, 32), stonePbrMat, 0, 1.2, 0);
+    addMesh(bridgeGroup, new THREE.BoxGeometry(0.8, 1.0, 32), stonePbrMat, -4.6, 2.2, 0);
+    addMesh(bridgeGroup, new THREE.BoxGeometry(0.8, 1.0, 32), stonePbrMat, 4.6, 2.2, 0);
+    // Arch pier supports
+    addMesh(bridgeGroup, new THREE.CylinderGeometry(2.4, 2.8, 2.5, 8), stonePbrMat, 0, 0.8, -8);
+    addMesh(bridgeGroup, new THREE.CylinderGeometry(2.4, 2.8, 2.5, 8), stonePbrMat, 0, 0.8, 8);
+    world.add(bridgeGroup);
 
-      const fColor = i % 3 === 0 ? flowerBlueMat : i % 3 === 1 ? flowerGoldMat : flowerWhiteMat;
-      const flower = addMesh(
-        world,
-        new THREE.DodecahedronGeometry(0.12 + Math.random() * 0.08, 0),
-        fColor,
-        fx,
-        0.1,
-        fz,
-        false
-      );
-      flower.rotation.y = Math.random() * Math.PI;
-    }
-
-    // Perimeter Himalayan peaks
-    for (let i = 0; i < 44; i++) {
-      const angle = (i / 44) * Math.PI * 2;
-      const dist = 72 + Math.random() * 12;
-      const px = Math.cos(angle) * (dist * 1.15);
-      const pz = Math.sin(angle) * dist;
+    // Perimeter Himalayan peaks bounding the 800x800 world
+    for (let i = 0; i < 96; i++) {
+      const angle = (i / 96) * Math.PI * 2;
+      const radius = 390 + (Math.sin(i * 3) * 15);
+      const px = 400 + Math.cos(angle) * radius;
+      const pz = 400 + Math.sin(angle) * radius;
+      const peakHeight = 22 + Math.random() * 18;
+      const peakRadius = 12 + Math.random() * 8;
       const peak = addMesh(
         world,
-        new THREE.ConeGeometry(4.5 + Math.random() * 3.2, 8 + Math.random() * 6, 7),
-        mat('#64756e'),
+        new THREE.ConeGeometry(peakRadius, peakHeight, 7),
+        mat('#526159', 0.9, 0.1),
         px,
-        3.5,
+        peakHeight / 2,
         pz,
         false
       );
       peak.rotation.y = Math.random() * Math.PI;
-      if (i % 2 === 0 || pz < -20) {
-        addMesh(world, new THREE.ConeGeometry(2.4, 3.8, 7), mat('#f0f3ed'), px, 6.2, pz + 0.15, false);
-      }
+
+      // Snow Cap on peak
+      addMesh(
+        world,
+        new THREE.ConeGeometry(peakRadius * 0.45, peakHeight * 0.35, 7),
+        mat('#f8fafc', 0.75, 0.1),
+        px,
+        peakHeight * 0.82,
+        pz,
+        false
+      );
     }
 
-    // Pine Trees
-    for (let i = 0; i < 110; i++) {
-      const tx = (Math.random() - 0.5) * 140;
-      const tz = (Math.random() - 0.5) * 110;
-      if (Math.hypot(tx - (-14), tz - 10) < 12) continue; // avoid citadel
-      if (Math.abs(tz - 0.22 * tx + 6) < 6) continue; // avoid river
+    // Dense Himalayan pine forests across the Deepwood and Valley
+    for (let i = 0; i < 180; i++) {
+      const tx = 100 + Math.random() * 620;
+      const tz = 100 + Math.random() * 620;
+
+      // Avoid citadel and river path
+      if (Math.hypot(tx - 400, tz - 400) < 45) continue;
+      if (Math.abs((tz - 400) - Math.tan(0.58) * (tx - 380)) < 24) continue;
 
       const tree = new THREE.Group();
       tree.position.set(tx, 0, tz);
-      const trunk = addMesh(tree, new THREE.CylinderGeometry(0.12, 0.18, 1.2, 6), mat('#5c432d'), 0, 0.6, 0);
+      const trunkH = 2.4 + Math.random() * 1.2;
+      addMesh(tree, new THREE.CylinderGeometry(0.3, 0.45, trunkH, 6), woodPbrMat, 0, trunkH / 2, 0);
+
+      const isDeepwood = tx > 500 && tz > 500;
+      const leafColor = isDeepwood ? '#164e33' : '#22543d';
       for (let c = 0; c < 3; c++) {
-        addMesh(tree, new THREE.ConeGeometry(0.9 - c * 0.15, 1.2, 6), mat('#2f593b'), 0, 1.4 + c * 0.6, 0);
+        addMesh(
+          tree,
+          new THREE.ConeGeometry(2.2 - c * 0.4, 2.8, 6),
+          mat(leafColor, 0.85, 0.05),
+          0,
+          trunkH + 1.2 + c * 1.5,
+          0
+        );
       }
-      applyGLB(tree, 'himalayan_pine.glb', 0.85);
+      applyGLB(tree, 'himalayan_pine.glb', 1.1);
       world.add(tree);
+    }
+
+    // Glacial Ice Spires in Northern Glaciers
+    for (let i = 0; i < 30; i++) {
+      const ix = 60 + Math.random() * 260;
+      const iz = 560 + Math.random() * 200;
+      const iceGroup = new THREE.Group();
+      iceGroup.position.set(ix, 0, iz);
+      addMesh(iceGroup, new THREE.ConeGeometry(1.4 + Math.random() * 1.2, 5 + Math.random() * 4, 5), icePbrMat, 0, 3, 0);
+      addMesh(iceGroup, new THREE.ConeGeometry(0.8, 3.2, 5), icePbrMat, 1.2, 1.6, 0.5);
+      iceGroup.rotation.y = Math.random() * Math.PI;
+      world.add(iceGroup);
     }
 
     // Object registration & data storage
@@ -380,12 +452,12 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
       group.userData.gameData = data;
       data.mesh = group;
 
-      // Add generous invisible hit cylinder collider so clicking on or near any monster/building/resource reliably hits
-      const hitRadius = data.type === 'monster' ? 3.0 : data.type === 'resource' ? 2.8 : 3.4;
-      const hitGeo = new THREE.CylinderGeometry(hitRadius, hitRadius, 4.5, 8);
+      // Generous invisible hit cylinder collider for tactile clicking
+      const hitRadius = data.type === 'monster' ? 4.2 : data.type === 'resource' ? 3.6 : 5.0;
+      const hitGeo = new THREE.CylinderGeometry(hitRadius, hitRadius, 6.0, 8);
       const hitMat = new THREE.MeshBasicMaterial({ visible: false, transparent: true, opacity: 0 });
       const hitCollider = new THREE.Mesh(hitGeo, hitMat);
-      hitCollider.position.set(0, 2.25, 0);
+      hitCollider.position.set(0, 3.0, 0);
       hitCollider.userData.gameData = data;
       group.add(hitCollider);
 
@@ -394,113 +466,451 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
       world.add(group);
     };
 
-    // 2. Kingdom Structures
-    // Citadel Keep
-    const castleGroup = new THREE.Group();
-    castleGroup.position.set(-14, 0, 10);
-    addMesh(castleGroup, new THREE.BoxGeometry(4.2, 2.5, 4.2), mat('#6c7675'), 0, 1.25, 0);
-    addMesh(castleGroup, new THREE.ConeGeometry(3.2, 1.8, 4), mat('#8c3228'), 0, 3.3, 0).rotation.y =
-      Math.PI / 4;
-    applyGLB(castleGroup, 'gorkha_hillfort.glb', 1.2);
-    registerInteractive(castleGroup, {
+    // ==========================================
+    // 2. REALISTIC KINGDOM STRUCTURES (0-800)
+    // ==========================================
+
+    // Gorkha Citadel Royal Keep [400, 0, 400]
+    const citadelGroup = new THREE.Group();
+    citadelGroup.position.set(400, 0, 400);
+
+    // Multi-tier stone fortress plinth
+    addMesh(citadelGroup, new THREE.BoxGeometry(16, 4.5, 16), stonePbrMat, 0, 2.25, 0);
+    // Cantilevered wooden balcony tier
+    addMesh(citadelGroup, new THREE.BoxGeometry(13, 3.5, 13), woodPbrMat, 0, 6.25, 0);
+    // Lower Pagoda Roof
+    const roof1 = addMesh(citadelGroup, new THREE.ConeGeometry(12, 3.0, 4), roofPbrMat, 0, 9.5, 0);
+    roof1.rotation.y = Math.PI / 4;
+    // Upper royal sanctum tier
+    addMesh(citadelGroup, new THREE.BoxGeometry(8, 3.2, 8), woodPbrMat, 0, 11.5, 0);
+    // Upper Pagoda Roof
+    const roof2 = addMesh(citadelGroup, new THREE.ConeGeometry(8, 2.6, 4), roofPbrMat, 0, 14.0, 0);
+    roof2.rotation.y = Math.PI / 4;
+    // Gilded brass rooftop pinnacle (Gajur)
+    const gajurMat = new THREE.MeshStandardMaterial({
+      color: 0xffd700,
+      metalness: 0.92,
+      roughness: 0.18,
+      emissive: 0xffaa00,
+      emissiveIntensity: 0.6,
+    });
+    addMesh(citadelGroup, new THREE.CylinderGeometry(0.15, 0.45, 2.8, 8), gajurMat, 0, 16.5, 0);
+    addMesh(citadelGroup, new THREE.SphereGeometry(0.55, 12, 12), gajurMat, 0, 17.8, 0);
+
+    // Fortified Gatehouse Arch & Courtyard [Citadel Gate at 390, 0, 414]
+    const gateHouse = new THREE.Group();
+    gateHouse.position.set(-10, 0, 14);
+    addMesh(gateHouse, new THREE.BoxGeometry(3.5, 5.0, 2.5), stonePbrMat, -3.2, 2.5, 0);
+    addMesh(gateHouse, new THREE.BoxGeometry(3.5, 5.0, 2.5), stonePbrMat, 3.2, 2.5, 0);
+    addMesh(gateHouse, new THREE.BoxGeometry(10, 1.8, 2.5), stonePbrMat, 0, 5.9, 0);
+    addMesh(gateHouse, new THREE.ConeGeometry(6.2, 2.0, 4), roofPbrMat, 0, 7.8, 0).rotation.y = Math.PI / 4;
+    citadelGroup.add(gateHouse);
+
+    applyGLB(citadelGroup, 'gorkha_hillfort.glb', 1.4);
+    registerInteractive(citadelGroup, {
       id: 'citadel-keep',
       name: 'Gorkha Citadel Keep',
       type: 'citadel',
       subtype: 'citadel',
       level: 18,
-      position: [-14, 0, 10],
-      health: 1500,
-      maxHealth: 1500,
-      description: 'Supreme fortified royal keep, army garrison, and central treasury.',
+      position: [400, 0, 400],
+      health: 3500,
+      maxHealth: 3500,
+      description: 'Supreme fortified royal palace keep, army garrison gatehouse, and central realm treasury.',
     });
 
-    // Barracks
+    // Royal Vanguard Barracks [424, 0, 386]
     const barracksGroup = new THREE.Group();
-    barracksGroup.position.set(-7, 0, 13);
-    addMesh(barracksGroup, new THREE.BoxGeometry(2.8, 1.6, 2.0), mat('#606b6a'), 0, 0.8, 0);
-    addMesh(barracksGroup, new THREE.ConeGeometry(2.0, 1.0, 4), mat('#85352c'), 0, 2.0, 0).rotation.y =
-      Math.PI / 4;
+    barracksGroup.position.set(424, 0, 386);
+    addMesh(barracksGroup, new THREE.BoxGeometry(7.2, 3.2, 5.2), stonePbrMat, 0, 1.6, 0);
+    addMesh(barracksGroup, new THREE.BoxGeometry(6.4, 2.2, 4.4), woodPbrMat, 0, 4.3, 0);
+    const bRoof = addMesh(barracksGroup, new THREE.ConeGeometry(5.8, 2.4, 4), roofPbrMat, 0, 6.5, 0);
+    bRoof.rotation.y = Math.PI / 4;
+    // Training dummies in yard
+    addMesh(barracksGroup, new THREE.CylinderGeometry(0.12, 0.12, 1.8, 6), woodPbrMat, 4.5, 0.9, 2.2);
+    addMesh(barracksGroup, new THREE.BoxGeometry(0.8, 0.5, 0.2), mat('#854d0e'), 4.5, 1.5, 2.2);
     registerInteractive(barracksGroup, {
       id: 'bldg-barracks',
       name: 'Royal Vanguard Barracks',
       type: 'fort',
       subtype: 'citadel',
-      level: 8,
-      position: [-7, 0, 13],
-      health: 750,
-      description: 'Martial quarters where Magar Infantry, Cavalry, and Archers train.',
+      level: 14,
+      position: [424, 0, 386],
+      health: 1800,
+      maxHealth: 1800,
+      description: 'Martial training grounds where Magar Infantry, Cavalry, and Archers undergo discipline drills.',
     });
 
-    // Stables
+    // Highland Cavalry Stables [432, 0, 428]
     const stablesGroup = new THREE.Group();
-    stablesGroup.position.set(-2, 0, 18);
-    addMesh(stablesGroup, new THREE.BoxGeometry(3.2, 1.4, 1.6), mat('#5e4835'), 0, 0.7, 0);
+    stablesGroup.position.set(432, 0, 428);
+    addMesh(stablesGroup, new THREE.BoxGeometry(8.5, 2.8, 5.0), woodPbrMat, 0, 1.4, 0);
+    const sRoof = addMesh(stablesGroup, new THREE.ConeGeometry(6.8, 2.0, 4), roofPbrMat, 0, 3.6, 0);
+    sRoof.rotation.y = Math.PI / 4;
+    // Fenced paddock
+    addMesh(stablesGroup, new THREE.BoxGeometry(6.0, 0.8, 0.15), woodPbrMat, 5.5, 0.4, 0);
     registerInteractive(stablesGroup, {
       id: 'bldg-stables',
       name: 'Highland Cavalry Stables',
       type: 'fort',
       subtype: 'citadel',
-      level: 7,
-      position: [-2, 0, 18],
-      health: 680,
-      description: 'Breeding paddocks for mountain steeds.',
+      level: 11,
+      position: [432, 0, 428],
+      health: 1450,
+      maxHealth: 1450,
+      description: 'Breeding paddocks for fearless mountain warhorses.',
     });
 
-    // Watchtower North (Tower Building)
-    const towerNorth = new THREE.Group();
-    towerNorth.position.set(-4, 0, -32);
-    addMesh(towerNorth, new THREE.CylinderGeometry(0.7, 0.95, 4.0, 8), mat('#6c7675'), 0, 2.0, 0);
-    addMesh(towerNorth, new THREE.ConeGeometry(1.25, 0.9, 8), mat('#8c3228'), 0, 4.4, 0);
-    // Archer battlement walkway
-    addMesh(towerNorth, new THREE.CylinderGeometry(1.15, 1.15, 0.35, 8), mat('#4b5563'), 0, 3.8, 0);
-    registerInteractive(towerNorth, {
-      id: 'bldg-tower-north',
-      name: 'North Glacier Watchtower',
+    // Royal Khukuri Forge [372, 0, 388]
+    const forgeGroup = new THREE.Group();
+    forgeGroup.position.set(372, 0, 388);
+    addMesh(forgeGroup, new THREE.BoxGeometry(6.0, 3.0, 5.5), stonePbrMat, 0, 1.5, 0);
+    addMesh(forgeGroup, new THREE.CylinderGeometry(0.8, 1.2, 4.5, 8), stonePbrMat, 2.2, 3.5, -1.8);
+    // Glowing hearth
+    const hearthMat = new THREE.MeshStandardMaterial({
+      color: 0xff4500,
+      emissive: 0xff3300,
+      emissiveIntensity: 3.5,
+    });
+    addMesh(forgeGroup, new THREE.BoxGeometry(1.6, 1.2, 1.2), hearthMat, 0, 0.8, 2.4);
+    // Anvil
+    addMesh(forgeGroup, new THREE.BoxGeometry(0.8, 0.9, 1.4), mat('#334155', 0.4, 0.8), -2.0, 0.45, 1.8);
+    registerInteractive(forgeGroup, {
+      id: 'bldg-forge',
+      name: 'Royal Khukuri Forge',
       type: 'fort',
-      subtype: 'tower',
+      subtype: 'citadel',
       level: 12,
-      position: [-4, 0, -32],
-      health: 900,
-      maxHealth: 900,
-      description: 'High sentinel stone tower watching northern glacial passes. Defended by heavy archer garrisons.',
+      position: [372, 0, 388],
+      health: 1600,
+      maxHealth: 1600,
+      description: 'Master weaponsmiths forging tempered khukuri blades and mountain armor plates.',
     });
 
-    // Ironcrest Sentinel Tower (Tower Building)
+    // North Glacier Watchtower [160, 0, 660]
+    const towerGlacier = new THREE.Group();
+    towerGlacier.position.set(160, 0, 660);
+    addMesh(towerGlacier, new THREE.CylinderGeometry(1.8, 2.5, 9.0, 8), stonePbrMat, 0, 4.5, 0);
+    addMesh(towerGlacier, new THREE.CylinderGeometry(3.2, 3.2, 1.2, 8), stonePbrMat, 0, 9.5, 0);
+    addMesh(towerGlacier, new THREE.ConeGeometry(3.5, 2.5, 8), roofPbrMat, 0, 11.2, 0);
+    // Signal Ice Crystal Beacon at top
+    addMesh(towerGlacier, new THREE.OctahedronGeometry(0.8, 0), icePbrMat, 0, 12.8, 0);
+    registerInteractive(towerGlacier, {
+      id: 'bldg-tower-glacier',
+      name: 'North Glacier Watchtower',
+      type: 'tower',
+      subtype: 'tower',
+      level: 16,
+      position: [160, 0, 660],
+      health: 2200,
+      maxHealth: 2200,
+      description: 'High sentinel stone bastion guarding northern glacial crevasses from yeti incursions.',
+    });
+
+    // Western Ironcrest Sentinel Bastion [680, 0, 180]
     const towerIroncrest = new THREE.Group();
-    towerIroncrest.position.set(-36, 0, -8);
-    // Multi-tier stone bastion
-    addMesh(towerIroncrest, new THREE.BoxGeometry(3.6, 2.2, 3.6), mat('#475569'), 0, 1.1, 0);
-    addMesh(towerIroncrest, new THREE.CylinderGeometry(1.2, 1.5, 4.2, 8), mat('#64748b'), 0, 3.2, 0);
-    addMesh(towerIroncrest, new THREE.CylinderGeometry(1.6, 1.6, 0.45, 8), mat('#334155'), 0, 5.1, 0);
-    addMesh(towerIroncrest, new THREE.ConeGeometry(1.5, 1.4, 8), mat('#991b1b'), 0, 6.0, 0);
-    // Signal brazier at top
-    const brazierMat = new THREE.MeshStandardMaterial({ color: 0xff7700, emissive: 0xff4400, emissiveIntensity: 2.5 });
-    addMesh(towerIroncrest, new THREE.SphereGeometry(0.35, 8, 8), brazierMat, 0, 6.7, 0);
+    towerIroncrest.position.set(680, 0, 180);
+    addMesh(towerIroncrest, new THREE.BoxGeometry(9.0, 4.5, 9.0), stonePbrMat, 0, 2.25, 0);
+    addMesh(towerIroncrest, new THREE.CylinderGeometry(2.4, 2.9, 8.5, 8), stonePbrMat, 0, 8.5, 0);
+    addMesh(towerIroncrest, new THREE.CylinderGeometry(3.6, 3.6, 1.4, 8), stonePbrMat, 0, 13.2, 0);
+    addMesh(towerIroncrest, new THREE.ConeGeometry(3.8, 2.8, 8), roofPbrMat, 0, 15.2, 0);
+    // Fire brazier
+    const brazierMat = new THREE.MeshStandardMaterial({
+      color: 0xffaa00,
+      emissive: 0xff5500,
+      emissiveIntensity: 3.5,
+    });
+    addMesh(towerIroncrest, new THREE.SphereGeometry(0.7, 8, 8), brazierMat, 0, 16.8, 0);
     registerInteractive(towerIroncrest, {
       id: 'bldg-tower-ironcrest',
-      name: 'Ironcrest Sentinel Tower',
-      type: 'fort',
+      name: 'Ironcrest Sentinel Bastion',
+      type: 'tower',
       subtype: 'tower',
-      level: 15,
-      position: [-36, 0, -8],
-      health: 1200,
-      maxHealth: 1200,
-      description: 'Formidable western frontier tower building commanding mineral passes. High-priority Alliance Rally objective.',
+      level: 17,
+      position: [680, 0, 180],
+      health: 2800,
+      maxHealth: 2800,
+      description: 'Impenetrable mountain stronghold securing rich western iron veins. Major Alliance Rally hub.',
     });
 
-    // 3. Resource Nodes (Levels 1 - 5 for Wood, Farm, Gold, Stone Crystal)
+    // Forgotten Monastic Stupa Sanctuary [380, 0, 700]
+    const stupaGroup = new THREE.Group();
+    stupaGroup.position.set(380, 0, 700);
+    // Stepped plinth
+    addMesh(stupaGroup, new THREE.BoxGeometry(11, 1.2, 11), stonePbrMat, 0, 0.6, 0);
+    addMesh(stupaGroup, new THREE.BoxGeometry(9, 1.0, 9), stonePbrMat, 0, 1.7, 0);
+    // White hemispherical dome (Anda)
+    const domeMat = mat('#f8fafc', 0.6, 0.1);
+    addMesh(stupaGroup, new THREE.SphereGeometry(3.8, 16, 12, 0, Math.PI * 2, 0, Math.PI / 2), domeMat, 0, 2.2, 0);
+    // Harmika cube
+    addMesh(stupaGroup, new THREE.BoxGeometry(2.2, 1.6, 2.2), gajurMat, 0, 6.5, 0);
+    // 13-tier spire
+    addMesh(stupaGroup, new THREE.ConeGeometry(1.6, 4.2, 12), gajurMat, 0, 9.2, 0);
+    // Sacred jewel umbrella
+    addMesh(stupaGroup, new THREE.CylinderGeometry(0.2, 1.4, 0.4, 12), gajurMat, 0, 11.5, 0);
+    registerInteractive(stupaGroup, {
+      id: 'bldg-sanctuary',
+      name: 'Forgotten Monastic Sanctuary',
+      type: 'fort',
+      subtype: 'citadel',
+      level: 19,
+      position: [380, 0, 700],
+      health: 3200,
+      maxHealth: 3200,
+      description: 'Sacred mountain chorten stupa emanating divine spiritual protection across the realm.',
+    });
+
+    // Karnali River Trading Post [180, 0, 220]
+    const riverPost = new THREE.Group();
+    riverPost.position.set(180, 0, 220);
+    addMesh(riverPost, new THREE.BoxGeometry(7.0, 2.8, 5.0), woodPbrMat, 0, 1.4, 0);
+    const rPostRoof = addMesh(riverPost, new THREE.ConeGeometry(5.2, 1.8, 4), roofPbrMat, 0, 3.4, 0);
+    rPostRoof.rotation.y = Math.PI / 4;
+    // Wooden pier into water
+    addMesh(riverPost, new THREE.BoxGeometry(3.2, 0.4, 8.0), woodPbrMat, 0, 0.2, 5.5);
+    registerInteractive(riverPost, {
+      id: 'bldg-river-post',
+      name: 'Karnali River Outpost',
+      type: 'fort',
+      subtype: 'citadel',
+      level: 10,
+      position: [180, 0, 220],
+      health: 1500,
+      maxHealth: 1500,
+      description: 'Fertile river trading post facilitating commerce and troop ferry crossings.',
+    });
+
+    // ==========================================
+    // 3. REALISTIC RPG MONSTERS (Levels 5 - 15)
+    // ==========================================
+
+    // Ancient Frost Yeti King (Lv. 15 Boss) [130, 0, 710]
+    const yetiKing = new THREE.Group();
+    yetiKing.position.set(130, 0, 710);
+    const yetiFurMat = mat('#e2e8f0', 0.9, 0.05);
+    // Torso & chest
+    addMesh(yetiKing, new THREE.BoxGeometry(2.8, 3.2, 2.2), yetiFurMat, 0, 2.5, 0);
+    // Massive arms
+    addMesh(yetiKing, new THREE.BoxGeometry(0.9, 2.8, 1.0), yetiFurMat, -1.9, 2.2, 0);
+    addMesh(yetiKing, new THREE.BoxGeometry(0.9, 2.8, 1.0), yetiFurMat, 1.9, 2.2, 0);
+    // Head with fierce ice horns
+    addMesh(yetiKing, new THREE.BoxGeometry(1.6, 1.5, 1.5), yetiFurMat, 0, 4.6, 0.2);
+    addMesh(yetiKing, new THREE.ConeGeometry(0.35, 1.8, 6), icePbrMat, -0.9, 5.6, 0.2).rotation.z = -0.4;
+    addMesh(yetiKing, new THREE.ConeGeometry(0.35, 1.8, 6), icePbrMat, 0.9, 5.6, 0.2).rotation.z = 0.4;
+    // Crystalline dorsal ice spikes
+    for (let s = 0; s < 4; s++) {
+      const spike = addMesh(yetiKing, new THREE.ConeGeometry(0.3, 1.6 - s * 0.25, 5), icePbrMat, 0, 3.6 - s * 0.7, -1.2);
+      spike.rotation.x = -0.6;
+    }
+    // Glowing cyan eyes
+    const eyeCyanMat = new THREE.MeshBasicMaterial({ color: 0x38bdf8 });
+    addMesh(yetiKing, new THREE.SphereGeometry(0.12, 6, 6), eyeCyanMat, -0.4, 4.6, 1.0);
+    addMesh(yetiKing, new THREE.SphereGeometry(0.12, 6, 6), eyeCyanMat, 0.4, 4.6, 1.0);
+    monsterGroupsMapRef.current.set('m_yeti_king', yetiKing);
+    registerInteractive(yetiKing, {
+      id: 'm_yeti_king',
+      name: 'Ancient Frost Yeti King',
+      type: 'monster',
+      subtype: 'dragon',
+      level: 15,
+      position: [130, 0, 710],
+      health: 850,
+      maxHealth: 850,
+      description: 'Colossal glacial monarch wielding crushing permafrost strength. High-priority Alliance Rally target!',
+    });
+
+    // Iron Ridge Rock Drake / Wyrm (Lv. 12) [720, 0, 140]
+    const rockDrake = new THREE.Group();
+    rockDrake.position.set(720, 0, 140);
+    const drakeRockMat = mat('#334155', 0.85, 0.3);
+    const magmaGlowMat = new THREE.MeshStandardMaterial({
+      color: 0xff4500,
+      emissive: 0xff3300,
+      emissiveIntensity: 2.8,
+    });
+    // Segmented rocky body
+    addMesh(rockDrake, new THREE.BoxGeometry(2.4, 1.8, 4.2), drakeRockMat, 0, 1.2, 0);
+    addMesh(rockDrake, new THREE.BoxGeometry(1.6, 1.4, 2.2), drakeRockMat, 0, 1.8, 2.6);
+    // Horned dragon skull
+    addMesh(rockDrake, new THREE.ConeGeometry(0.4, 1.6, 5), drakeRockMat, -0.7, 2.6, 2.8).rotation.x = -0.5;
+    addMesh(rockDrake, new THREE.ConeGeometry(0.4, 1.6, 5), drakeRockMat, 0.7, 2.6, 2.8).rotation.x = -0.5;
+    // Glowing magma vents on spine
+    addMesh(rockDrake, new THREE.SphereGeometry(0.35, 8, 8), magmaGlowMat, 0, 2.2, 0);
+    addMesh(rockDrake, new THREE.SphereGeometry(0.3, 8, 8), magmaGlowMat, 0, 2.1, -1.4);
+    // Spiked tail
+    addMesh(rockDrake, new THREE.ConeGeometry(0.6, 2.6, 6), drakeRockMat, 0, 0.8, -3.2).rotation.x = -1.3;
+    monsterGroupsMapRef.current.set('m_rock_drake', rockDrake);
+    registerInteractive(rockDrake, {
+      id: 'm_rock_drake',
+      name: 'Iron Ridge Rock Drake',
+      type: 'monster',
+      subtype: 'dragon',
+      level: 12,
+      position: [720, 0, 140],
+      health: 620,
+      maxHealth: 620,
+      description: 'Armored wyrm burrowing through iron veins. Its scales deflect ordinary arrows.',
+    });
+
+    // Shadow Dire Wolf Alpha (Lv. 8) [670, 0, 600]
+    const wolfAlpha = new THREE.Group();
+    wolfAlpha.position.set(670, 0, 600);
+    const wolfMat = mat('#1e293b', 0.9, 0.1);
+    addMesh(wolfAlpha, new THREE.BoxGeometry(1.4, 1.2, 2.8), wolfMat, 0, 1.0, 0);
+    addMesh(wolfAlpha, new THREE.BoxGeometry(0.9, 0.9, 1.2), wolfMat, 0, 1.6, 1.6);
+    addMesh(wolfAlpha, new THREE.ConeGeometry(0.2, 0.6, 4), wolfMat, -0.4, 2.2, 1.6);
+    addMesh(wolfAlpha, new THREE.ConeGeometry(0.2, 0.6, 4), wolfMat, 0.4, 2.2, 1.6);
+    // Glowing amber eyes
+    const eyeAmber = new THREE.MeshBasicMaterial({ color: 0xf59e0b });
+    addMesh(wolfAlpha, new THREE.SphereGeometry(0.08, 6, 6), eyeAmber, -0.28, 1.7, 2.2);
+    addMesh(wolfAlpha, new THREE.SphereGeometry(0.08, 6, 6), eyeAmber, 0.28, 1.7, 2.2);
+    monsterGroupsMapRef.current.set('m_wolf_alpha', wolfAlpha);
+    registerInteractive(wolfAlpha, {
+      id: 'm_wolf_alpha',
+      name: 'Shadow Dire Wolf Alpha',
+      type: 'monster',
+      subtype: 'dragon',
+      level: 8,
+      position: [670, 0, 600],
+      health: 380,
+      maxHealth: 380,
+      description: 'Lethal predator leading deepwood packs. Swift and vicious in forest ambush.',
+    });
+
+    // Forest Treant Ancient (Lv. 9) [590, 0, 680]
+    const treantAncient = new THREE.Group();
+    treantAncient.position.set(590, 0, 680);
+    addMesh(treantAncient, new THREE.CylinderGeometry(0.8, 1.4, 4.5, 7), woodPbrMat, 0, 2.25, 0);
+    // Tree canopy antlers
+    addMesh(treantAncient, new THREE.DodecahedronGeometry(1.8, 1), mat('#14532d'), 0, 5.0, 0);
+    addMesh(treantAncient, new THREE.DodecahedronGeometry(1.2, 1), mat('#166534'), -1.5, 4.2, 0);
+    addMesh(treantAncient, new THREE.DodecahedronGeometry(1.2, 1), mat('#166534'), 1.5, 4.2, 0);
+    // Glowing emerald heartwood
+    const emeraldMat = new THREE.MeshStandardMaterial({
+      color: 0x22c55e,
+      emissive: 0x16a34a,
+      emissiveIntensity: 3.2,
+    });
+    addMesh(treantAncient, new THREE.SphereGeometry(0.4, 8, 8), emeraldMat, 0, 2.5, 0.8);
+    monsterGroupsMapRef.current.set('m_treant', treantAncient);
+    registerInteractive(treantAncient, {
+      id: 'm_treant',
+      name: 'Forest Treant Ancient',
+      type: 'monster',
+      subtype: 'dragon',
+      level: 9,
+      position: [590, 0, 680],
+      health: 460,
+      maxHealth: 460,
+      description: 'Sentient pine titan defending old-growth sacred mandala timber.',
+    });
+
+    // River Siren Serpent (Lv. 10) [150, 0, 260]
+    const riverSiren = new THREE.Group();
+    riverSiren.position.set(150, 0, 260);
+    const sirenMat = new THREE.MeshStandardMaterial({
+      color: 0x0284c7,
+      roughness: 0.2,
+      metalness: 0.6,
+      transparent: true,
+      opacity: 0.85,
+    });
+    addMesh(riverSiren, new THREE.TorusGeometry(1.6, 0.5, 8, 24, Math.PI * 1.5), sirenMat, 0, 0.8, 0).rotation.x = Math.PI / 2;
+    addMesh(riverSiren, new THREE.CylinderGeometry(0.35, 0.5, 3.0, 8), sirenMat, 1.2, 2.2, 0);
+    addMesh(riverSiren, new THREE.SphereGeometry(0.6, 10, 10), sirenMat, 1.2, 3.9, 0);
+    monsterGroupsMapRef.current.set('m_siren', riverSiren);
+    registerInteractive(riverSiren, {
+      id: 'm_siren',
+      name: 'Karnali River Serpent',
+      type: 'monster',
+      subtype: 'dragon',
+      level: 10,
+      position: [150, 0, 260],
+      health: 500,
+      maxHealth: 500,
+      description: 'Aquatic beast terrorizing river cargo barges. Summons whirlpool torrents.',
+    });
+
+    // Himalayan Snow Leopard (Lv. 5) [200, 0, 600]
+    const snowLeopard = new THREE.Group();
+    snowLeopard.position.set(200, 0, 600);
+    const leopardMat = mat('#cbd5e1', 0.85, 0.1);
+    addMesh(snowLeopard, new THREE.BoxGeometry(1.1, 0.9, 2.2), leopardMat, 0, 0.7, 0);
+    addMesh(snowLeopard, new THREE.BoxGeometry(0.7, 0.7, 0.9), leopardMat, 0, 1.2, 1.2);
+    addMesh(snowLeopard, new THREE.CylinderGeometry(0.1, 0.1, 1.8, 5), leopardMat, 0, 0.9, -1.8).rotation.x = -0.7;
+    monsterGroupsMapRef.current.set('m_snow_leopard', snowLeopard);
+    registerInteractive(snowLeopard, {
+      id: 'm_snow_leopard',
+      name: 'Himalayan Snow Leopard',
+      type: 'monster',
+      subtype: 'dragon',
+      level: 5,
+      position: [200, 0, 600],
+      health: 240,
+      maxHealth: 240,
+      description: 'Elusive mountain feline stalking prey along high-altitude glacial moraines.',
+    });
+
+    // Mountain Bandit Warlord Camp (Lv. 6) [310, 0, 280]
+    const banditCamp = new THREE.Group();
+    banditCamp.position.set(310, 0, 280);
+    addMesh(banditCamp, new THREE.ConeGeometry(2.5, 2.4, 6), mat('#78350f'), 0, 1.2, 0);
+    addMesh(banditCamp, new THREE.BoxGeometry(4.0, 0.8, 0.3), woodPbrMat, 0, 0.4, 2.5);
+    // Skulls & banners
+    addMesh(banditCamp, new THREE.CylinderGeometry(0.06, 0.06, 3.2, 6), woodPbrMat, 2.2, 1.6, 2.5);
+    monsterGroupsMapRef.current.set('m_bandit', banditCamp);
+    registerInteractive(banditCamp, {
+      id: 'm_bandit',
+      name: 'Mountain Bandit Warlord Camp',
+      type: 'monster',
+      subtype: 'dragon',
+      level: 6,
+      position: [310, 0, 280],
+      health: 310,
+      maxHealth: 310,
+      description: 'Rogue marauders preying on trade caravans passing through central valley gorges.',
+    });
+
+    // Corrupted Stone Colossus (Lv. 14) [350, 0, 740]
+    const stoneColossus = new THREE.Group();
+    stoneColossus.position.set(350, 0, 740);
+    addMesh(stoneColossus, new THREE.BoxGeometry(2.6, 3.8, 2.2), stonePbrMat, 0, 2.4, 0);
+    addMesh(stoneColossus, new THREE.BoxGeometry(1.4, 1.4, 1.4), stonePbrMat, 0, 4.8, 0);
+    // Glowing runic core
+    const runicMat = new THREE.MeshStandardMaterial({
+      color: 0xa855f7,
+      emissive: 0x9333ea,
+      emissiveIntensity: 3.5,
+    });
+    addMesh(stoneColossus, new THREE.SphereGeometry(0.5, 8, 8), runicMat, 0, 2.8, 1.0);
+    monsterGroupsMapRef.current.set('m_colossus', stoneColossus);
+    registerInteractive(stoneColossus, {
+      id: 'm_colossus',
+      name: 'Corrupted Stone Colossus',
+      type: 'monster',
+      subtype: 'dragon',
+      level: 14,
+      position: [350, 0, 740],
+      health: 780,
+      maxHealth: 780,
+      description: 'Ancient animated monastic guardian reawakened by dark energy.',
+    });
+
+    // ==========================================
+    // 4. RESOURCE NODES (Levels 1 - 5 across 0-800)
+    // ==========================================
     const resourceNodesData: InteractiveObject[] = [
-      // Wood (Levels 1 - 5)
+      // Wood (Lv 1 - 5)
       {
         id: 'r_w1',
         name: 'Pine Sapling Grove',
         type: 'resource',
         subtype: 'wood',
         level: 1,
-        position: [-10, 0, 18],
-        yieldAmount: 250,
+        position: [435, 0, 435],
+        yieldAmount: 350,
         resourceType: 'wood',
-        description: 'Young Himalayan pine saplings easy for novices to harvest.',
+        description: 'Young Himalayan pine saplings easily harvested by novice recruits.',
       },
       {
         id: 'r_w2',
@@ -508,10 +918,10 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
         type: 'resource',
         subtype: 'wood',
         level: 2,
-        position: [4, 0, 14],
-        yieldAmount: 450,
+        position: [465, 0, 360],
+        yieldAmount: 650,
         resourceType: 'wood',
-        description: 'Sturdy mountain pines yielding reliable structural timber.',
+        description: 'Sturdy mountain pine trees yielding durable fortress structural timber.',
       },
       {
         id: 'r_w3',
@@ -519,828 +929,316 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
         type: 'resource',
         subtype: 'wood',
         level: 3,
-        position: [-22, 0, -14],
-        yieldAmount: 750,
+        position: [610, 0, 610],
+        yieldAmount: 1100,
         resourceType: 'wood',
-        description: 'Old-growth Himalayan timber prime for citadel architecture.',
+        description: 'Old-growth towering pine trunks prized for longbows and ballistas.',
       },
       {
         id: 'r_w4',
-        name: 'Old-Growth Cedar Woods',
+        name: 'Ironwood Grove',
         type: 'resource',
         subtype: 'wood',
         level: 4,
-        position: [20, 0, -16],
-        yieldAmount: 1100,
+        position: [660, 0, 670],
+        yieldAmount: 1800,
         resourceType: 'wood',
-        description: 'Dense fragrant cedar logs prized for royal gate fortifications.',
+        description: 'Dense dark ironwood capable of resisting siege ram fire and axe blows.',
       },
       {
         id: 'r_w5',
-        name: 'Royal Ironwood Bastion',
+        name: 'Mythic Bodhi Timber',
         type: 'resource',
         subtype: 'wood',
         level: 5,
-        position: [28, 0, 24],
-        yieldAmount: 1600,
+        position: [570, 0, 720],
+        yieldAmount: 2800,
         resourceType: 'wood',
-        description: 'Legendary iron-hard Himalayan timbers forged in mountain blizzards.',
+        description: 'Sacred luminescent highland timber imbued with protective spiritual wards.',
       },
 
-      // Farm (Levels 1 - 5)
+      // Farm / Food (Lv 1 - 5)
       {
         id: 'r_f1',
-        name: 'Terrace Barley Field',
+        name: 'Highland Barley Field',
         type: 'resource',
         subtype: 'farm',
         level: 1,
-        position: [-6, 0, 14],
-        yieldAmount: 300,
-        resourceType: 'food',
-        description: 'Sunny hillside terrace producing golden highland barley.',
+        position: [370, 0, 440],
+        yieldAmount: 400,
+        resourceType: 'farm',
+        description: 'Hardy mountain barley ripening on sunlit capital hillocks.',
       },
       {
         id: 'r_f2',
-        name: 'Highland Wheat Meadow',
+        name: 'Terraced Rice Paddies',
         type: 'resource',
         subtype: 'farm',
         level: 2,
-        position: [8, 0, 8],
-        yieldAmount: 500,
-        resourceType: 'food',
-        description: 'Irrigated terrace meadow teeming with nutritious grain stalks.',
+        position: [220, 0, 250],
+        yieldAmount: 750,
+        resourceType: 'farm',
+        description: 'Cascading irrigated green terraces fed by glacial river runoff.',
       },
       {
         id: 'r_f3',
-        name: 'Mountain Granary Terrace',
+        name: 'Royal Granary Orchard',
         type: 'resource',
         subtype: 'farm',
         level: 3,
-        position: [-18, 0, 22],
-        yieldAmount: 800,
-        resourceType: 'food',
-        description: 'Stacked hillside terraces supplying citadel garrisons with food.',
+        position: [440, 0, 340],
+        yieldAmount: 1250,
+        resourceType: 'farm',
+        description: 'Abundant fruit orchards and millet plots supporting standing armies.',
       },
       {
         id: 'r_f4',
-        name: 'Golden Paddy Basin',
+        name: 'Golden Grain Silos',
         type: 'resource',
         subtype: 'farm',
         level: 4,
-        position: [16, 0, 26],
-        yieldAmount: 1250,
-        resourceType: 'food',
-        description: 'Vast fertile basin producing abundant highland rice and grains.',
+        position: [270, 0, 210],
+        yieldAmount: 1950,
+        resourceType: 'farm',
+        description: 'High-yield grain reserves feeding the kingdom through harsh mountain winters.',
       },
       {
         id: 'r_f5',
-        name: 'Imperial Harvest Domain',
+        name: 'Celestial Harvest Valley',
         type: 'resource',
         subtype: 'farm',
         level: 5,
-        position: [-28, 0, 28],
-        yieldAmount: 1800,
-        resourceType: 'food',
-        description: 'Crown agricultural terraces providing banquet feasts for the kingdom.',
+        position: [190, 0, 170],
+        yieldAmount: 3100,
+        resourceType: 'farm',
+        description: 'Blessed fertile river basin capable of nourishing multiple alliance battalions.',
       },
 
-      // Gold (Levels 1 - 5)
+      // Stone / Crystal (Lv 1 - 5)
       {
-        id: 'r_g1',
-        name: 'Glimmering Gold Silt',
+        id: 'r_s1',
+        name: 'Slate Outcrop',
         type: 'resource',
-        subtype: 'gold',
+        subtype: 'stone',
         level: 1,
-        position: [-8, 0, -4],
-        yieldAmount: 180,
-        resourceType: 'food',
-        description: 'Alluvial gold flecks shining in shallow mountain creek waters.',
-      },
-      {
-        id: 'r_g2',
-        name: 'Stream Gold Deposits',
-        type: 'resource',
-        subtype: 'gold',
-        level: 2,
-        position: [12, 0, -6],
+        position: [445, 0, 385],
         yieldAmount: 320,
-        resourceType: 'food',
-        description: 'Porous riverbed pebbles rich in raw golden nuggets.',
+        resourceType: 'stone',
+        description: 'Exposed mountain slate ideal for simple roof shingles and fort pavers.',
       },
       {
-        id: 'r_g3',
-        name: 'Gilded Quartz Quarry',
+        id: 'r_s2',
+        name: 'Granite Quarry',
         type: 'resource',
-        subtype: 'gold',
+        subtype: 'stone',
+        level: 2,
+        position: [510, 0, 410],
+        yieldAmount: 680,
+        resourceType: 'stone',
+        description: 'Dense granite rock blocks extracted for keep ramparts and watchtowers.',
+      },
+      {
+        id: 'r_s3',
+        name: 'Marble Crag',
+        type: 'resource',
+        subtype: 'stone',
         level: 3,
-        position: [-30, 0, -10],
-        yieldAmount: 550,
-        resourceType: 'food',
-        description: 'Exposed quartz veins gleaming with rich veins of yellow gold.',
+        position: [630, 0, 230],
+        yieldAmount: 1200,
+        resourceType: 'stone',
+        description: 'Veined crystalline marble used for temple sanctuaries and royal monuments.',
       },
       {
-        id: 'r_g4',
-        name: 'Deep Auric Lode',
+        id: 'r_s4',
+        name: 'Obsidian Monolith',
         type: 'resource',
-        subtype: 'gold',
+        subtype: 'stone',
         level: 4,
-        position: [24, 0, 22],
-        yieldAmount: 900,
-        resourceType: 'food',
-        description: 'Deep subterranean gold vein for royal treasury and temple gilding.',
+        position: [710, 0, 250],
+        yieldAmount: 1850,
+        resourceType: 'stone',
+        description: 'Glass-smooth volcanic obsidian forming razor-sharp defensive spikes.',
       },
       {
-        id: 'r_g5',
-        name: 'Sacred Sun-Gold Cavern',
+        id: 'r_s5',
+        name: 'Starfall Crystal Spire',
         type: 'resource',
-        subtype: 'gold',
+        subtype: 'stonecrystal',
         level: 5,
-        position: [-36, 0, -26],
-        yieldAmount: 1500,
-        resourceType: 'food',
-        description: 'Ancient cavern glowing with pure auric crystals and priceless ore.',
+        position: [360, 0, 680],
+        yieldAmount: 3000,
+        resourceType: 'stonecrystal',
+        description: 'Pulsing arcane crystal formation holding concentrated elemental earth energy.',
       },
 
-      // Stone Crystal (Levels 1 - 5)
+      // Iron / Gold Mines (Lv 1 - 5)
       {
-        id: 'r_c1',
-        name: 'Slate Crystal Shards',
+        id: 'r_i1',
+        name: 'Shallow Iron Vein',
         type: 'resource',
-        subtype: 'stonecrystal',
+        subtype: 'iron',
         level: 1,
-        position: [-18, 0, 2],
-        yieldAmount: 260,
-        resourceType: 'stone',
-        description: 'Brittle crystal clusters embedded in dark slate stone.',
+        position: [360, 0, 370],
+        yieldAmount: 300,
+        resourceType: 'iron',
+        description: 'Surface deposits of iron ore suitable for forging basic spears and nails.',
       },
       {
-        id: 'r_c2',
-        name: 'Amethyst Geode Quarry',
+        id: 'r_i2',
+        name: 'Deep Copper Lode',
         type: 'resource',
-        subtype: 'stonecrystal',
+        subtype: 'iron',
         level: 2,
-        position: [16, 0, 4],
-        yieldAmount: 480,
-        resourceType: 'stone',
-        description: 'Open pit quarry sparkling with purple and cyan quartz geodes.',
+        position: [490, 0, 460],
+        yieldAmount: 620,
+        resourceType: 'iron',
+        description: 'Rich reddish copper vein powering metallurgy and brass armaments.',
       },
       {
-        id: 'r_c3',
-        name: 'Prismatic Granite Cavern',
+        id: 'r_i3',
+        name: 'Royal Iron Mine',
         type: 'resource',
-        subtype: 'stonecrystal',
+        subtype: 'iron',
         level: 3,
-        position: [-14, 0, -20],
-        yieldAmount: 780,
-        resourceType: 'stone',
-        description: 'Granite cavern encrusted with prismatic gemstone formations.',
-      },
-      {
-        id: 'r_c4',
-        name: 'Azure Crystal Bastion',
-        type: 'resource',
-        subtype: 'stonecrystal',
-        level: 4,
-        position: [26, 0, -10],
+        position: [650, 0, 200],
         yieldAmount: 1150,
-        resourceType: 'stone',
-        description: 'Luminous cyan crystal pillars radiating mountain earth energy.',
+        resourceType: 'iron',
+        description: 'Established underground shaft yielding high-grade war iron for khukuris.',
       },
       {
-        id: 'r_c5',
-        name: 'Royal Arcane Crystal Spire',
+        id: 'r_i4',
+        name: 'Highland Gold Crevasse',
         type: 'resource',
-        subtype: 'stonecrystal',
-        level: 5,
-        position: [-42, 0, 12],
+        subtype: 'gold',
+        level: 4,
+        position: [700, 0, 160],
         yieldAmount: 1750,
-        resourceType: 'stone',
-        description: 'Colossal glowing crystal cluster used for castle wardstones.',
+        resourceType: 'gold',
+        description: 'Glittering aurum veins extracted from high mountain crevices for the treasury.',
+      },
+      {
+        id: 'r_i5',
+        name: 'Mithril Core Chamber',
+        type: 'resource',
+        subtype: 'iron',
+        level: 5,
+        position: [750, 0, 190],
+        yieldAmount: 2900,
+        resourceType: 'iron',
+        description: 'Legendary luminescent silver-blue ore lighter than silk and stronger than steel.',
       },
     ];
 
-    resourceNodesData.forEach((resData) => {
-      const rg = new THREE.Group();
-      rg.position.set(resData.position[0], 0, resData.position[2]);
+    resourceNodesData.forEach((rData) => {
+      const rGroup = new THREE.Group();
+      rGroup.position.set(rData.position[0], 0, rData.position[2]);
 
-      if (resData.subtype === 'wood') {
-        // Wood Lumber Grove
-        const trunkMat = mat('#5d422e');
-        const leafMat = mat('#285c3b');
-        addMesh(rg, new THREE.CylinderGeometry(0.2, 0.3, 1.8, 7), trunkMat, 0, 0.9, 0);
-        for (let i = 0; i < 3; i++) {
-          addMesh(rg, new THREE.ConeGeometry(0.95 - i * 0.16, 1.3, 7), leafMat, 0, 1.6 + i * 0.55, 0);
+      const sub = rData.subtype;
+      if (sub === 'wood') {
+        const trunkGeo = new THREE.CylinderGeometry(0.35, 0.55, 2.4, 7);
+        addMesh(rGroup, trunkGeo, woodPbrMat, 0, 1.2, 0);
+        addMesh(rGroup, new THREE.ConeGeometry(2.4, 3.2, 7), mat('#1b4332', 0.85, 0.05), 0, 3.6, 0);
+        addMesh(rGroup, new THREE.ConeGeometry(1.8, 2.4, 7), mat('#2d6a4f', 0.85, 0.05), 0, 5.2, 0);
+      } else if (sub === 'farm') {
+        // Terraced field plots with golden harvest stalks
+        addMesh(rGroup, new THREE.BoxGeometry(4.8, 0.5, 4.8), mat('#5c4028', 0.95, 0.02), 0, 0.25, 0);
+        addMesh(rGroup, new THREE.BoxGeometry(4.2, 0.4, 4.2), mat('#eab308', 0.8, 0.1), 0, 0.6, 0);
+        for (let s = 0; s < 5; s++) {
+          addMesh(rGroup, new THREE.ConeGeometry(0.35, 1.2, 5), mat('#ca8a04'), (s - 2) * 0.8, 1.1, 0);
         }
-        // Small timber logs on ground
-        addMesh(rg, new THREE.CylinderGeometry(0.12, 0.12, 0.9, 6), trunkMat, 0.6, 0.1, 0.4).rotation.z = Math.PI / 2;
-        addMesh(rg, new THREE.CylinderGeometry(0.12, 0.12, 0.8, 6), trunkMat, 0.5, 0.22, 0.45).rotation.z = Math.PI / 2;
-      } else if (resData.subtype === 'farm') {
-        // Farm terrace with soil base, fence and wheat sheaves
-        const soilMat = mat('#78522c');
-        const wheatMat = mat('#eab308', 0.8, 0.1);
-        const fenceMat = mat('#523824');
-
-        // Soil plot
-        addMesh(rg, new THREE.BoxGeometry(2.4, 0.16, 2.2), soilMat, 0, 0.08, 0);
-
-        // Wheat stalks / Haystacks
-        addMesh(rg, new THREE.CylinderGeometry(0.35, 0.55, 0.9, 8), wheatMat, -0.4, 0.55, -0.3);
-        addMesh(rg, new THREE.CylinderGeometry(0.3, 0.45, 0.8, 8), wheatMat, 0.5, 0.5, 0.3);
-        addMesh(rg, new THREE.ConeGeometry(0.4, 0.5, 8), wheatMat, -0.4, 1.15, -0.3);
-        addMesh(rg, new THREE.ConeGeometry(0.35, 0.45, 8), wheatMat, 0.5, 1.05, 0.3);
-
-        // Fence posts
-        for (let i = -1; i <= 1; i += 2) {
-          addMesh(rg, new THREE.CylinderGeometry(0.04, 0.04, 0.5, 5), fenceMat, i * 1.05, 0.3, -0.9);
-          addMesh(rg, new THREE.CylinderGeometry(0.04, 0.04, 0.5, 5), fenceMat, i * 1.05, 0.3, 0.9);
-        }
-      } else if (resData.subtype === 'gold') {
-        // Gold Vein cluster with golden facets
-        const rockMat = mat('#52575c', 0.7, 0.2);
-        const goldMat = new THREE.MeshStandardMaterial({
-          color: 0xf59e0b,
-          roughness: 0.22,
-          metalness: 0.88,
-          emissive: 0xd97706,
-          emissiveIntensity: 0.2,
-        });
-
-        // Rock base
-        addMesh(rg, new THREE.DodecahedronGeometry(0.7, 0), rockMat, 0, 0.45, 0);
-        // Gold nuggets
-        for (let i = 0; i < 4; i++) {
-          const goldNugget = new THREE.Mesh(new THREE.OctahedronGeometry(0.35 + i * 0.06), goldMat);
-          goldNugget.position.set((i - 1.5) * 0.38, 0.6 + (i % 2) * 0.2, (Math.random() - 0.5) * 0.5);
-          goldNugget.rotation.set(i * 0.4, i * 0.7, 0);
-          rg.add(goldNugget);
-        }
+      } else if (sub === 'stone' || sub === 'stonecrystal') {
+        const stoneColor = sub === 'stonecrystal' ? 0x06b6d4 : 0x71717a;
+        const mainStone = addMesh(
+          rGroup,
+          new THREE.DodecahedronGeometry(1.8, 1),
+          sub === 'stonecrystal' ? icePbrMat : stonePbrMat,
+          0,
+          1.4,
+          0
+        );
+        mainStone.scale.set(1.2, 1.6, 1.0);
+        addMesh(rGroup, new THREE.DodecahedronGeometry(1.0, 0), mat(stoneColor), 1.4, 0.8, 0.6);
+        addMesh(rGroup, new THREE.DodecahedronGeometry(0.9, 0), mat(stoneColor), -1.2, 0.7, -0.5);
       } else {
-        // Stone Crystal Prismatic cluster (cyan and amethyst crystals)
-        const slateMat = mat('#334155', 0.8, 0.1);
-        const crystalCyanMat = new THREE.MeshStandardMaterial({
-          color: 0x38bdf8,
-          roughness: 0.15,
-          metalness: 0.3,
-          emissive: 0x0284c7,
-          emissiveIntensity: 0.55,
-          transparent: true,
-          opacity: 0.92,
+        // Iron / Gold mines
+        const isGold = sub === 'gold';
+        const oreMat = new THREE.MeshStandardMaterial({
+          color: isGold ? 0xf59e0b : 0x475569,
+          metalness: isGold ? 0.9 : 0.75,
+          roughness: isGold ? 0.25 : 0.4,
         });
-        const crystalPurpleMat = new THREE.MeshStandardMaterial({
-          color: 0xc084fc,
-          roughness: 0.15,
-          metalness: 0.3,
-          emissive: 0x7e22ce,
-          emissiveIntensity: 0.55,
-          transparent: true,
-          opacity: 0.92,
-        });
-
-        // Rock base
-        addMesh(rg, new THREE.DodecahedronGeometry(0.75, 0), slateMat, 0, 0.4, 0);
-
-        // Prismatic crystal spires
-        for (let i = 0; i < 5; i++) {
-          const cGeo = new THREE.ConeGeometry(0.18 + (i % 2) * 0.08, 0.9 + i * 0.15, 5);
-          const cMat = i % 2 === 0 ? crystalCyanMat : crystalPurpleMat;
-          const cMesh = new THREE.Mesh(cGeo, cMat);
-          cMesh.position.set((i - 2) * 0.3, 0.55 + (i % 2) * 0.2, (Math.random() - 0.5) * 0.4);
-          cMesh.rotation.set((Math.random() - 0.5) * 0.4, i * 0.6, (Math.random() - 0.5) * 0.4);
-          rg.add(cMesh);
+        addMesh(rGroup, new THREE.BoxGeometry(3.6, 2.0, 3.6), stonePbrMat, 0, 1.0, 0);
+        // Mining timber braces
+        addMesh(rGroup, new THREE.BoxGeometry(0.3, 2.6, 0.3), woodPbrMat, -1.4, 1.3, 1.4);
+        addMesh(rGroup, new THREE.BoxGeometry(0.3, 2.6, 0.3), woodPbrMat, 1.4, 1.3, 1.4);
+        addMesh(rGroup, new THREE.BoxGeometry(3.1, 0.3, 0.3), woodPbrMat, 0, 2.5, 1.4);
+        // Ore nuggets
+        for (let n = 0; n < 6; n++) {
+          addMesh(
+            rGroup,
+            new THREE.DodecahedronGeometry(0.35, 0),
+            oreMat,
+            (Math.random() - 0.5) * 2.2,
+            0.4,
+            (Math.random() - 0.5) * 2.2
+          );
         }
       }
 
-      registerInteractive(rg, resData);
+      registerInteractive(rGroup, rData);
     });
 
-    // 4. Monsters (Levels 1 - 5 for Bear, Rabbit, Wolf, and Tree Monster)
-    const monstersData: InteractiveObject[] = [
-      // Bear (Levels 1 - 5)
-      {
-        id: 'm_b1',
-        name: 'Himalayan Cub',
-        type: 'monster',
-        subtype: 'bear',
-        level: 1,
-        position: [-4, 0, 4],
-        health: 60,
-        power: 120,
-        description: 'Young mountain bear foraging along valley brook banks.',
-      },
-      {
-        id: 'm_b2',
-        name: 'Mountain Brown Bear',
-        type: 'monster',
-        subtype: 'bear',
-        level: 2,
-        position: [14, 0, -4],
-        health: 90,
-        power: 210,
-        description: 'Sturdy highland bear defending its pine territory.',
-      },
-      {
-        id: 'm_b3',
-        name: 'Highland Grizzled Bear',
-        type: 'monster',
-        subtype: 'bear',
-        level: 3,
-        position: [-26, 0, 16],
-        health: 140,
-        power: 360,
-        description: 'Aggressive clawed beast guarding western mineral ridges.',
-      },
-      {
-        id: 'm_b4',
-        name: 'Glacial Frost Bear',
-        type: 'monster',
-        subtype: 'bear',
-        level: 4,
-        position: [22, 0, -22],
-        health: 200,
-        power: 540,
-        description: 'Heavily armored white fur bear adapted to sub-zero blizzards.',
-      },
-      {
-        id: 'm_b5',
-        name: 'Apex Ancient Snow Bear',
-        type: 'monster',
-        subtype: 'bear',
-        level: 5,
-        position: [-12, 0, -36],
-        health: 280,
-        power: 750,
-        description: 'Legendary mountain apex predator commanding northern glacier passes.',
-      },
+    // Provide registered objects list to parent
+    objectsListRef.current = allObjects;
+    pickableMeshesRef.current = pickables;
+    registerObjectsRef(allObjects);
 
-      // Rabbit (Levels 1 - 5)
-      {
-        id: 'm_r1',
-        name: 'Alpine Meadow Hare',
-        type: 'monster',
-        subtype: 'rabbit',
-        level: 1,
-        position: [-8, 0, 6],
-        health: 40,
-        power: 80,
-        description: 'Nimble mountain rabbit darting across terrace steps.',
-      },
-      {
-        id: 'm_r2',
-        name: 'Horned Mountain Rabbit',
-        type: 'monster',
-        subtype: 'rabbit',
-        level: 2,
-        position: [-4, 0, 8],
-        health: 60,
-        power: 140,
-        description: 'Fast jumping rabbit equipped with defensive horn spikes.',
-      },
-      {
-        id: 'm_r3',
-        name: 'Swift Snow Hare',
-        type: 'monster',
-        subtype: 'rabbit',
-        level: 3,
-        position: [6, 0, 18],
-        health: 85,
-        power: 220,
-        description: 'Evasive winter hare running across deep snowdrifts.',
-      },
-      {
-        id: 'm_r4',
-        name: 'Agile Highland Jackrabbit',
-        type: 'monster',
-        subtype: 'rabbit',
-        level: 4,
-        position: [-20, 0, -8],
-        health: 120,
-        power: 330,
-        description: 'Hyper-agile jackrabbit capable of dodging arrows.',
-      },
-      {
-        id: 'm_r5',
-        name: 'Mystic Moon-Hare',
-        type: 'monster',
-        subtype: 'rabbit',
-        level: 5,
-        position: [30, 0, 10],
-        health: 160,
-        power: 480,
-        description: 'Rare enchanted beast moving with lightning speed.',
-      },
-
-      // Wolf (Levels 1 - 5)
-      {
-        id: 'm_w1',
-        name: 'Lone Timber Wolf',
-        type: 'monster',
-        subtype: 'wolf',
-        level: 1,
-        position: [-2, 0, -8],
-        health: 55,
-        power: 110,
-        description: 'Sleek predatory wolf stalking the valley outskirts.',
-      },
-      {
-        id: 'm_w2',
-        name: 'Steppe Pack Wolf',
-        type: 'monster',
-        subtype: 'wolf',
-        level: 2,
-        position: [10, 0, 16],
-        health: 85,
-        power: 200,
-        description: 'Vicious pack hunter hunting in highland meadows.',
-      },
-      {
-        id: 'm_w3',
-        name: 'Highland Grey Wolf',
-        type: 'monster',
-        subtype: 'wolf',
-        level: 3,
-        position: [-32, 0, 8],
-        health: 130,
-        power: 340,
-        description: 'Battle-hardened grey wolf with razor-sharp mountain fangs.',
-      },
-      {
-        id: 'm_w4',
-        name: 'Blight Fang Wolf',
-        type: 'monster',
-        subtype: 'wolf',
-        level: 4,
-        position: [18, 0, -28],
-        health: 180,
-        power: 510,
-        description: 'Fierce winter wolf with frost-bitten jaws and cunning instincts.',
-      },
-      {
-        id: 'm_w5',
-        name: 'Alpha Dire Frost Wolf',
-        type: 'monster',
-        subtype: 'wolf',
-        level: 5,
-        position: [-40, 0, -18],
-        health: 260,
-        power: 720,
-        description: 'Monstrous alpha dire wolf leading northern mountain packs.',
-      },
-
-      // Tree Monster (Levels 1 - 5)
-      {
-        id: 'm_t1',
-        name: 'Sprout Treant',
-        type: 'monster',
-        subtype: 'treemonster',
-        level: 1,
-        position: [4, 0, -6],
-        health: 65,
-        power: 125,
-        description: 'Awakened young pine sapling swinging wooden limbs.',
-      },
-      {
-        id: 'm_t2',
-        name: 'Mossy Bark Guardian',
-        type: 'monster',
-        subtype: 'treemonster',
-        level: 2,
-        position: [-16, 0, -12],
-        health: 100,
-        power: 230,
-        description: 'Moss-covered walking tree defending woodland paths.',
-      },
-      {
-        id: 'm_t3',
-        name: 'Ancient Pine Treant',
-        type: 'monster',
-        subtype: 'treemonster',
-        level: 3,
-        position: [28, 0, 4],
-        health: 155,
-        power: 380,
-        description: 'Centuries-old animated pine tree with sweeping branch attacks.',
-      },
-      {
-        id: 'm_t4',
-        name: 'Elder Forest Behemoth',
-        type: 'monster',
-        subtype: 'treemonster',
-        level: 4,
-        position: [-24, 0, 26],
-        health: 220,
-        power: 560,
-        description: 'Massive towering tree guardian with thick bark plating.',
-      },
-      {
-        id: 'm_t5',
-        name: 'Primeval World-Tree Monster',
-        type: 'monster',
-        subtype: 'treemonster',
-        level: 5,
-        position: [34, 0, 28],
-        health: 310,
-        power: 820,
-        description: 'Colossal primeval arbor colossus glowing with ancient forest wrath.',
-      },
-
-      // Yeti (Levels 1 - 5 in northern glaciers)
-      {
-        id: 'm_y1',
-        name: 'Glacier Snow Ape',
-        type: 'monster',
-        subtype: 'yeti',
-        level: 1,
-        position: [2, 0, -26],
-        health: 80,
-        power: 150,
-        description: 'Nimble mountain snow ape foraging in northern glacial moraines.',
-      },
-      {
-        id: 'm_y2',
-        name: 'Frost Peak Yeti',
-        type: 'monster',
-        subtype: 'yeti',
-        level: 2,
-        position: [-8, 0, -38],
-        health: 140,
-        power: 280,
-        description: 'Territorial frost yeti defending high-altitude snow valley passes.',
-      },
-      {
-        id: 'm_y3',
-        name: 'Highland Glacier Yeti',
-        type: 'monster',
-        subtype: 'yeti',
-        level: 3,
-        position: [12, 0, -42],
-        health: 260,
-        power: 520,
-        description: 'Massive white-furred brute hurling glacial ice boulders. Rally recommended.',
-      },
-      {
-        id: 'm_y4',
-        name: 'Dreadfrost Mountain Yeti',
-        type: 'monster',
-        subtype: 'yeti',
-        level: 4,
-        position: [-16, 0, -44],
-        health: 480,
-        power: 950,
-        description: 'Heavily armored dreadfrost yeti equipped with frozen horn spikes. High-level raid boss.',
-      },
-      {
-        id: 'm_y5',
-        name: 'Ancient Abominable Yeti King',
-        type: 'monster',
-        subtype: 'yeti',
-        level: 5,
-        position: [0, 0, -48],
-        health: 950,
-        power: 1800,
-        description: 'Legendary Abominable Yeti King ruling northern glaciers! Supreme World Boss requiring an Alliance Rally!',
-      },
-    ];
-
-    monstersData.forEach((monData) => {
-      monData.maxHealth = monData.health;
-      const mg = new THREE.Group();
-      mg.position.set(monData.position[0], 0, monData.position[2]);
-      const lvlScale = 0.8 + monData.level * 0.12;
-
-      if (monData.subtype === 'bear') {
-        // Bear 3D Model
-        const furColor = monData.level >= 4 ? '#e2e8f0' : '#78350f';
-        const fur = mat(furColor, 0.8, 0.1);
-        const body = addMesh(mg, new THREE.SphereGeometry(0.7 * lvlScale, 12, 10), fur, 0, 0.85 * lvlScale, 0);
-        body.scale.set(1.1, 0.85, 1.3);
-        // Head & snout
-        addMesh(mg, new THREE.SphereGeometry(0.42 * lvlScale, 10, 8), fur, 0, 1.25 * lvlScale, 0.55 * lvlScale);
-        addMesh(mg, new THREE.BoxGeometry(0.3 * lvlScale, 0.22 * lvlScale, 0.3 * lvlScale), mat('#451a03'), 0, 1.15 * lvlScale, 0.85 * lvlScale);
-        // Ears
-        addMesh(mg, new THREE.SphereGeometry(0.14 * lvlScale, 6, 6), fur, -0.28 * lvlScale, 1.55 * lvlScale, 0.5 * lvlScale);
-        addMesh(mg, new THREE.SphereGeometry(0.14 * lvlScale, 6, 6), fur, 0.28 * lvlScale, 1.55 * lvlScale, 0.5 * lvlScale);
-        // Legs
-        for (let x = -1; x <= 1; x += 2) {
-          for (let z = -1; z <= 1; z += 2) {
-            addMesh(mg, new THREE.CylinderGeometry(0.14 * lvlScale, 0.18 * lvlScale, 0.6 * lvlScale, 6), fur, x * 0.45 * lvlScale, 0.3 * lvlScale, z * 0.45 * lvlScale);
-          }
-        }
-      } else if (monData.subtype === 'rabbit') {
-        // Rabbit 3D Model
-        const fur = mat(monData.level === 5 ? '#fef08a' : '#f1f5f9', 0.9, 0.05);
-        const innerEar = mat('#f472b6', 0.8, 0.1);
-        const rScale = lvlScale * 0.85;
-
-        // Body & head
-        addMesh(mg, new THREE.SphereGeometry(0.38 * rScale, 10, 8), fur, 0, 0.45 * rScale, 0);
-        addMesh(mg, new THREE.SphereGeometry(0.26 * rScale, 8, 8), fur, 0, 0.75 * rScale, 0.25 * rScale);
-        // Upright tall ears
-        for (let i = -1; i <= 1; i += 2) {
-          const ear = addMesh(mg, new THREE.ConeGeometry(0.09 * rScale, 0.55 * rScale, 6), fur, i * 0.14 * rScale, 1.18 * rScale, 0.22 * rScale);
-          ear.rotation.z = i * -0.15;
-          ear.rotation.x = -0.1;
-        }
-        // Fluffy tail
-        addMesh(mg, new THREE.SphereGeometry(0.12 * rScale, 6, 6), fur, 0, 0.42 * rScale, -0.36 * rScale);
-      } else if (monData.subtype === 'wolf') {
-        // Wolf 3D Model
-        const wolfCoat = mat(monData.level >= 4 ? '#64748b' : '#334155', 0.75, 0.2);
-        const wScale = lvlScale * 0.92;
-
-        // Torso
-        const torso = addMesh(mg, new THREE.BoxGeometry(0.55 * wScale, 0.55 * wScale, 1.25 * wScale), wolfCoat, 0, 0.8 * wScale, 0);
-        torso.rotation.x = 0.05;
-        // Head & Muzzle
-        addMesh(mg, new THREE.BoxGeometry(0.38 * wScale, 0.38 * wScale, 0.45 * wScale), wolfCoat, 0, 1.15 * wScale, 0.65 * wScale);
-        addMesh(mg, new THREE.BoxGeometry(0.24 * wScale, 0.18 * wScale, 0.35 * wScale), mat('#1e293b'), 0, 1.05 * wScale, 0.95 * wScale);
-        // Pointed Ears
-        for (let i = -1; i <= 1; i += 2) {
-          const wEar = addMesh(mg, new THREE.ConeGeometry(0.09 * wScale, 0.26 * wScale, 4), wolfCoat, i * 0.16 * wScale, 1.45 * wScale, 0.6 * wScale);
-          wEar.rotation.z = i * -0.2;
-        }
-        // Lupine tail
-        const tail = addMesh(mg, new THREE.CylinderGeometry(0.08 * wScale, 0.05 * wScale, 0.75 * wScale, 6), wolfCoat, 0, 0.7 * wScale, -0.85 * wScale);
-        tail.rotation.x = -0.65;
-        // 4 Running Legs
-        for (let x = -1; x <= 1; x += 2) {
-          for (let z = -1; z <= 1; z += 2) {
-            addMesh(mg, new THREE.CylinderGeometry(0.08 * wScale, 0.07 * wScale, 0.7 * wScale, 5), wolfCoat, x * 0.25 * wScale, 0.35 * wScale, z * 0.45 * wScale);
-          }
-        }
-      } else if (monData.subtype === 'yeti') {
-        // Yeti 3D Model (Himalayan White-Furred Frost Ape with Glacial Horns)
-        const yetiFur = mat(monData.level >= 4 ? '#e2e8f0' : '#f8fafc', 0.9, 0.05);
-        const yetiSkin = mat('#64748b', 0.7, 0.1);
-        const iceHornMat = new THREE.MeshStandardMaterial({
-          color: 0x38bdf8,
-          emissive: 0x0284c7,
-          emissiveIntensity: 1.4,
-          roughness: 0.2,
-          metalness: 0.4,
-        });
-        const iceEyeMat = new THREE.MeshStandardMaterial({
-          color: 0x00ffff,
-          emissive: 0x38bdf8,
-          emissiveIntensity: 3.5,
-        });
-        const yBase = lvlScale * 1.15;
-
-        // Muscular ape torso
-        const yTorso = addMesh(mg, new THREE.BoxGeometry(0.9 * yBase, 1.0 * yBase, 0.75 * yBase), yetiFur, 0, 0.95 * yBase, 0);
-        yTorso.rotation.x = 0.1;
-        // Chest plate
-        addMesh(mg, new THREE.BoxGeometry(0.7 * yBase, 0.65 * yBase, 0.25 * yBase), yetiSkin, 0, 1.05 * yBase, 0.35 * yBase);
-
-        // Ape head
-        addMesh(mg, new THREE.BoxGeometry(0.55 * yBase, 0.5 * yBase, 0.5 * yBase), yetiFur, 0, 1.6 * yBase, 0.15 * yBase);
-        addMesh(mg, new THREE.BoxGeometry(0.4 * yBase, 0.3 * yBase, 0.25 * yBase), yetiSkin, 0, 1.48 * yBase, 0.38 * yBase);
-
-        // Glacial Ice Horns
-        const hornL = addMesh(mg, new THREE.ConeGeometry(0.12 * yBase, 0.5 * yBase, 5), iceHornMat, -0.28 * yBase, 1.95 * yBase, 0.1 * yBase);
-        hornL.rotation.z = -0.4;
-        const hornR = addMesh(mg, new THREE.ConeGeometry(0.12 * yBase, 0.5 * yBase, 5), iceHornMat, 0.28 * yBase, 1.95 * yBase, 0.1 * yBase);
-        hornR.rotation.z = 0.4;
-
-        // Glowing Blue Eyes
-        addMesh(mg, new THREE.SphereGeometry(0.06 * yBase, 6, 6), iceEyeMat, -0.14 * yBase, 1.62 * yBase, 0.38 * yBase);
-        addMesh(mg, new THREE.SphereGeometry(0.06 * yBase, 6, 6), iceEyeMat, 0.14 * yBase, 1.62 * yBase, 0.38 * yBase);
-
-        // Powerful Gorilla-like Arms with Ice Claws
-        const armL = addMesh(mg, new THREE.CylinderGeometry(0.18 * yBase, 0.22 * yBase, 1.1 * yBase, 6), yetiFur, -0.65 * yBase, 1.0 * yBase, 0.1 * yBase);
-        armL.rotation.z = 0.25;
-        armL.rotation.x = -0.2;
-        addMesh(mg, new THREE.BoxGeometry(0.25 * yBase, 0.25 * yBase, 0.25 * yBase), iceHornMat, -0.72 * yBase, 0.45 * yBase, 0.2 * yBase);
-
-        const armR = addMesh(mg, new THREE.CylinderGeometry(0.18 * yBase, 0.22 * yBase, 1.1 * yBase, 6), yetiFur, 0.65 * yBase, 1.0 * yBase, 0.1 * yBase);
-        armR.rotation.z = -0.25;
-        armR.rotation.x = -0.2;
-        addMesh(mg, new THREE.BoxGeometry(0.25 * yBase, 0.25 * yBase, 0.25 * yBase), iceHornMat, 0.72 * yBase, 0.45 * yBase, 0.2 * yBase);
-
-        // Sturdy Legs
-        addMesh(mg, new THREE.CylinderGeometry(0.2 * yBase, 0.22 * yBase, 0.65 * yBase, 6), yetiFur, -0.3 * yBase, 0.32 * yBase, 0);
-        addMesh(mg, new THREE.CylinderGeometry(0.2 * yBase, 0.22 * yBase, 0.65 * yBase, 6), yetiFur, 0.3 * yBase, 0.32 * yBase, 0);
-      } else {
-        // Tree Monster (Treant) 3D Model
-        const barkMat = mat('#3e2723', 0.9, 0.1);
-        const foliageMat = mat('#14532d', 0.8, 0.1);
-        const eyeMat = new THREE.MeshStandardMaterial({
-          color: 0xffaa00,
-          emissive: 0xff8800,
-          emissiveIntensity: 2.8,
-        });
-        const tScale = lvlScale * 1.0;
-
-        // Gnarled Trunk
-        addMesh(mg, new THREE.CylinderGeometry(0.35 * tScale, 0.55 * tScale, 1.8 * tScale, 7), barkMat, 0, 0.9 * tScale, 0);
-
-        // Branch Arms
-        const armLeft = addMesh(mg, new THREE.CylinderGeometry(0.1 * tScale, 0.16 * tScale, 1.1 * tScale, 6), barkMat, -0.55 * tScale, 1.25 * tScale, 0.2 * tScale);
-        armLeft.rotation.z = 0.7;
-        armLeft.rotation.x = 0.3;
-        const armRight = addMesh(mg, new THREE.CylinderGeometry(0.1 * tScale, 0.16 * tScale, 1.1 * tScale, 6), barkMat, 0.55 * tScale, 1.25 * tScale, 0.2 * tScale);
-        armRight.rotation.z = -0.7;
-        armRight.rotation.x = 0.3;
-
-        // Tree Crown Foliage
-        addMesh(mg, new THREE.SphereGeometry(0.85 * tScale, 8, 8), foliageMat, 0, 2.1 * tScale, 0);
-        addMesh(mg, new THREE.SphereGeometry(0.55 * tScale, 7, 7), foliageMat, -0.4 * tScale, 2.4 * tScale, 0.2 * tScale);
-        addMesh(mg, new THREE.SphereGeometry(0.55 * tScale, 7, 7), foliageMat, 0.4 * tScale, 2.4 * tScale, -0.2 * tScale);
-
-        // Glowing Amber Eyes
-        addMesh(mg, new THREE.SphereGeometry(0.08 * tScale, 6, 6), eyeMat, -0.16 * tScale, 1.45 * tScale, 0.42 * tScale);
-        addMesh(mg, new THREE.SphereGeometry(0.08 * tScale, 6, 6), eyeMat, 0.16 * tScale, 1.45 * tScale, 0.42 * tScale);
-      }
-
-      // Clone materials so white flashes only affect this monster
-      mg.traverse((child) => {
-        if ((child as THREE.Mesh).isMesh) {
-          const mesh = child as THREE.Mesh;
-          if (Array.isArray(mesh.material)) {
-            mesh.material = mesh.material.map((m) => m.clone());
-          } else if (mesh.material) {
-            mesh.material = mesh.material.clone();
-          }
-          const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
-          mats.forEach((m: any) => {
-            if (m && m.isMeshStandardMaterial) {
-              m.userData._origEmissive = m.emissive.clone();
-              m.userData._origColor = m.color.clone();
-              m.userData._origIntensity = m.emissiveIntensity || 0;
-            }
-          });
-        }
-      });
-
-      registerInteractive(mg, monData);
-      monsterGroupsMapRef.current.set(monData.id, mg);
-    });
-
-
-    // --- White Flash Animation Function ---
+    // ==========================================
+    // 5. MASTER DAMAGE EXECUTION HANDLER
+    // ==========================================
     const flashMonsterWhite = (group: THREE.Group) => {
+      group.position.x += (Math.random() - 0.5) * 0.4;
+      group.position.y += 0.3;
+
       group.traverse((child) => {
-        if ((child as THREE.Mesh).isMesh) {
-          const mesh = child as THREE.Mesh;
+        const mesh = child as THREE.Mesh;
+        if (mesh.isMesh && mesh.material) {
           const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
           mats.forEach((m: any) => {
             if (m && m.isMeshStandardMaterial) {
               if (!m.userData._origEmissive) {
                 m.userData._origEmissive = m.emissive.clone();
                 m.userData._origColor = m.color.clone();
-                m.userData._origIntensity = m.emissiveIntensity || 0;
+                m.userData._origIntensity = m.emissiveIntensity;
               }
-              // Pure white blazing emissive flash
               m.emissive.setHex(0xffffff);
-              m.emissiveIntensity = 4.2;
+              m.emissiveIntensity = 4.0;
               m.color.setHex(0xffffff);
             }
           });
-
-          // Check if already in activeFlashesRef, otherwise add
-          const existing = activeFlashesRef.current.find((f) => f.mesh === mesh);
-          if (existing) {
-            existing.timer = 0.25;
-            existing.maxTimer = 0.25;
-          } else {
-            activeFlashesRef.current.push({
-              mesh,
-              timer: 0.25,
-              maxTimer: 0.25,
-            });
-          }
+          activeFlashesRef.current.push({ mesh, timer: 0.22, maxTimer: 0.22 });
         }
       });
-
-      // Impact flinch shudder
-      group.position.x += (Math.random() - 0.5) * 0.4;
-      group.position.y += 0.22;
     };
 
-    // --- 3D Smoke in Air Particle Dissolution Function ---
     const turnMonsterIntoSmoke = (monsterId: string, group: THREE.Group) => {
-      // 1. Initial blazing white flash burst
-      flashMonsterWhite(group);
-
-      // 2. Dissolve the monster mesh down into the vapor cloud
       activeDissolvingRef.current.push({
         group,
         progress: 0,
         origY: group.position.y,
       });
 
-      // 3. Remove from raycast pickables so clicking the smoke doesn't re-target
       const pIdx = pickableMeshesRef.current.indexOf(group);
       if (pIdx !== -1) {
         pickableMeshesRef.current.splice(pIdx, 1);
       }
 
-      // 4. Spawn 36 faceted 3D smoke puffs billowing into the air!
       const originPos = group.position.clone();
-      const smokeCount = 36;
+      const smokeCount = 38;
       const smokeShades = [0xf1f5f9, 0xe2e8f0, 0xcbd5e1, 0x94a3b8];
 
       for (let i = 0; i < smokeCount; i++) {
-        const radius = 0.32 + Math.random() * 0.28;
+        const radius = 0.45 + Math.random() * 0.35;
         const puffGeo = new THREE.DodecahedronGeometry(radius, 1);
         const puffColor = smokeShades[Math.floor(Math.random() * smokeShades.length)];
         const puffMat = new THREE.MeshStandardMaterial({
@@ -1352,85 +1250,46 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
           depthWrite: false,
         });
         const puffMesh = new THREE.Mesh(puffGeo, puffMat);
-        puffMesh.castShadow = false;
-        puffMesh.receiveShadow = false;
-
         puffMesh.position.set(
-          originPos.x + (Math.random() - 0.5) * 1.4,
-          originPos.y + 0.2 + Math.random() * 1.2,
-          originPos.z + (Math.random() - 0.5) * 1.4
+          originPos.x + (Math.random() - 0.5) * 2.2,
+          originPos.y + 0.3 + Math.random() * 1.6,
+          originPos.z + (Math.random() - 0.5) * 2.2
         );
-
-        const initScale = 0.35 + Math.random() * 0.25;
+        const initScale = 0.4 + Math.random() * 0.3;
         puffMesh.scale.setScalar(initScale);
         world.add(puffMesh);
 
         activeSmokeParticlesRef.current.push({
           mesh: puffMesh,
           velocity: new THREE.Vector3(
-            (Math.random() - 0.5) * 1.8,
-            2.0 + Math.random() * 2.8, // rising vigorously into the air
-            (Math.random() - 0.5) * 1.8
+            (Math.random() - 0.5) * 2.2,
+            2.5 + Math.random() * 3.5,
+            (Math.random() - 0.5) * 2.2
           ),
           rotSpeedX: (Math.random() - 0.5) * 3.5,
           rotSpeedY: (Math.random() - 0.5) * 3.5,
           rotSpeedZ: (Math.random() - 0.5) * 3.5,
           life: 0,
-          maxLife: 2.2 + Math.random() * 0.8,
+          maxLife: 2.4 + Math.random() * 0.8,
           initialScale: initScale,
-          targetScale: 2.6 + Math.random() * 1.4,
-        });
-      }
-
-      // 14 glowing spirit spark particles floating even higher
-      for (let i = 0; i < 14; i++) {
-        const sparkGeo = new THREE.SphereGeometry(0.08 + Math.random() * 0.06, 6, 6);
-        const sparkMat = new THREE.MeshBasicMaterial({
-          color: 0xffd566,
-          transparent: true,
-          opacity: 0.95,
-        });
-        const spark = new THREE.Mesh(sparkGeo, sparkMat);
-        spark.position.set(
-          originPos.x + (Math.random() - 0.5) * 0.9,
-          originPos.y + 0.6 + Math.random() * 0.9,
-          originPos.z + (Math.random() - 0.5) * 0.9
-        );
-        world.add(spark);
-
-        activeSmokeParticlesRef.current.push({
-          mesh: spark,
-          velocity: new THREE.Vector3(
-            (Math.random() - 0.5) * 1.0,
-            3.6 + Math.random() * 2.2,
-            (Math.random() - 0.5) * 1.0
-          ),
-          rotSpeedX: (Math.random() - 0.5) * 2,
-          rotSpeedY: (Math.random() - 0.5) * 2,
-          rotSpeedZ: 0,
-          life: 0,
-          maxLife: 2.8 + Math.random() * 0.6,
-          initialScale: 1,
-          targetScale: 0.1,
+          targetScale: 3.2 + Math.random() * 1.6,
         });
       }
     };
 
-    // --- Master Damage Execution Handler ---
     const executeMonsterDamage = (monsterId: string, damage: number, forceFatal?: boolean): { remainingHp: number; isDead: boolean } => {
       const mg = monsterGroupsMapRef.current.get(monsterId);
       if (!mg || !worldRef.current) return { remainingHp: 0, isDead: true };
       const gameData = mg.userData.gameData as InteractiveObject;
       if (!gameData || gameData.isDefeated) return { remainingHp: 0, isDead: true };
 
-      const currentHp = gameData.health ?? 150;
+      const currentHp = gameData.health ?? 200;
       const newHp = forceFatal ? 0 : Math.max(0, currentHp - damage);
       gameData.health = newHp;
       const isDead = newHp <= 0;
 
-      // Project world coordinate to screen for floating combat indicators
       const worldPos = mg.position.clone();
-      worldPos.y += 1.8;
+      worldPos.y += 2.5;
       worldPos.applyMatrix4(worldRef.current.matrixWorld);
       if (cameraRef.current && container) {
         worldPos.project(cameraRef.current);
@@ -1461,36 +1320,32 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
       return { remainingHp: newHp, isDead };
     };
 
-    // Register external damage execution hook with parent
     if (registerDamageHandlerRef) {
       registerDamageHandlerRef((monsterId: string, damage: number, forceFatal?: boolean) => {
         return executeMonsterDamage(monsterId, damage, forceFatal);
       });
     }
 
-    // 5. Army Squad Group (Magar Vanguard 15-Warrior Battalion)
+    // ==========================================
+    // 6. MAGAR VANGUARD ARMY BATTALION
+    // ==========================================
     const armyGroup = new THREE.Group();
     armyGroup.position.copy(armyPosRef.current);
     armyGroup.userData = { isArmyGroup: true };
+    armyGroup.visible = false; // Troops are stationed inside citadel until deployed!
 
-    // Procedural 15-warrior squad in disciplined tactical formation
+    // Disciplined 15-warrior squad in formation
     for (let i = 0; i < 15; i++) {
       const warrior = new THREE.Group();
       const col = i % 5;
       const row = Math.floor(i / 5);
-      warrior.position.set((col - 2) * 0.72, 0, (row - 1) * 0.75);
+      warrior.position.set((col - 2) * 0.75, 0, (row - 1) * 0.8);
 
       const isCav = i === 4 || i === 10;
       const isArch = i === 2 || i === 7 || i === 12;
       const isCommander = i === 0;
 
-      warrior.userData = {
-        origY: 0,
-        isCav,
-        isArch,
-        isCommander,
-        idx: i,
-      };
+      warrior.userData = { origY: 0, isCav, isArch, isCommander, idx: i };
 
       const clothMat = mat(isCommander ? '#b8860b' : isArch ? '#3e6347' : isCav ? '#7a4e28' : '#8e2b22');
       const skinMat = mat('#cfa07e');
@@ -1499,46 +1354,36 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
       if (isCav) {
         // Mountain Steed Warhorse
         const horseMat = mat('#523620');
-        const horseBody = addMesh(warrior, new THREE.BoxGeometry(0.55, 0.55, 1.1), horseMat, 0, 0.55, 0);
+        addMesh(warrior, new THREE.BoxGeometry(0.55, 0.55, 1.1), horseMat, 0, 0.55, 0);
         const horseHead = addMesh(warrior, new THREE.BoxGeometry(0.28, 0.38, 0.45), horseMat, 0, 0.95, 0.5);
         horseHead.rotation.x = -0.3;
         // Rider
         addMesh(warrior, new THREE.CylinderGeometry(0.18, 0.22, 0.65, 7), clothMat, 0, 1.15, 0);
         addMesh(warrior, new THREE.SphereGeometry(0.18, 8, 8), skinMat, 0, 1.62, 0);
-        // Helmet
         addMesh(warrior, new THREE.ConeGeometry(0.2, 0.3, 7), metalMat, 0, 1.82, 0);
-        // Lance Spear
         const lance = addMesh(warrior, new THREE.CylinderGeometry(0.025, 0.025, 1.8, 6), metalMat, 0.32, 1.4, 0.3);
         lance.rotation.x = 0.2;
       } else {
-        // Foot Soldier (Infantry / Archer / Commander)
-        // Two legs for walking animation
+        // Foot Soldier
         const legLeft = addMesh(warrior, new THREE.CylinderGeometry(0.07, 0.08, 0.45, 6), mat('#2b2622'), -0.12, 0.22, 0);
         const legRight = addMesh(warrior, new THREE.CylinderGeometry(0.07, 0.08, 0.45, 6), mat('#2b2622'), 0.12, 0.22, 0);
         legLeft.userData = { isLegLeft: true };
         legRight.userData = { isLegRight: true };
 
-        // Torso & Tunic
         addMesh(warrior, new THREE.CylinderGeometry(0.2, 0.24, 0.68, 7), clothMat, 0, 0.75, 0);
-        // Head
         addMesh(warrior, new THREE.SphereGeometry(0.18, 8, 8), skinMat, 0, 1.25, 0);
+        addMesh(warrior, new THREE.ConeGeometry(0.2, 0.28, 7), metalMat, 0, 1.45, 0);
 
-        // Helmet with Crest
-        const helm = addMesh(warrior, new THREE.ConeGeometry(0.2, 0.28, 7), metalMat, 0, 1.45, 0);
         if (isCommander) {
           const goldCrest = new THREE.MeshStandardMaterial({ color: 0xffd700, emissive: 0xffaa00, emissiveIntensity: 1.5 });
           addMesh(warrior, new THREE.BoxGeometry(0.05, 0.35, 0.3), goldCrest, 0, 1.65, 0);
         }
 
-        // Weapons
         if (isArch) {
-          // Himalayan Longbow
           addMesh(warrior, new THREE.TorusGeometry(0.32, 0.035, 5, 12, Math.PI), mat('#5c4028'), 0.38, 0.9, 0);
         } else {
-          // Broadsword & Shield
           const sword = addMesh(warrior, new THREE.BoxGeometry(0.07, 0.75, 0.07), metalMat, 0.38, 0.85, 0.1);
           sword.userData = { isWeapon: true };
-          // Round Wooden/Brass Shield
           const shieldMat = isCommander ? mat('#b8860b') : mat('#7c2d12');
           const shield = addMesh(warrior, new THREE.CylinderGeometry(0.28, 0.28, 0.06, 12), shieldMat, -0.35, 0.85, 0.12);
           shield.rotation.x = Math.PI / 2;
@@ -1548,26 +1393,9 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
       armyGroup.add(warrior);
     }
 
-    // Tall Gilded Battalion Banner & Overhead Glowing Beacon
-    const bannerPole = addMesh(
-      armyGroup,
-      new THREE.CylinderGeometry(0.04, 0.04, 3.8, 8),
-      mat('#ffd700', 0.2, 0.8),
-      -1.2,
-      2.0,
-      -0.2
-    );
-    const mainBannerMesh = addMesh(
-      armyGroup,
-      new THREE.BoxGeometry(1.4, 0.8, 0.05),
-      mat('#b91c1c', 0.4, 0.3),
-      -0.5,
-      3.2,
-      -0.2
-    );
-    mainBannerMesh.userData = { isBannerMesh: true };
-
-    // Glowing Golden Beacon Orb at top of banner pole
+    // Gilded Battalion Banner & Glowing Beacon Orb
+    addMesh(armyGroup, new THREE.CylinderGeometry(0.04, 0.04, 3.8, 8), mat('#ffd700', 0.2, 0.8), -1.2, 2.0, -0.2);
+    addMesh(armyGroup, new THREE.BoxGeometry(1.4, 0.8, 0.05), mat('#b91c1c', 0.4, 0.3), -0.5, 3.2, -0.2);
     const beaconMat = new THREE.MeshStandardMaterial({
       color: 0xffe066,
       emissive: 0xffb703,
@@ -1575,7 +1403,7 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
     });
     addMesh(armyGroup, new THREE.SphereGeometry(0.2, 12, 12), beaconMat, -1.2, 3.9, -0.2);
 
-    // Floating 3D Chevron Pointer (points down at Magar Vanguard from high above)
+    // Floating 3D Chevron Pointer
     const chevronMat = new THREE.MeshStandardMaterial({
       color: 0xffd978,
       emissive: 0xff9900,
@@ -1583,125 +1411,66 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
       transparent: true,
       opacity: 0.95,
     });
-    const chevronPointer = addMesh(
-      armyGroup,
-      new THREE.ConeGeometry(0.35, 0.6, 4),
-      chevronMat,
-      0,
-      4.6,
-      0
-    );
-    chevronPointer.rotation.x = Math.PI; // upside down pointing down
-    chevronPointer.userData = { isChevronPointer: true };
+    const chevronPointer = addMesh(armyGroup, new THREE.ConeGeometry(0.35, 0.6, 4), chevronMat, 0, 4.6, 0);
+    chevronPointer.rotation.x = Math.PI;
 
     world.add(armyGroup);
     armyGroupRef.current = armyGroup;
 
-    // Selection ring
-    const ringGeo = new THREE.RingGeometry(1.2, 1.45, 32);
+    // Tactical Line Indicator
+    const lineMat = new THREE.LineDashedMaterial({
+      color: 0xffd700,
+      linewidth: 3,
+      scale: 1,
+      dashSize: 1.2,
+      gapSize: 0.8,
+    });
+    const lineGeo = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, 0, 0)]);
+    const tacticalLine = new THREE.Line(lineGeo, lineMat);
+    tacticalLine.visible = false;
+    world.add(tacticalLine);
+    tacticalLineRef.current = tacticalLine;
+
+    // Selection Ring Indicator
+    const ringGeo = new THREE.RingGeometry(3.2, 3.6, 32);
     const ringMat = new THREE.MeshBasicMaterial({
-      color: 0xdfba6e,
+      color: 0xffe066,
       side: THREE.DoubleSide,
       transparent: true,
       opacity: 0.9,
     });
-    const ring = new THREE.Mesh(ringGeo, ringMat);
-    ring.rotation.x = -Math.PI / 2;
-    ring.position.set(0, 0.03, 0);
-    ring.visible = false;
-    world.add(ring);
-    selectionRingRef.current = ring;
+    const ringMesh = new THREE.Mesh(ringGeo, ringMat);
+    ringMesh.rotation.x = -Math.PI / 2;
+    ringMesh.visible = false;
+    world.add(ringMesh);
+    selectionRingRef.current = ringMesh;
 
-    // Tactical Line
-    const lineMat = new THREE.LineDashedMaterial({
-      color: 0xdfba6e,
-      dashSize: 0.8,
-      gapSize: 0.4,
-      linewidth: 2,
-    });
-    const lineGeo = new THREE.BufferGeometry().setFromPoints([
-      new THREE.Vector3(0, 0.2, 0),
-      new THREE.Vector3(0, 0.2, 0),
-    ]);
-    const line = new THREE.Line(lineGeo, lineMat);
-    line.visible = false;
-    world.add(line);
-    tacticalLineRef.current = line;
-
-    // Store references
-    objectsListRef.current = allObjects;
-    pickableMeshesRef.current = pickables;
-    registerObjectsRef(allObjects);
-
-    // Resize handler
-    const handleResize = () => {
-      if (!container || !renderer || !camera) return;
-      const w = container.clientWidth;
-      const h = container.clientHeight;
-      const asp = w / h;
-      camera.left = (-frustumSize * asp) / 2;
-      camera.right = (frustumSize * asp) / 2;
-      camera.top = frustumSize / 2;
-      camera.bottom = -frustumSize / 2;
-      camera.updateProjectionMatrix();
-      renderer.setSize(w, h);
-    };
-    window.addEventListener('resize', handleResize);
-
-    // --- Mining Particle Chips Spawner ---
-    const spawnMiningChips = (targetObj: InteractiveObject) => {
-      if (!sceneRef.current) return;
-      const subtype = targetObj.subtype;
-      let chipColor = 0xf59e0b; // default gold
-      let emissiveColor = 0xd97706;
-      let isGlow = true;
-
-      if (subtype === 'wood') {
-        chipColor = 0x8b5a2b;
-        emissiveColor = 0x3d2314;
-        isGlow = false;
-      } else if (subtype === 'farm') {
-        chipColor = 0xfacc15;
-        emissiveColor = 0xca8a04;
-        isGlow = false;
-      } else if (subtype === 'stonecrystal' || subtype === 'stone') {
-        chipColor = Math.random() > 0.5 ? 0x38bdf8 : 0xc084fc;
-        emissiveColor = chipColor;
-        isGlow = true;
-      }
-
-      for (let i = 0; i < 4; i++) {
-        const geo = new THREE.DodecahedronGeometry(0.08 + Math.random() * 0.06, 0);
-        const pMat = new THREE.MeshStandardMaterial({
-          color: chipColor,
-          emissive: emissiveColor,
-          emissiveIntensity: isGlow ? 2.5 : 0.2,
-          roughness: 0.3,
-          metalness: isGlow ? 0.6 : 0.1,
-        });
-        const mesh = new THREE.Mesh(geo, pMat);
-        mesh.position.set(
-          targetObj.position[0] + (Math.random() - 0.5) * 1.4,
-          0.3 + Math.random() * 0.6,
-          targetObj.position[2] + (Math.random() - 0.5) * 1.4
+    // Spawn Mining Particles
+    const spawnMiningParticles = (pos: THREE.Vector3, type = 'stone') => {
+      const chipColor = type === 'wood' ? 0x8b5a2b : type === 'gold' ? 0xf59e0b : type === 'iron' ? 0x94a3b8 : 0xd1d5db;
+      for (let i = 0; i < 6; i++) {
+        const pGeo = new THREE.BoxGeometry(0.18, 0.18, 0.18);
+        const pMat = new THREE.MeshStandardMaterial({ color: chipColor, roughness: 0.5 });
+        const chip = new THREE.Mesh(pGeo, pMat);
+        chip.position.set(
+          pos.x + (Math.random() - 0.5) * 1.5,
+          pos.y + 0.4 + Math.random() * 0.8,
+          pos.z + (Math.random() - 0.5) * 1.5
         );
-        sceneRef.current.add(mesh);
-
+        world.add(chip);
         activeMiningParticlesRef.current.push({
-          mesh,
-          velocity: new THREE.Vector3(
-            (Math.random() - 0.5) * 3.5,
-            2.5 + Math.random() * 3.0,
-            (Math.random() - 0.5) * 3.5
-          ),
-          rotSpeed: (Math.random() - 0.5) * 16,
+          mesh: chip,
+          velocity: new THREE.Vector3((Math.random() - 0.5) * 3.5, 3.5 + Math.random() * 3.0, (Math.random() - 0.5) * 3.5),
+          rotSpeed: (Math.random() - 0.5) * 10,
           life: 0,
-          maxLife: 0.65 + Math.random() * 0.35,
+          maxLife: 0.7 + Math.random() * 0.3,
         });
       }
     };
 
-    // Animation Loop
+    // ==========================================
+    // 7. RENDER & SIMULATION LOOP
+    // ==========================================
     let animId: number;
     let clock = new THREE.Clock();
 
@@ -1710,13 +1479,27 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
       const delta = clock.getDelta();
       const elapsed = clock.getElapsedTime();
 
+      // Dynamically track sun light & shadows to follow camera pan across 0-800 realm
+      if (sunLightRef.current && worldRef.current) {
+        const curPanX = -worldRef.current.position.x;
+        const curPanZ = -worldRef.current.position.z;
+        sunLightRef.current.position.set(curPanX - 60, 110, curPanZ + 50);
+        sunLightRef.current.target.position.set(curPanX, 0, curPanZ);
+        sunLightRef.current.target.updateMatrixWorld();
+      }
+
+      // Selection ring gentle pulse
+      if (selectionRingRef.current && selectionRingRef.current.visible) {
+        const s = 1.0 + Math.sin(elapsed * 4) * 0.08;
+        selectionRingRef.current.scale.set(s, s, s);
+      }
+
       // Army movement & Real-Time Arrival Combat Logic
       if (armyGroupRef.current) {
         const currentPos = armyGroupRef.current.position;
         const currentArmyState = armyStateRef.current;
         const currentTarget = activeTargetRef.current;
 
-        // Marching to Target (Attack or Gather or Marching)
         if (
           (currentArmyState === 'ATTACKING' ||
             currentArmyState === 'GATHERING' ||
@@ -1730,7 +1513,6 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
           );
           const dist = currentPos.distanceTo(targetPos);
 
-          // Render glowing tactical marching path line connecting army to destination
           if (tacticalLineRef.current) {
             tacticalLineRef.current.visible = true;
             const p1 = currentPos.clone();
@@ -1738,25 +1520,22 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
             const p2 = targetPos.clone();
             p2.y = 0.22;
             tacticalLineRef.current.geometry.setFromPoints([p1, p2]);
-            (tacticalLineRef.current as any).computeLineDistances?.();
           }
 
-          if (dist > 1.4) {
-            // Actively marching towards the distant target across the landscape
+          if (dist > 2.0) {
+            // Marching towards destination across 0-800 realm
             const dir = new THREE.Vector3().subVectors(targetPos, currentPos).normalize();
-            // Calibrated march speed (6.2 units/sec) so player can observe marching troops
-            currentPos.addScaledVector(dir, delta * 6.2);
-            currentPos.y = 0.02 + Math.abs(Math.sin(elapsed * 10)) * 0.18;
+            // Balanced march speed for expansive terrain
+            currentPos.addScaledVector(dir, delta * 14.0);
+            currentPos.y = 0.02 + Math.abs(Math.sin(elapsed * 12)) * 0.22;
             armyGroupRef.current.rotation.y = Math.atan2(dir.x, dir.z);
 
-            // Animate 15 marching warriors: walking legs, swinging weapons, horse gallop
+            // Animate 15 marching warriors: walking legs, swinging weapons
             armyGroupRef.current.children.forEach((child) => {
               const warrior = child as THREE.Group;
               if (warrior.userData?.idx !== undefined) {
                 const idx = warrior.userData.idx;
-                warrior.position.y = Math.abs(Math.sin(elapsed * 12 + idx * 0.6)) * 0.12;
-                warrior.rotation.x = 0; // reset mining strike posture
-
+                warrior.position.y = Math.abs(Math.sin(elapsed * 12 + idx * 0.6)) * 0.14;
                 warrior.children.forEach((mesh) => {
                   if (mesh.userData?.isLegLeft) {
                     mesh.rotation.x = Math.sin(elapsed * 12 + idx) * 0.55;
@@ -1769,48 +1548,32 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
               }
             });
 
-            // Dynamic progress update as army visibly traverses the valleys
             if (totalMarchDistanceRef.current > 0) {
               const walked = Math.max(0, totalMarchDistanceRef.current - dist);
               const pct = Math.min(48, Math.max(6, Math.round((walked / totalMarchDistanceRef.current) * 48)));
-              const secsLeft = Math.max(0.3, Math.round((dist / 6.2) * 10) / 10);
+              const secsLeft = Math.max(0.3, Math.round((dist / 14.0) * 10) / 10);
               onMissionProgressUpdateRef.current?.(
                 pct,
-                `Vanguard marching to ${currentTarget.name}...`,
+                `Vanguard traversing realm to ${currentTarget.name}...`,
                 `${secsLeft}s`
               );
             }
           } else {
-            // REACHED TARGET IN REAL TIME!
+            // Reached target in real time!
             currentPos.y = 0.02;
             const dir = new THREE.Vector3().subVectors(targetPos, currentPos).normalize();
             armyGroupRef.current.rotation.y = Math.atan2(dir.x, dir.z);
 
             if (currentArmyState === 'ATTACKING') {
-              // Soldiers enter melee combat stance and swing weapons
-              armyGroupRef.current.children.forEach((child) => {
-                const warrior = child as THREE.Group;
-                if (warrior.userData?.idx !== undefined) {
-                  const idx = warrior.userData.idx;
-                  warrior.children.forEach((mesh) => {
-                    if (mesh.userData?.isWeapon) {
-                      mesh.rotation.x = Math.sin(elapsed * 18 + idx * 0.8) * 0.8;
-                    }
-                  });
-                }
-              });
-
               const targetMg = monsterGroupsMapRef.current.get(currentTarget.id);
               if (targetMg && targetMg.userData?.gameData && !targetMg.userData.gameData.isDefeated) {
-                // 1. FIRST STRIKE IMPACT LANDS IMMEDIATELY UPON PHYSICAL ARRIVAL!
                 if (!hasStruckUponArrivalRef.current) {
                   hasStruckUponArrivalRef.current = true;
                   combatStrikeTimerRef.current = 0;
-                  const curHp = targetMg.userData.gameData.health ?? 100;
-                  const strikeDamage = Math.max(35, Math.min(curHp, 45 + (currentTarget.level || 1) * 6));
+                  const curHp = targetMg.userData.gameData.health ?? 200;
+                  const strikeDamage = Math.max(45, Math.min(curHp, 60 + (currentTarget.level || 1) * 8));
                   const isFatal = curHp <= strikeDamage;
 
-                  // Trigger white flash recoil, combat floaters & HP deduction in real-time
                   executeMonsterDamage(currentTarget.id, strikeDamage, isFatal);
                   onMissionProgressUpdateRef.current?.(
                     55,
@@ -1822,22 +1585,16 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
                     onMissionStepCompleteRef.current?.({ type: 'attack', target: currentTarget });
                   }
                 } else {
-                  // 2. Subsequent combat strikes every 0.85s until zero HP
                   combatStrikeTimerRef.current += delta;
                   if (combatStrikeTimerRef.current >= 0.85) {
                     combatStrikeTimerRef.current = 0;
-                    const curHp = targetMg.userData.gameData.health ?? 100;
-                    const strikeDamage = Math.max(40, 50);
+                    const curHp = targetMg.userData.gameData.health ?? 200;
+                    const strikeDamage = Math.max(50, 65);
                     const isFatal = curHp <= strikeDamage;
 
                     executeMonsterDamage(currentTarget.id, strikeDamage, isFatal);
-                    const pct = Math.min(
-                      95,
-                      60 +
-                        Math.round(
-                          (1 - (curHp - strikeDamage) / (targetMg.userData.gameData.maxHealth || 100)) * 35
-                        )
-                    );
+                    const maxHp = targetMg.userData.gameData.maxHealth || 200;
+                    const pct = Math.min(95, 60 + Math.round((1 - (curHp - strikeDamage) / maxHp) * 35));
                     onMissionProgressUpdateRef.current?.(
                       pct,
                       `Vanguard assaulting ${currentTarget.name}! (-${strikeDamage} HP)`,
@@ -1851,52 +1608,33 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
                 }
               }
             } else if (currentArmyState === 'GATHERING') {
-              // REAL-TIME GATHERING AT RESOURCE NODE WITH DYNAMIC MINING ANIMATION!
               gatherTimerRef.current += delta;
               miningChipTimerRef.current += delta;
 
-              // 1. Soldiers swing pickaxes/axes down vigorously onto deposit!
-              armyGroupRef.current.children.forEach((child) => {
-                const warrior = child as THREE.Group;
-                if (warrior.userData?.idx !== undefined) {
-                  const idx = warrior.userData.idx;
-                  // Torso strikes forward and down with physical weight
-                  warrior.rotation.x = Math.max(0, Math.sin(elapsed * 9 + idx * 0.9)) * 0.38;
-                  warrior.position.y = Math.sin(elapsed * 9 + idx * 0.9) * 0.06;
-
-                  warrior.children.forEach((mesh) => {
-                    if (mesh.userData?.isWeapon) {
-                      // Heavy pickaxe / mining strike swinging down!
-                      mesh.rotation.x = -0.35 + Math.sin(elapsed * 9 + idx * 0.9) * 1.35;
-                    }
-                  });
-                }
-              });
-
-              // 2. Spawn dynamic flying mining particle chips on each strike interval
-              if (miningChipTimerRef.current >= 0.28) {
+              if (miningChipTimerRef.current >= 0.25) {
                 miningChipTimerRef.current = 0;
-                spawnMiningChips(currentTarget);
+                spawnMiningParticles(targetPos, currentTarget.subtype);
               }
 
-              const gPct = Math.min(95, 45 + Math.round((gatherTimerRef.current / 3.8) * 50));
-              const gSecs = Math.max(0.2, Math.round((3.8 - gatherTimerRef.current) * 10) / 10);
+              const gatherDuration = 4.5;
+              const gPct = Math.min(98, 48 + Math.round((gatherTimerRef.current / gatherDuration) * 50));
+              const secsRemain = Math.max(0, Math.round((gatherDuration - gatherTimerRef.current) * 10) / 10);
               onMissionProgressUpdateRef.current?.(
                 gPct,
-                `Mining & gathering assets at ${currentTarget.name}... (${Math.round((gatherTimerRef.current / 3.8) * 100)}%)`,
-                `${gSecs}s`
+                `Harvesting ${currentTarget.name}...`,
+                `${secsRemain}s`
               );
 
-              if (gatherTimerRef.current >= 3.8) {
+              if (gatherTimerRef.current >= gatherDuration) {
                 gatherTimerRef.current = 0;
                 onMissionStepCompleteRef.current?.({ type: 'gather', target: currentTarget });
               }
             }
           }
         } else if (currentArmyState === 'RETURNING') {
-          // Returning to Citadel Gate
+          // Returning to Citadel Gate garrison at [390, 0.02, 414]
           const homePos = armyHomeRef.current;
-          const distToHome = currentPos.distanceTo(homePos);
+          const distHome = currentPos.distanceTo(homePos);
 
           if (tacticalLineRef.current) {
             tacticalLineRef.current.visible = true;
@@ -1905,44 +1643,40 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
             const p2 = homePos.clone();
             p2.y = 0.22;
             tacticalLineRef.current.geometry.setFromPoints([p1, p2]);
-            (tacticalLineRef.current as any).computeLineDistances?.();
           }
 
-          if (distToHome > 0.6) {
+          if (distHome > 2.0) {
             const dir = new THREE.Vector3().subVectors(homePos, currentPos).normalize();
-            currentPos.addScaledVector(dir, delta * 7.5);
-            currentPos.y = 0.02 + Math.abs(Math.sin(elapsed * 10)) * 0.18;
+            currentPos.addScaledVector(dir, delta * 15.0);
+            currentPos.y = 0.02 + Math.abs(Math.sin(elapsed * 12)) * 0.18;
             armyGroupRef.current.rotation.y = Math.atan2(dir.x, dir.z);
 
-            const secsLeft = Math.max(0.3, Math.round((distToHome / 7.5) * 10) / 10);
-            onMissionProgressUpdateRef.current?.(
-              90,
-              'Vanguard marching back to citadel gate.',
-              `${secsLeft}s`
-            );
+            if (totalMarchDistanceRef.current > 0) {
+              const walked = Math.max(0, totalMarchDistanceRef.current - distHome);
+              const pct = Math.min(96, Math.max(50, 50 + Math.round((walked / totalMarchDistanceRef.current) * 46)));
+              const secsLeft = Math.max(0.3, Math.round((distHome / 15.0) * 10) / 10);
+              onMissionProgressUpdateRef.current?.(
+                pct,
+                'Vanguard marching back to citadel gate...',
+                `${secsLeft}s`
+              );
+            }
           } else {
+            // Safely arrived and garrisoned inside the Citadel!
             currentPos.copy(homePos);
-            currentPos.y = 0.02;
-            armyGroupRef.current.rotation.y = 0;
+            armyGroupRef.current.visible = false;
             if (tacticalLineRef.current) tacticalLineRef.current.visible = false;
+            onMissionProgressUpdateRef.current?.(
+              100,
+              'Magar Vanguard safely garrisoned inside citadel.',
+              'Garrisoned'
+            );
             onArmyReturnHomeRef.current?.();
           }
-        } else if (currentArmyState === 'IDLE') {
-          if (tacticalLineRef.current) tacticalLineRef.current.visible = false;
         }
-
-        // Overhead chevron pointer & banner waving
-        armyGroupRef.current.children.forEach((child) => {
-          if (child.userData?.isBannerMesh) {
-            child.rotation.y = Math.sin(elapsed * 5) * 0.25;
-          } else if (child.userData?.isChevronPointer) {
-            child.position.y = 4.6 + Math.sin(elapsed * 4) * 0.25;
-            child.rotation.y = elapsed * 2.5;
-          }
-        });
       }
 
-      // --- Process Active White Flashing Meshes on Damaged Monsters ---
+      // Process Monster Hit Flashes
       for (let i = activeFlashesRef.current.length - 1; i >= 0; i--) {
         const item = activeFlashesRef.current[i];
         item.timer -= delta;
@@ -1950,7 +1684,7 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
         const mats = Array.isArray(item.mesh.material) ? item.mesh.material : [item.mesh.material];
         mats.forEach((m: any) => {
           if (m && m.isMeshStandardMaterial && m.userData._origColor) {
-            m.emissiveIntensity = progress * 4.2;
+            m.emissiveIntensity = progress * 4.0;
             m.color.lerpColors(m.userData._origColor, new THREE.Color(0xffffff), progress);
           }
         });
@@ -1967,7 +1701,7 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
         }
       }
 
-      // Smoothly settle monster positions back after recoil flinch
+      // Settle monsters back after recoil flinch
       monsterGroupsMapRef.current.forEach((mg) => {
         const monData = mg.userData?.gameData;
         if (monData && !monData.isDefeated) {
@@ -1976,13 +1710,13 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
         }
       });
 
-      // --- Process Dissolving Monsters (Shrinking down to zero as they vaporize) ---
+      // Process Dissolving Monsters into smoke
       for (let i = activeDissolvingRef.current.length - 1; i >= 0; i--) {
         const dm = activeDissolvingRef.current[i];
         dm.progress += delta * 2.8;
         const curScale = Math.max(0, 1 - dm.progress);
         dm.group.scale.setScalar(curScale);
-        dm.group.position.y += delta * 0.8; // gently lifts into the vapor
+        dm.group.position.y += delta * 0.8;
 
         if (dm.progress >= 1.0 || curScale <= 0.02) {
           dm.group.visible = false;
@@ -1990,27 +1724,23 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
         }
       }
 
-      // --- Process 3D Smoke In Air Particles ---
+      // Process 3D Smoke Particles
       for (let i = activeSmokeParticlesRef.current.length - 1; i >= 0; i--) {
         const p = activeSmokeParticlesRef.current[i];
         p.life += delta;
         const ratio = p.life / p.maxLife;
 
-        // Upward buoyancy & mountain wind drift
-        p.velocity.y += delta * 0.55;
-        p.velocity.x += delta * 0.32;
+        p.velocity.y += delta * 0.6;
+        p.velocity.x += delta * 0.35;
         p.mesh.position.addScaledVector(p.velocity, delta);
 
-        // Multi-axis organic tumbling
         p.mesh.rotation.x += p.rotSpeedX * delta;
         p.mesh.rotation.y += p.rotSpeedY * delta;
         p.mesh.rotation.z += p.rotSpeedZ * delta;
 
-        // Billowing expansion in scale
         const curScale = THREE.MathUtils.lerp(p.initialScale, p.targetScale, Math.min(1, ratio * 1.35));
         p.mesh.scale.setScalar(curScale);
 
-        // Smooth opacity curve: rapid puff-in then ethereal fade out to zero in air
         const mat = p.mesh.material as THREE.MeshStandardMaterial;
         if (ratio < 0.15) {
           mat.opacity = (ratio / 0.15) * 0.88;
@@ -2026,11 +1756,11 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
         }
       }
 
-      // --- Process Dynamic Mining Particles (Chips flying from resource nodes) ---
+      // Process Dynamic Mining Particles
       for (let i = activeMiningParticlesRef.current.length - 1; i >= 0; i--) {
         const p = activeMiningParticlesRef.current[i];
         p.life += delta;
-        p.velocity.y -= delta * 12.0; // gravity
+        p.velocity.y -= delta * 12.0;
         p.mesh.position.addScaledVector(p.velocity, delta);
         p.mesh.rotation.x += p.rotSpeed * delta;
         p.mesh.rotation.y += p.rotSpeed * delta;
@@ -2044,10 +1774,23 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
         }
       }
 
-      // Render
       renderer.render(scene, camera);
     };
     animate();
+
+    const handleResize = () => {
+      if (!container || !renderer || !camera) return;
+      const w = container.clientWidth;
+      const h = container.clientHeight;
+      const asp = w / h;
+      camera.left = (-frustumSize * asp) / 2;
+      camera.right = (frustumSize * asp) / 2;
+      camera.top = frustumSize / 2;
+      camera.bottom = -frustumSize / 2;
+      camera.updateProjectionMatrix();
+      renderer.setSize(w, h);
+    };
+    window.addEventListener('resize', handleResize);
 
     return () => {
       cancelAnimationFrame(animId);
@@ -2092,14 +1835,13 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
         p1.y = 0.2;
         const p2 = new THREE.Vector3(activeTarget.position[0], 0.2, activeTarget.position[2]);
         tacticalLineRef.current.geometry.setFromPoints([p1, p2]);
-        (tacticalLineRef.current as any).computeLineDistances?.();
       } else {
         tacticalLineRef.current.visible = false;
       }
     }
   }, [activeTarget, armyState]);
 
-  // Handle active army marching order
+  // Handle active army marching orders
   useEffect(() => {
     if (armyState === 'MARCHING' || armyState === 'GATHERING' || armyState === 'ATTACKING') {
       if (activeTarget) {
@@ -2112,7 +1854,7 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
         combatStrikeTimerRef.current = 0;
         gatherTimerRef.current = 0;
         if (armyGroupRef.current) {
-          // Troops ALWAYS start march from Citadel Gate Assembly Square!
+          // Troops emerge from Citadel Gate at [390, 0.02, 414]
           armyGroupRef.current.position.copy(armyHomeRef.current);
           armyGroupRef.current.visible = true;
           totalMarchDistanceRef.current = armyGroupRef.current.position.distanceTo(armyTargetPosRef.current);
@@ -2130,10 +1872,14 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
       hasStruckUponArrivalRef.current = false;
       combatStrikeTimerRef.current = 0;
       gatherTimerRef.current = 0;
+      if (armyGroupRef.current) {
+        armyGroupRef.current.visible = false; // Troops stay garrisoned inside Citadel Gate
+        armyGroupRef.current.position.copy(armyHomeRef.current);
+      }
     }
   }, [armyState, activeTarget]);
 
-  // Pointer event handlers for drag-to-pan & click-to-select
+  // Drag-to-pan & click-to-select handlers
   const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     isDraggingRef.current = false;
     pointerStartRef.current = { x: e.clientX, y: e.clientY };
@@ -2147,17 +1893,21 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
 
     if (Math.hypot(dx, dy) > 5) {
       isDraggingRef.current = true;
-      // Convert screen delta to isometric world delta
-      const factor = (52 / (containerRef.current?.clientHeight || 600)) * (1 / zoom);
+      // Convert screen delta to isometric world delta for 0-800 realm
+      const factor = (65 / (containerRef.current?.clientHeight || 600)) * (1 / zoom);
       const newPanX = panStartRef.current.x + dx * factor;
       const newPanZ = panStartRef.current.z + dy * factor;
-      onUpdateCamera({ x: newPanX, z: newPanZ }, zoom);
+
+      // Bound camera panning within 0-800 world limits (with slight margin)
+      const clampedX = Math.max(-820, Math.min(20, newPanX));
+      const clampedZ = Math.max(-820, Math.min(20, newPanZ));
+
+      onUpdateCamera({ x: clampedX, z: clampedZ }, zoom);
     }
   };
 
   const handlePointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
     if (!isDraggingRef.current) {
-      // It was a click! Raycast to select object
       const container = containerRef.current;
       const camera = cameraRef.current;
       if (!container || !camera) return;
@@ -2199,7 +1949,7 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
           const localHit = worldRef.current.worldToLocal(worldHit.clone());
 
           let closestObj: InteractiveObject | null = null;
-          let minDistance = 4.2; // generous click radius threshold
+          let minDistance = 5.5; // generous threshold for 0-800 world scale
 
           for (const obj of objectsListRef.current) {
             if (obj.isDefeated) continue;
@@ -2226,7 +1976,7 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
   const handleWheel = (e: React.WheelEvent<HTMLDivElement>) => {
     e.preventDefault();
     const zoomDelta = e.deltaY < 0 ? 0.1 : -0.1;
-    const newZoom = Math.max(0.5, Math.min(2.0, zoom + zoomDelta));
+    const newZoom = Math.max(0.25, Math.min(2.8, zoom + zoomDelta));
     onUpdateCamera(cameraPan, newZoom);
   };
 
@@ -2245,11 +1995,11 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
       <div className="map-vignette"></div>
       <div className="weather-overlay weather-clear"></div>
       <div className="scene-label label-north">
-        HIMALAYAN GLACIER CREST <span>▲ ▲ ▲</span>
+        HIMSHIKHAR GLACIAL RIDGE [Z: 660] <span>▲ ▲ ▲</span>
       </div>
-      <div className="scene-label label-east">EASTERN SILK GATEWAY</div>
-      <div className="scene-label label-south">TERRACED LOWLANDS & BASIN</div>
-      <div className="scene-label label-west">WESTERN IRON RIDGES</div>
+      <div className="scene-label label-east">EASTERN SILK GATEWAY [X: 800]</div>
+      <div className="scene-label label-south">SOUTHERN VERDANT DEEPWOOD [Z: 640]</div>
+      <div className="scene-label label-west">WESTERN IRONCREST BASTIONS [X: 680]</div>
     </div>
   );
 };
