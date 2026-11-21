@@ -5433,14 +5433,14 @@ export const MapNavigationUI: React.FC<MapNavigationUIProps> = ({
 
             <div style={{ background: 'rgba(15, 23, 42, 0.9)', border: '1px solid rgba(56,189,248,0.3)', borderRadius: '8px', padding: '10px 12px', fontSize: '11.5px', color: '#cbd5e1', lineHeight: 1.5 }}>
               <div style={{ font: "800 13px 'Barlow Condensed'", color: '#7dd3fc', marginBottom: '4px' }}>
-                📦 AUTO-VERSIONED NATIVE .APK BUILD
+                📦 AUTO-VERSIONED NATIVE .APK &amp; GITHUB RELEASES
               </div>
-              Every APK build automatically bumps <code>versionCode</code> in <code>apk-version.json</code> &amp; <code>android/app/build.gradle</code> so installing the new APK on mobile cleanly replaces the older version while preserving data.
+              Every push to <code>main</code> (or local build) automatically increments <code>versionCode</code> in <code>android/app/build.gradle</code> and publishes a signed debug APK (<code>Himalayan-Realms-debug.apk</code>) to GitHub Releases &amp; Actions Artifacts so mobile installs cleanly replace the previous version.
               <pre style={{ margin: '6px 0 0', padding: '7px 9px', background: '#020617', borderRadius: '6px', fontSize: '10.5px', color: '#fef08a', overflowX: 'auto' }}>
                 npm run android:apk
               </pre>
               <div style={{ fontSize: '10.5px', color: '#94a3b8', marginTop: '4px' }}>
-                Output APK path: <code>android/app/build/outputs/apk/debug/app-debug.apk</code>
+                Local APK output: <code>android-apk/Himalayan-Realms-debug.apk</code>
               </div>
             </div>
           </div>

@@ -301,11 +301,75 @@ export function createDragonBannerTexture(): THREE.CanvasTexture {
 }
 
 /**
- * Generates a seamless tileable tangent-space normal map (NoColorSpace)
- * using a periodic multi-octave heightfield and Sobel derivative filter.
+ * Periodic seamless turf & mineral soil heightfield shared across 512x512 terrain normal and albedo textures.
+ */
+function buildPeriodicTerrainMicroField(size: number): Float32Array {
+  const field = new Float32Array(size * size);
+  const twoPi = Math.PI * 2;
+
+  for (let y = 0; y < size; y++) {
+    const v = (y / size) * twoPi;
+    const sinV2 = Math.sin(v * 2);
+    const cosV3 = Math.cos(v * 3);
+    const sinV7 = Math.sin(v * 7);
+    const cosV13 = Math.cos(v * 13);
+    const sinV23 = Math.sin(v * 23);
+
+    for (let x = 0; x < size; x++) {
+      const u = (x / size) * twoPi;
+
+      // Multi-octave periodic swells (organic patches + fine turf grain)
+      const macro =
+        Math.sin(u * 2 + cosV3 * 0.7) * 0.28 +
+        Math.cos(u * 3 - v * 2) * 0.22 +
+        Math.sin(u * 5 + v * 4) * 0.16 * sinV2;
+      const mid =
+        Math.sin(u * 7 + v * 6) * 0.14 +
+        Math.cos(u * 11 - v * 9) * 0.11 +
+        sinV7 * Math.cos(u * 9) * 0.08;
+      const fine =
+        Math.sin(u * 19 + v * 17) * 0.07 +
+        cosV13 * Math.sin(u * 21) * 0.06 +
+        sinV23 * Math.cos(u * 29 + v * 11) * 0.045;
+
+      field[y * size + x] = macro + mid + fine;
+    }
+  }
+
+  // Add subtle periodic grass tuft & pebble micro-bumps
+  let seed = 4271;
+  const rand = () => {
+    seed = (seed * 16807) % 2147483647;
+    return (seed - 1) / 2147483646;
+  };
+
+  for (let i = 0; i < 3200; i++) {
+    const cx = Math.floor(rand() * size);
+    const cy = Math.floor(rand() * size);
+    const rx = 1 + Math.floor(rand() * 2);
+    const ry = 2 + Math.floor(rand() * 3);
+    const amp = (rand() > 0.35 ? 1 : -1) * (0.08 + rand() * 0.12);
+
+    for (let dy = -ry; dy <= ry; dy++) {
+      const wy = ((cy + dy) % size + size) % size;
+      const wyFalloff = 1 - Math.abs(dy) / (ry + 1);
+      for (let dx = -rx; dx <= rx; dx++) {
+        const wx = ((cx + dx) % size + size) % size;
+        const wxFalloff = 1 - Math.abs(dx) / (rx + 1);
+        field[wy * size + wx] += amp * wyFalloff * wxFalloff;
+      }
+    }
+  }
+
+  return field;
+}
+
+/**
+ * Generates a seamless 512x512 tileable tangent-space normal map (NoColorSpace)
+ * using a periodic multi-octave heightfield and 3x3 Sobel derivative filter.
  */
 export function createTerrainSurfaceNormalMap(): THREE.CanvasTexture {
-  const size = 256;
+  const size = 512;
   const canvas = document.createElement('canvas');
   canvas.width = size;
   canvas.height = size;
@@ -314,40 +378,38 @@ export function createTerrainSurfaceNormalMap(): THREE.CanvasTexture {
 
   const imgData = ctx.createImageData(size, size);
   const data = imgData.data;
-
-  // Periodic height function on [0..size] so edges wrap with zero seams
-  const sampleHeight = (x: number, y: number): number => {
-    const u = ((x % size) + size) % size / size * Math.PI * 2;
-    const v = ((y % size) + size) % size / size * Math.PI * 2;
-
-    const h1 = Math.sin(u * 4) * Math.cos(v * 4) * 0.35;
-    const h2 = Math.sin(u * 9 + v * 7) * 0.22;
-    const h3 = Math.cos(u * 16 - v * 14) * 0.15;
-    const h4 = Math.sin(u * 28 + v * 24) * 0.08;
-    return h1 + h2 + h3 + h4;
+  const field = buildPeriodicTerrainMicroField(size);
+  const sample = (x: number, y: number) => {
+    const wx = ((x % size) + size) % size;
+    const wy = ((y % size) + size) % size;
+    return field[wy * size + wx];
   };
 
-  const strength = 2.6;
+  const strength = 1.65;
   for (let y = 0; y < size; y++) {
     for (let x = 0; x < size; x++) {
-      const hL = sampleHeight(x - 1, y);
-      const hR = sampleHeight(x + 1, y);
-      const hD = sampleHeight(x, y - 1);
-      const hU = sampleHeight(x, y + 1);
+      // 3x3 Sobel kernel for clean, alias-free surface derivatives
+      const tl = sample(x - 1, y - 1);
+      const t = sample(x, y - 1);
+      const tr = sample(x + 1, y - 1);
+      const l = sample(x - 1, y);
+      const r = sample(x + 1, y);
+      const bl = sample(x - 1, y + 1);
+      const b = sample(x, y + 1);
+      const br = sample(x + 1, y + 1);
 
-      const dx = (hL - hR) * strength;
-      const dy = (hD - hU) * strength;
-      const dz = 1.0;
+      const dX = (tr + 2 * r + br) - (tl + 2 * l + bl);
+      const dY = (bl + 2 * b + br) - (tl + 2 * t + tr);
 
-      const len = Math.hypot(dx, dy, dz) || 1;
-      const nx = dx / len;
-      const ny = dy / len;
-      const nz = dz / len;
+      const nx = -dX * strength;
+      const ny = -dY * strength;
+      const nz = 1.0;
 
+      const len = Math.hypot(nx, ny, nz) || 1;
       const idx = (y * size + x) * 4;
-      data[idx] = Math.round((nx * 0.5 + 0.5) * 255);
-      data[idx + 1] = Math.round((ny * 0.5 + 0.5) * 255);
-      data[idx + 2] = Math.round((nz * 0.5 + 0.5) * 255);
+      data[idx] = Math.round(((nx / len) * 0.5 + 0.5) * 255);
+      data[idx + 1] = Math.round(((ny / len) * 0.5 + 0.5) * 255);
+      data[idx + 2] = Math.round(((nz / len) * 0.5 + 0.5) * 255);
       data[idx + 3] = 255;
     }
   }
@@ -358,44 +420,67 @@ export function createTerrainSurfaceNormalMap(): THREE.CanvasTexture {
   texture.wrapS = THREE.RepeatWrapping;
   texture.wrapT = THREE.RepeatWrapping;
   texture.repeat.set(1, 1);
+  texture.generateMipmaps = true;
+  texture.minFilter = THREE.LinearMipmapLinearFilter;
+  texture.magFilter = THREE.LinearFilter;
   texture.colorSpace = THREE.NoColorSpace;
   return texture;
 }
 
 /**
- * Generates a high-frequency seamless organic detail albedo map (neutral white/grey base
- * so vertex colors tint each of the 10 biome archetypes accurately while preserving micro-texture).
+ * Generates a high-frequency seamless 512x512 organic turf & soil detail albedo map
+ * calibrated around neutral mid-light luminance so vertex biome colors stay vibrant and crisp.
  */
 export function createTerrainDetailAlbedoTexture(): THREE.CanvasTexture {
-  const size = 256;
+  const size = 512;
   const canvas = document.createElement('canvas');
   canvas.width = size;
   canvas.height = size;
   const ctx = canvas.getContext('2d');
   if (!ctx) return new THREE.CanvasTexture(canvas);
 
-  ctx.fillStyle = '#e8ece6';
-  ctx.fillRect(0, 0, size, size);
+  const imgData = ctx.createImageData(size, size);
+  const data = imgData.data;
+  const field = buildPeriodicTerrainMicroField(size);
 
+  // Neutral organic variation modulated from periodic turf heightfield (keeps vertex colors true)
+  for (let i = 0; i < size * size; i++) {
+    const h = Math.max(-1, Math.min(1, field[i]));
+    const lum = 232 + h * 22; // ~210..254 smooth tonal range (no muddy darkening or blown-out whites)
+    const idx = i * 4;
+    data[idx] = Math.round(Math.max(195, Math.min(254, lum - 2)));
+    data[idx + 1] = Math.round(Math.max(198, Math.min(255, lum + 3)));
+    data[idx + 2] = Math.round(Math.max(190, Math.min(250, lum - 5)));
+    data[idx + 3] = 255;
+  }
+  ctx.putImageData(imgData, 0, 0);
+
+  // Subtle wrapped organic grass blade strokes & natural soil variation
   let seed = 1337;
   const rand = () => {
     seed = (seed * 16807) % 2147483647;
     return (seed - 1) / 2147483646;
   };
 
-  // Seamless wrapped organic speckles (turf blades, pebbles, soil pores)
-  for (let i = 0; i < 2400; i++) {
-    const x = Math.floor(rand() * size);
-    const y = Math.floor(rand() * size);
-    const r = 1 + Math.floor(rand() * 3);
-    const bright = rand() > 0.45;
-    ctx.fillStyle = bright ? 'rgba(255, 255, 255, 0.16)' : 'rgba(30, 38, 32, 0.14)';
+  ctx.lineCap = 'round';
+  for (let i = 0; i < 3600; i++) {
+    const x = rand() * size;
+    const y = rand() * size;
+    const len = 3 + rand() * 5;
+    const tilt = (rand() - 0.5) * 2.6;
+    const isHighlight = rand() > 0.42;
+    ctx.strokeStyle = isHighlight ? 'rgba(255, 255, 245, 0.14)' : 'rgba(52, 72, 46, 0.12)';
+    ctx.lineWidth = 0.9 + rand() * 0.8;
 
-    // Draw with periodic wrapping at edges
     for (const ox of [0, -size, size]) {
       for (const oy of [0, -size, size]) {
-        if (x + ox >= -4 && x + ox <= size + 4 && y + oy >= -4 && y + oy <= size + 4) {
-          ctx.fillRect(x + ox, y + oy, r, r);
+        const bx = x + ox;
+        const by = y + oy;
+        if (bx >= -8 && bx <= size + 8 && by >= -8 && by <= size + 8) {
+          ctx.beginPath();
+          ctx.moveTo(bx, by);
+          ctx.lineTo(bx + tilt, by - len);
+          ctx.stroke();
         }
       }
     }
@@ -405,6 +490,9 @@ export function createTerrainDetailAlbedoTexture(): THREE.CanvasTexture {
   texture.wrapS = THREE.RepeatWrapping;
   texture.wrapT = THREE.RepeatWrapping;
   texture.repeat.set(1, 1);
+  texture.generateMipmaps = true;
+  texture.minFilter = THREE.LinearMipmapLinearFilter;
+  texture.magFilter = THREE.LinearFilter;
   texture.colorSpace = THREE.SRGBColorSpace;
   return texture;
 }

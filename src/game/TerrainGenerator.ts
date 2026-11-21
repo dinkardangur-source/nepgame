@@ -277,28 +277,34 @@ export class TerrainGenerator {
    * and a continuous south-to-north Nile River basin.
    */
   public getHeightAt(x: number, z: number): number {
-    if (x <= 0 || x >= 3200 || z <= 0 || z >= 3200) {
+    if (x < 0.5 || x > 3199.5 || z < 0.5 || z > 3199.5) {
       const cx = THREE.MathUtils.clamp(x, 0.5, 3199.5);
       const cz = THREE.MathUtils.clamp(z, 0.5, 3199.5);
       const edgeH = this.getHeightAt(cx, cz);
       const outDist = Math.hypot(x - cx, z - cz);
+      if (outDist <= 0.0001) return edgeH;
+
       const t = THREE.MathUtils.clamp(outDist / 6800, 0, 1);
+      // C1-smooth fade from exact playable perimeter height (0 offset at edge -> rolling green hills outward)
+      const edgeFade = THREE.MathUtils.smoothstep(outDist, 0, 320);
       const ridgeWave =
-        Math.sin(x * 0.006 + z * 0.005) * 14.0 +
-        Math.cos(x * 0.013 - z * 0.012) * 8.0 +
-        Math.sin(outDist * 0.009) * 6.0;
-      const rollingLift = Math.sin(t * Math.PI * 0.65) * 28.0 + t * 18.0;
-      let outerY = Math.max(8, edgeH + rollingLift + ridgeWave * (0.35 + t * 0.65));
+        Math.sin(x * 0.0048 + z * 0.0041) * 14.0 +
+        Math.cos(x * 0.0113 - z * 0.0107) * 7.5 +
+        Math.sin(outDist * 0.0075) * 5.0;
+      const rollingLift = Math.sin(t * Math.PI * 0.65) * 26.0 + t * 18.0;
+      let outerY = edgeH + (rollingLift + ridgeWave) * edgeFade;
 
       // Keep Nile southern source & northern delta mouths smoothly recessed near border
-      if (outDist < 160) {
+      if (outDist < 220) {
         const nile = getDistanceToNile(x, z);
-        if (nile.distBeyondWater < 30) {
-          const blend = (1 - outDist / 160) * (1 - nile.distBeyondWater / 30);
-          outerY = THREE.MathUtils.lerp(outerY, this.getNileWaterSurfaceY(z) - 1.0, blend * 0.9);
+        if (nile.distBeyondWater < 34) {
+          const riverBlend =
+            (1 - THREE.MathUtils.smoothstep(outDist, 0, 220)) *
+            (1 - THREE.MathUtils.smoothstep(nile.distBeyondWater, 0, 34));
+          outerY = THREE.MathUtils.lerp(outerY, this.getNileWaterSurfaceY(z) - 1.2, riverBlend * 0.92);
         }
       }
-      return outerY;
+      return Math.max(3.5, outerY);
     }
 
     // 1. Reserved Flat Plots Override (The Congress & 36 Shrines) with smooth skirt blend
@@ -517,6 +523,31 @@ export class TerrainGenerator {
     return 'green_plains';
   }
 
+  private readonly _fertileCol = new THREE.Color('#2c7435');
+  private readonly _cliffShadeCol = new THREE.Color('#232e3b');
+  private readonly _roadGrassCol = new THREE.Color('#477d3a');
+  private readonly _macroEmeraldCol = new THREE.Color('#346c31');
+  private readonly _sunlitCrestCol = new THREE.Color('#639448');
+
+  /**
+   * Computes a globally continuous analytical surface normal from the heightfield
+   * so chunk boundaries and outer border skirts share identical lighting with zero seams.
+   */
+  private computeAnalyticalNormal(wx: number, wz: number, outNormals: Float32Array, offset: number) {
+    const eps = 3.0;
+    const hL = this.getHeightAt(wx - eps, wz);
+    const hR = this.getHeightAt(wx + eps, wz);
+    const hD = this.getHeightAt(wx, wz - eps);
+    const hU = this.getHeightAt(wx, wz + eps);
+    const nx = hL - hR;
+    const ny = 2.0 * eps;
+    const nz = hD - hU;
+    const invLen = 1.0 / (Math.hypot(nx, ny, nz) || 1.0);
+    outNormals[offset] = nx * invLen;
+    outNormals[offset + 1] = ny * invLen;
+    outNormals[offset + 2] = nz * invLen;
+  }
+
   /**
    * Compute smooth blended vertex color at (wx, wz) across all 10 biomes
    */
@@ -525,37 +556,51 @@ export class TerrainGenerator {
     const spec = MODULAR_BIOME_SPECS[biome];
     targetColor.set(spec.colorHex);
 
-    // Subtle organic micro-variation
-    const noise = (Math.sin(wx * 0.08 + wz * 0.06) + Math.cos(wx * 0.05 - wz * 0.09)) * 0.018;
-    targetColor.offsetHSL(0, 0, noise);
+    // Multi-scale non-repeating macro meadow breakup (prevents visible grid tiling when zoomed out)
+    const macroWave =
+      Math.sin(wx * 0.0041 + wz * 0.0033) * 0.5 +
+      Math.cos(wx * 0.0097 - wz * 0.0083) * 0.5;
+    if (biome === 'green_plains' || biome === 'grass' || biome === 'hills') {
+      const emeraldMix = THREE.MathUtils.clamp((macroWave + 0.4) * 0.24, 0, 0.36);
+      targetColor.lerp(this._macroEmeraldCol, emeraldMix);
+
+      // Warm sunlit highland crests for natural terrain elevation legibility
+      if (elev > 11.5) {
+        const crestMix = THREE.MathUtils.clamp((elev - 11.5) / 14.0, 0, 0.34);
+        targetColor.lerp(this._sunlitCrestCol, crestMix);
+      }
+    }
+
+    // Subtle organic micro-variation using incommensurate frequencies
+    const microNoise =
+      (Math.sin(wx * 0.067 + wz * 0.053) + Math.cos(wx * 0.043 - wz * 0.079)) * 0.016;
+    targetColor.offsetHSL(0, 0, microNoise);
 
     // Lush emerald floodplain gradient along Nile Riverbanks
     const nile = getDistanceToNile(wx, wz);
     if (nile.distBeyondWater > 2.0 && nile.distBeyondWater < 48.0) {
       const bankFade = 1.0 - (nile.distBeyondWater - 2.0) / 46.0;
-      const fertileCol = new THREE.Color('#2c7435');
-      targetColor.lerp(fertileCol, bankFade * 0.52);
+      targetColor.lerp(this._fertileCol, bankFade * 0.55);
     }
 
-    // Darken steep cliff slopes for realistic stratified rock contrast
-    if (slopeDiff > 2.2) {
-      const cliffShade = Math.min(0.38, (slopeDiff - 2.2) * 0.08);
-      targetColor.lerp(new THREE.Color('#27323f'), cliffShade);
+    // Subtle crevice & steep cliff shading for crisp 3D relief
+    if (slopeDiff > 1.8) {
+      const cliffShade = Math.min(0.42, (slopeDiff - 1.8) * 0.085);
+      targetColor.lerp(this._cliffShadeCol, cliffShade);
     }
 
     // Smooth road border blend
     const dRoad = this.getDistanceToRoads(wx, wz);
     if (dRoad < 9.5 && dRoad > 5.0 && elev < 24.0 && nile.distBeyondWater > 4.0) {
       const t = (dRoad - 5.0) / 4.5;
-      const grassCol = new THREE.Color('#477d3a');
-      targetColor.lerp(grassCol, t * 0.65);
+      targetColor.lerp(this._roadGrassCol, t * 0.65);
     }
   }
 
   /**
    * Builds the Seamless High-Performance Modular Terrain with:
-   * - 8x8 Regional Indexed THREE.LOD Chunks (LOD0: 28x28, LOD1: 14x14, LOD2: 7x7)
-   * - Shared edge vertices between chunks for 100% crack-free seamless transitions
+   * - 8x8 Regional Indexed THREE.LOD Chunks (LOD0: 26x26, LOD1: 13x13, LOD2: 7x7)
+   * - Shared edge vertices + analytical global normals for 100% seam-free shading
    * - 10 Biome Tile Metadata & Optional Tactical Seam Grid Overlay
    */
   private createSeamlessModularTerrain() {
@@ -569,9 +614,9 @@ export class TerrainGenerator {
       vertexColors: true,
       map: detailAlbedo,
       normalMap: normalMap,
-      normalScale: new THREE.Vector2(0.85, 0.85),
-      roughness: 0.78,
-      metalness: 0.08,
+      normalScale: new THREE.Vector2(1.05, 1.05),
+      roughness: 0.87,
+      metalness: 0.04,
       flatShading: false,
     });
 
@@ -650,12 +695,13 @@ export class TerrainGenerator {
       const totalVerts = vertCountPerRow * vertCountPerRow;
 
       const positions = new Float32Array(totalVerts * 3);
+      const normals = new Float32Array(totalVerts * 3);
       const uvs = new Float32Array(totalVerts * 2);
       const colors = new Float32Array(totalVerts * 3);
       const indices: number[] = [];
 
       const step = chunkSize / segments;
-      const uvScale = 0.035;
+      const uvScale = 0.044;
 
       let vIdx = 0;
       for (let iz = 0; iz <= segments; iz++) {
@@ -672,6 +718,8 @@ export class TerrainGenerator {
           positions[vIdx * 3] = wx - originX;
           positions[vIdx * 3 + 1] = wy;
           positions[vIdx * 3 + 2] = wz - originZ;
+
+          this.computeAnalyticalNormal(wx, wz, normals, vIdx * 3);
 
           uvs[vIdx * 2] = wx * uvScale;
           uvs[vIdx * 2 + 1] = wz * uvScale;
@@ -700,9 +748,9 @@ export class TerrainGenerator {
       const geo = new THREE.BufferGeometry();
       geo.setIndex(indices);
       geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+      geo.setAttribute('normal', new THREE.BufferAttribute(normals, 3));
       geo.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
       geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-      geo.computeVertexNormals();
 
       const triCount = segments * segments * 2;
       if (lodLevel === 0) this.totalTrianglesByLod.lod0 += triCount;
@@ -779,100 +827,138 @@ export class TerrainGenerator {
 
   /**
    * Builds 4 stitched outer lush green highland border skirts (-6800..10000)
-   * matching exact inner chunk edge elevations along x=0.5/3199.5 and z=0.5/3199.5
-   * so all screen edges and corners remain covered in continuous green land at full Zoom Out 100.
+   * matching exact inner chunk edge vertices 1-to-1 along x=0.5/3199.5 and z=0.5/3199.5
+   * with analytical normals and C1 color blending so zero seams or T-junction cracks ever appear.
    */
   private createOuterMountainBorder() {
     const EXTENT = 6800;
+    const uvScale = 0.044;
     const tempColor = new THREE.Color();
+    const edgeColor = new THREE.Color();
     const plainsCol = new THREE.Color('#3f7638');
     const meadowCol = new THREE.Color('#4f883d');
     const forestCol = new THREE.Color('#2b522a');
     const hillCol = new THREE.Color('#5a7a42');
 
-    const evalEdgeAndOuterPoint = (wx: number, wz: number) => {
+    // Exact 1-to-1 vertex grid matching the 8x26 LOD0 chunk perimeter (209 samples across 0.5..3199.5)
+    const innerEdgeCoords: number[] = [];
+    const totalInnerSegs = 8 * 26;
+    for (let i = 0; i <= totalInnerSegs; i++) {
+      innerEdgeCoords.push(THREE.MathUtils.clamp((i * 3200) / totalInnerSegs, 0.5, 3199.5));
+    }
+
+    // Quadratic ease-out radial distribution: dense (~24m) near playable edge, sparse out to horizon
+    const buildWingCoords = (innerEdge: number, farEdge: number, steps: number): number[] => {
+      const coords: number[] = [];
+      for (let i = 0; i <= steps; i++) {
+        const t = i / steps;
+        const eased = farEdge < innerEdge ? 1 - Math.pow(1 - t, 2.2) : Math.pow(t, 2.2);
+        const val = farEdge < innerEdge
+          ? THREE.MathUtils.lerp(farEdge, innerEdge, eased)
+          : THREE.MathUtils.lerp(innerEdge, farEdge, eased);
+        coords.push(val);
+      }
+      return coords;
+    };
+
+    const westWingX = buildWingCoords(0.5, -EXTENT, 22);
+    const eastWingX = buildWingCoords(3199.5, 3200 + EXTENT, 22);
+    const northWingZ = buildWingCoords(0.5, -EXTENT, 22);
+    const southWingZ = buildWingCoords(3199.5, 3200 + EXTENT, 22);
+
+    // Combine [-EXTENT..0.5] + [0.5..3199.5] + [3199.5..3200+EXTENT] without duplicating shared edge verts
+    const fullWidthX = [
+      ...westWingX.slice(0, -1),
+      ...innerEdgeCoords,
+      ...eastWingX.slice(1),
+    ];
+
+    const evalEdgeAndOuterPoint = (wx: number, wz: number, outColor: THREE.Color): number => {
       const cx = THREE.MathUtils.clamp(wx, 0.5, 3199.5);
       const cz = THREE.MathUtils.clamp(wz, 0.5, 3199.5);
       const edgeH = this.getHeightAt(cx, cz);
       const outDist = Math.hypot(wx - cx, wz - cz);
 
+      const hR = this.getHeightAt(Math.min(3199.5, cx + 4), cz);
+      const hU = this.getHeightAt(cx, Math.min(3199.5, cz + 4));
+      const edgeSlope = Math.hypot(edgeH - hR, edgeH - hU);
+      this.sampleBlendedTerrainColor(cx, cz, edgeH, edgeSlope, edgeColor);
+
       if (outDist <= 0.01) {
-        const hR = this.getHeightAt(Math.min(3199.5, cx + 4), cz);
-        const hU = this.getHeightAt(cx, Math.min(3199.5, cz + 4));
-        const slope = Math.hypot(edgeH - hR, edgeH - hU);
-        this.sampleBlendedTerrainColor(cx, cz, edgeH, slope, tempColor);
-        return { wy: edgeH, color: tempColor.clone() };
+        outColor.copy(edgeColor);
+        return edgeH;
       }
 
       const wy = this.getHeightAt(wx, wz);
 
-      // Keep lush green Nile bank color along southern/northern river mouths and blend seamlessly into verdant hills
+      // Compute outer lush green hill palette, then smoothly blend from exact edgeColor over 0..240m
       const nile = getDistanceToNile(wx, wz);
-      const col = new THREE.Color();
-      if (outDist < 85 && nile.distBeyondWater < 28) {
+      if (outDist < 120 && nile.distBeyondWater < 28) {
         if (nile.distBeyondWater < 5) {
-          col.set('#4f5242');
+          outColor.set('#4f5242');
         } else {
-          col.set('#2c7435').lerp(meadowCol, THREE.MathUtils.clamp(outDist / 85, 0, 1));
+          outColor.copy(this._fertileCol).lerp(meadowCol, THREE.MathUtils.clamp(outDist / 120, 0, 1));
         }
       } else {
         const biomeWave = Math.sin(wx * 0.0045 + wz * 0.0038) * 0.5 + 0.5;
         const crestWave = Math.cos(wx * 0.009 - wz * 0.008) * 0.5 + 0.5;
-        col.copy(plainsCol).lerp(meadowCol, biomeWave * 0.65);
-        if (wy > 26) {
-          col.lerp(hillCol, THREE.MathUtils.clamp((wy - 26) / 28, 0, 0.55));
+        outColor.copy(plainsCol).lerp(meadowCol, biomeWave * 0.65);
+        if (wy > 24) {
+          outColor.lerp(hillCol, THREE.MathUtils.clamp((wy - 24) / 28, 0, 0.55));
         }
-        if (crestWave > 0.58) {
-          col.lerp(forestCol, (crestWave - 0.58) * 1.15);
+        if (crestWave > 0.56) {
+          outColor.lerp(forestCol, (crestWave - 0.56) * 1.15);
         }
-        col.offsetHSL(0, 0, Math.sin(wx * 0.014 + wz * 0.011) * 0.015);
+        outColor.offsetHSL(0, 0, Math.sin(wx * 0.014 + wz * 0.011) * 0.015);
       }
 
-      return { wy, color: col };
+      const borderColorFade = THREE.MathUtils.smoothstep(outDist, 0, 240);
+      tempColor.copy(edgeColor).lerp(outColor, borderColorFade);
+      outColor.copy(tempColor);
+
+      return wy;
     };
 
-    const buildPerimeterStrip = (
-      xMin: number,
-      xMax: number,
-      zMin: number,
-      zMax: number,
-      segX: number,
-      segZ: number
-    ) => {
-      const vertsPerRow = segX + 1;
-      const totalVerts = (segX + 1) * (segZ + 1);
+    const buildSkirtFromAxes = (xs: number[], zs: number[]) => {
+      const cols = xs.length;
+      const rows = zs.length;
+      const totalVerts = cols * rows;
       const positions = new Float32Array(totalVerts * 3);
+      const normals = new Float32Array(totalVerts * 3);
       const uvs = new Float32Array(totalVerts * 2);
       const colors = new Float32Array(totalVerts * 3);
       const indices: number[] = [];
+      const vertexCol = new THREE.Color();
 
       let vIdx = 0;
-      for (let iz = 0; iz <= segZ; iz++) {
-        const wz = THREE.MathUtils.lerp(zMin, zMax, iz / segZ);
-        for (let ix = 0; ix <= segX; ix++) {
-          const wx = THREE.MathUtils.lerp(xMin, xMax, ix / segX);
-          const { wy, color } = evalEdgeAndOuterPoint(wx, wz);
+      for (let iz = 0; iz < rows; iz++) {
+        const wz = zs[iz];
+        for (let ix = 0; ix < cols; ix++) {
+          const wx = xs[ix];
+          const wy = evalEdgeAndOuterPoint(wx, wz, vertexCol);
 
           positions[vIdx * 3] = wx;
           positions[vIdx * 3 + 1] = wy;
           positions[vIdx * 3 + 2] = wz;
 
-          uvs[vIdx * 2] = wx * 0.035;
-          uvs[vIdx * 2 + 1] = wz * 0.035;
+          this.computeAnalyticalNormal(wx, wz, normals, vIdx * 3);
 
-          colors[vIdx * 3] = color.r;
-          colors[vIdx * 3 + 1] = color.g;
-          colors[vIdx * 3 + 2] = color.b;
+          uvs[vIdx * 2] = wx * uvScale;
+          uvs[vIdx * 2 + 1] = wz * uvScale;
+
+          colors[vIdx * 3] = vertexCol.r;
+          colors[vIdx * 3 + 1] = vertexCol.g;
+          colors[vIdx * 3 + 2] = vertexCol.b;
           vIdx++;
         }
       }
 
-      for (let iz = 0; iz < segZ; iz++) {
-        for (let ix = 0; ix < segX; ix++) {
-          const a = iz * vertsPerRow + ix;
-          const b = iz * vertsPerRow + (ix + 1);
-          const c = (iz + 1) * vertsPerRow + ix;
-          const d = (iz + 1) * vertsPerRow + (ix + 1);
+      for (let iz = 0; iz < rows - 1; iz++) {
+        for (let ix = 0; ix < cols - 1; ix++) {
+          const a = iz * cols + ix;
+          const b = iz * cols + (ix + 1);
+          const c = (iz + 1) * cols + ix;
+          const d = (iz + 1) * cols + (ix + 1);
           indices.push(a, c, b);
           indices.push(b, c, d);
         }
@@ -881,9 +967,9 @@ export class TerrainGenerator {
       const geo = new THREE.BufferGeometry();
       geo.setIndex(indices);
       geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+      geo.setAttribute('normal', new THREE.BufferAttribute(normals, 3));
       geo.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
       geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-      geo.computeVertexNormals();
 
       const mesh = new THREE.Mesh(geo, this.terrainMaterial);
       mesh.receiveShadow = true;
@@ -891,12 +977,12 @@ export class TerrainGenerator {
       this.mesh.add(mesh);
     };
 
-    // North & South full-width borders (cover all 4 green corners cleanly at Zoom Out 100)
-    buildPerimeterStrip(-EXTENT, 3200 + EXTENT, 3199.5, 3200 + EXTENT, 64, 18);
-    buildPerimeterStrip(-EXTENT, 3200 + EXTENT, -EXTENT, 0.5, 64, 18);
-    // West & East side borders
-    buildPerimeterStrip(-EXTENT, 0.5, 0.5, 3199.5, 18, 40);
-    buildPerimeterStrip(3199.5, 3200 + EXTENT, 0.5, 3199.5, 18, 40);
+    // South & North full-width skirts (exact 209-vertex match along 0.5..3199.5 + wide corner wings)
+    buildSkirtFromAxes(fullWidthX, southWingZ);
+    buildSkirtFromAxes(fullWidthX, northWingZ);
+    // West & East skirts (exact 209-vertex match along z=0.5..3199.5)
+    buildSkirtFromAxes(westWingX, innerEdgeCoords);
+    buildSkirtFromAxes(eastWingX, innerEdgeCoords);
   }
 
   private buildHexGridOverlay() {

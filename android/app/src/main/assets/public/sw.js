@@ -87,7 +87,10 @@ define(['./workbox-afac4cd2'], (function (workbox) { 'use strict';
     "revision": "baee7932c47b483452047731c7d9d990"
   }, {
     "url": "index.html",
-    "revision": "85fa5950568dff5fb0965d992b5013a1"
+    "revision": "0c5a7d96cc19a65abc46f11d0aa81395"
+  }, {
+    "url": "favicon.ico",
+    "revision": "bced82f6fc61f49f97449e34128d81fa"
   }, {
     "url": "favicon-32x32.png",
     "revision": "df67d26c20dc0d4f19da8ed3e04f0ddb"
@@ -98,22 +101,22 @@ define(['./workbox-afac4cd2'], (function (workbox) { 'use strict';
     "url": "assets/workbox-window.prod.es5-Bd17z0YL.js",
     "revision": null
   }, {
-    "url": "assets/three-vendor-wzbMkuP-.js",
+    "url": "assets/three-vendor-CPYgzXdI.js",
     "revision": null
   }, {
-    "url": "assets/index-BYAdFROy.js",
+    "url": "assets/index-HCwtPEyO.js",
     "revision": null
   }, {
     "url": "assets/index-BRYu6DSd.css",
     "revision": null
   }, {
-    "url": "assets/StrategicWorldMapModal-BJyy6aSv.js",
+    "url": "assets/StrategicWorldMapModal-D796LP1_.js",
     "revision": null
   }, {
-    "url": "assets/InsideKingdomView-BnUVq7gx.js",
+    "url": "assets/InsideKingdomView-BFi01rvc.js",
     "revision": null
   }, {
-    "url": "assets/CommandHubDrawer-D5eEvy-W.js",
+    "url": "assets/CommandHubDrawer-iNUoMSeZ.js",
     "revision": null
   }, {
     "url": "assets/aistudio/screenshot_1_2be6e62f.png",
@@ -123,6 +126,9 @@ define(['./workbox-afac4cd2'], (function (workbox) { 'use strict';
     "revision": null
   }, {
     "url": "assets/aistudio/image_3cae993f.png",
+    "revision": null
+  }, {
+    "url": "assets/aistudio/image_250842e5.png",
     "revision": null
   }, {
     "url": "assets/aistudio/Floating_Crystal_Shrine_0794aa82.png",

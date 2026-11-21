@@ -9,7 +9,24 @@ const versionFile = path.join(rootDir, 'apk-version.json');
 const gradleFile = path.join(rootDir, 'android', 'app', 'build.gradle');
 const packageJsonFile = path.join(rootDir, 'package.json');
 
-const syncOnly = process.argv.includes('--sync');
+const args = process.argv.slice(2);
+const syncOnly = args.includes('--sync');
+
+let ciRunOffset = 0;
+for (let i = 0; i < args.length; i++) {
+  const arg = args[i];
+  if (arg === '--ci-run' && args[i + 1]) {
+    const parsed = parseInt(args[i + 1], 10);
+    if (Number.isFinite(parsed) && parsed > 0) {
+      ciRunOffset = parsed;
+    }
+  } else if (arg.startsWith('--ci-run=')) {
+    const parsed = parseInt(arg.split('=')[1], 10);
+    if (Number.isFinite(parsed) && parsed > 0) {
+      ciRunOffset = parsed;
+    }
+  }
+}
 
 let current = { versionCode: 1, versionName: '1.0.0' };
 if (fs.existsSync(versionFile)) {
@@ -26,16 +43,18 @@ if (fs.existsSync(versionFile)) {
 let nextCode = current.versionCode;
 let nextName = current.versionName;
 
-if (!syncOnly) {
-  nextCode = current.versionCode + 1;
+const bumpBy = syncOnly ? 0 : ciRunOffset > 0 ? ciRunOffset : 1;
+
+if (bumpBy > 0) {
+  nextCode = current.versionCode + bumpBy;
   const parts = current.versionName.split('.').map((n) => parseInt(n, 10));
   if (parts.length >= 3 && parts.every((n) => Number.isFinite(n))) {
-    parts[2] += 1;
+    parts[2] += bumpBy;
     nextName = `${parts[0]}.${parts[1]}.${parts[2]}`;
   } else if (parts.length === 2 && parts.every((n) => Number.isFinite(n))) {
-    nextName = `${parts[0]}.${parts[1]}.1`;
+    nextName = `${parts[0]}.${parts[1]}.${bumpBy}`;
   } else {
-    nextName = `1.0.${nextCode - 1}`;
+    nextName = `1.0.${Math.max(0, nextCode - 1)}`;
   }
 }
 
@@ -55,4 +74,13 @@ if (fs.existsSync(gradleFile)) {
   fs.writeFileSync(gradleFile, gradle, 'utf8');
 }
 
-console.log(`[APK Version] ${syncOnly ? 'Synced' : 'Bumped'} -> versionName=${nextName} (versionCode=${nextCode})`);
+if (process.env.GITHUB_OUTPUT) {
+  fs.appendFileSync(
+    process.env.GITHUB_OUTPUT,
+    `version_code=${nextCode}\nversion_name=${nextName}\n`,
+    'utf8'
+  );
+}
+
+const modeLabel = syncOnly ? 'Synced' : ciRunOffset > 0 ? `CI-Bumped (+${ciRunOffset})` : 'Bumped';
+console.log(`[APK Version] ${modeLabel} -> versionName=${nextName} (versionCode=${nextCode})`);
