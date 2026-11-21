@@ -25,9 +25,10 @@ jobs:
           distribution: 'temurin'
           java-version: '21'
 
-      - name: Install Dependencies & Build Web Bundle
+      - name: Auto-Bump APK Version & Build Web Bundle
         run: |
           npm ci
+          node scripts/bump-apk-version.mjs
           npm run build
           npx cap sync android
 
@@ -39,8 +40,13 @@ jobs:
           cd android
           ./gradlew assembleDebug
 
+      - name: Package & Upload Android APK Artifact
+        run: |
+          mkdir -p android-apk
+          cp android/app/build/outputs/apk/debug/app-debug.apk android-apk/Himalayan-Realms-debug.apk
+
       - name: Upload Android APK Artifact
         uses: actions/upload-artifact@v4
         with:
           name: HimalayanRealms-debug-apk
-          path: android/app/build/outputs/apk/debug/app-debug.apk
+          path: android-apk/Himalayan-Realms-debug.apk

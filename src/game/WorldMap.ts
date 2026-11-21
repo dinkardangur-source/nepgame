@@ -12,11 +12,15 @@ import {
   STRATEGIC_DISTANCE_LINKS,
   WORLD_MONSTERS,
   WORLD_RESOURCES,
+  WORLD_BOUNDS,
   WorldEntity,
   EntityAction,
   CastleSpawnData,
+  PlayerAllianceIdentity,
   generateRandomCastles,
+  pickValidCastleCoordinate,
 } from './WorldCoordinates';
+import { getEnemyCastleMaxHp, loadAllianceIdentity } from './NepaleseBalanceConfig';
 import {
   createStoneBrickTexture,
   createWoodPlankTexture,
@@ -53,6 +57,30 @@ export interface WorldMapOptions {
   onEnterKingdom?: () => void;
   onInsideKingdomStateChange?: (state: InsideKingdomState) => void;
   onCastlesUpdated?: (castles: CastleSpawnData[]) => void;
+  onSceneReady?: () => void;
+}
+
+let cachedSoftwareWebGL: boolean | null = null;
+function detectSoftwareWebGL(): boolean {
+  if (cachedSoftwareWebGL !== null) return cachedSoftwareWebGL;
+  try {
+    const probeCanvas = document.createElement('canvas');
+    const probe =
+      (probeCanvas.getContext('webgl2') as WebGL2RenderingContext | null) ||
+      (probeCanvas.getContext('webgl') as WebGLRenderingContext | null);
+    if (!probe) {
+      cachedSoftwareWebGL = true;
+      return true;
+    }
+    const ext = probe.getExtension('WEBGL_debug_renderer_info');
+    const param = ext ? ext.UNMASKED_RENDERER_WEBGL : probe.RENDERER;
+    const gpu = String(probe.getParameter(param) || '');
+    probe.getExtension('WEBGL_lose_context')?.loseContext();
+    cachedSoftwareWebGL = /SwiftShader|llvmpipe|softpipe|Software|Basic Render/i.test(gpu);
+  } catch {
+    cachedSoftwareWebGL = false;
+  }
+  return cachedSoftwareWebGL;
 }
 
 /**
@@ -60,81 +88,81 @@ export interface WorldMapOptions {
  */
 function createHimalayanSkylineTexture(): THREE.CanvasTexture {
   const canvas = document.createElement('canvas');
-  canvas.width = 2048;
-  canvas.height = 1024;
+  canvas.width = 1024;
+  canvas.height = 512;
   const ctx = canvas.getContext('2d');
   if (!ctx) return new THREE.CanvasTexture(canvas);
 
-  // 1. Sky Gradient: Azure to warm golden horizon
-  const skyGrad = ctx.createLinearGradient(0, 0, 0, 750);
+  // 1. Sky Gradient: Crisp azure to warm golden horizon
+  const skyGrad = ctx.createLinearGradient(0, 0, 0, 380);
   skyGrad.addColorStop(0, '#0f2942');
-  skyGrad.addColorStop(0.35, '#1e40af');
-  skyGrad.addColorStop(0.65, '#38bdf8');
-  skyGrad.addColorStop(0.85, '#fed7aa');
+  skyGrad.addColorStop(0.35, '#1d4ed8');
+  skyGrad.addColorStop(0.68, '#38bdf8');
+  skyGrad.addColorStop(0.88, '#bae6fd');
   skyGrad.addColorStop(1.0, '#fef08a');
   ctx.fillStyle = skyGrad;
-  ctx.fillRect(0, 0, 2048, 1024);
+  ctx.fillRect(0, 0, 1024, 512);
 
   // Morning sun disk
-  const sunGrad = ctx.createRadialGradient(1500, 320, 10, 1500, 320, 160);
+  const sunGrad = ctx.createRadialGradient(750, 160, 5, 750, 160, 80);
   sunGrad.addColorStop(0, '#fffbeb');
   sunGrad.addColorStop(0.3, '#fef08a');
   sunGrad.addColorStop(0.8, 'rgba(253, 224, 71, 0.25)');
   sunGrad.addColorStop(1, 'rgba(253, 224, 71, 0)');
   ctx.fillStyle = sunGrad;
   ctx.beginPath();
-  ctx.arc(1500, 320, 160, 0, Math.PI * 2);
+  ctx.arc(750, 160, 80, 0, Math.PI * 2);
   ctx.fill();
 
-  // 2. Distant Snow Peaks (Everest, Annapurna, Machapuchare)
-  ctx.fillStyle = '#f8fafc';
+  // 2. Distant Lush Emerald Highland Ridges (No snow)
+  ctx.fillStyle = '#3b6e4c';
   ctx.beginPath();
-  ctx.moveTo(0, 720);
-  for (let x = 0; x <= 2048; x += 16) {
-    const peak1 = Math.sin(x * 0.007) * 170;
-    const peak2 = Math.cos(x * 0.018) * 95;
-    const peak3 = Math.sin(x * 0.045) * 40;
-    const y = 490 - (peak1 + peak2 + peak3);
+  ctx.moveTo(0, 360);
+  for (let x = 0; x <= 1024; x += 16) {
+    const peak1 = Math.sin(x * 0.014) * 78;
+    const peak2 = Math.cos(x * 0.036) * 44;
+    const peak3 = Math.sin(x * 0.09) * 18;
+    const y = 250 - (peak1 + peak2 + peak3);
     ctx.lineTo(x, y);
   }
-  ctx.lineTo(2048, 1024);
-  ctx.lineTo(0, 1024);
+  ctx.lineTo(1024, 512);
+  ctx.lineTo(0, 512);
   ctx.closePath();
   ctx.fill();
 
-  // Shaded mountain slopes
-  ctx.fillStyle = 'rgba(148, 163, 184, 0.45)';
+  // Shaded emerald slopes
+  ctx.fillStyle = 'rgba(29, 78, 52, 0.55)';
   ctx.beginPath();
-  ctx.moveTo(0, 720);
-  for (let x = 0; x <= 2048; x += 20) {
-    const y = 525 - (Math.sin(x * 0.007 + 0.5) * 150 + Math.cos(x * 0.02) * 75);
+  ctx.moveTo(0, 360);
+  for (let x = 0; x <= 1024; x += 16) {
+    const y = 268 - (Math.sin(x * 0.014 + 0.5) * 68 + Math.cos(x * 0.04) * 34);
     ctx.lineTo(x, y);
   }
-  ctx.lineTo(2048, 1024);
-  ctx.lineTo(0, 1024);
+  ctx.lineTo(1024, 512);
+  ctx.lineTo(0, 512);
   ctx.closePath();
   ctx.fill();
 
-  // 3. Mid-range Mountain Ridges with Pine Forest
-  ctx.fillStyle = '#1e293b';
+  // 3. Mid-range Forested Ridges
+  ctx.fillStyle = '#1b4332';
   ctx.beginPath();
-  ctx.moveTo(0, 780);
-  for (let x = 0; x <= 2048; x += 32) {
-    const y = 650 - (Math.sin(x * 0.012) * 85 + Math.cos(x * 0.028) * 45);
+  ctx.moveTo(0, 390);
+  for (let x = 0; x <= 1024; x += 24) {
+    const y = 328 - (Math.sin(x * 0.024) * 42 + Math.cos(x * 0.056) * 22);
     ctx.lineTo(x, y);
   }
-  ctx.lineTo(2048, 1024);
-  ctx.lineTo(0, 1024);
+  ctx.lineTo(1024, 512);
+  ctx.lineTo(0, 512);
   ctx.closePath();
   ctx.fill();
 
-  // 4. Soft Mountain Mist
-  const mistGrad = ctx.createLinearGradient(0, 640, 0, 960);
-  mistGrad.addColorStop(0, 'rgba(255, 255, 255, 0)');
-  mistGrad.addColorStop(0.5, 'rgba(241, 245, 249, 0.6)');
-  mistGrad.addColorStop(1, 'rgba(226, 232, 240, 0.95)');
+  // 4. Warm Horizon Atmospheric Haze
+  const mistGrad = ctx.createLinearGradient(0, 320, 0, 512);
+  mistGrad.addColorStop(0, 'rgba(186, 230, 253, 0)');
+  mistGrad.addColorStop(0.55, 'rgba(198, 223, 238, 0.5)');
+  mistGrad.addColorStop(1, 'rgba(184, 216, 235, 0.92)');
   ctx.fillStyle = mistGrad;
-  ctx.fillRect(0, 640, 2048, 320);
+  ctx.fillRect(0, 320, 1024, 192);
 
   const texture = new THREE.CanvasTexture(canvas);
   texture.wrapS = THREE.RepeatWrapping;
@@ -178,7 +206,21 @@ export class WorldMap {
   private pickableObjects: THREE.Object3D[] = [];
   public entitiesMap = new Map<string, WorldEntity>();
   private monsterMeshesMap = new Map<string, THREE.Group>();
+  private resourceMeshesMap = new Map<string, THREE.Group>();
   private buildingMeshesMap = new Map<string, THREE.Group>();
+  private barrierMeshesMap = new Map<string, THREE.Mesh>();
+
+  // External App-driven march visual override (when Nepalese Balance Simulation drives marches)
+  private externalMarchVisual: {
+    from: [number, number, number];
+    to: [number, number, number];
+    progress01: number;
+    label: string;
+    isReturning?: boolean;
+    inCombatOrGathering?: boolean;
+    resourceType?: string;
+  } | null = null;
+  private externalMiningTimer = 0;
 
   // Selection ring indicator
   private selectionIndicator!: THREE.Mesh;
@@ -189,8 +231,8 @@ export class WorldMap {
 
   // Army State - Troops originate from User's "My Castle" gate
   public armyState: 'IDLE' | 'MARCHING' | 'ATTACKING' | 'GATHERING' | 'RETURNING' = 'IDLE';
-  public armyHomePos = new THREE.Vector3(800, 10.0, 751);
-  public armyPos = new THREE.Vector3(800, 10.0, 751);
+  public armyHomePos = new THREE.Vector3(1600, 10.0, 1551);
+  public armyPos = new THREE.Vector3(1600, 10.0, 1551);
   private activeTarget: WorldEntity | null = null;
   private totalMarchDist = 0;
   private combatTimer = 0;
@@ -250,6 +292,9 @@ export class WorldMap {
 
   // Shared particle geometries & pre-allocated vectors for Zero-GC 60FPS performance
   private isSoftwareGl = false;
+  private isDisposed = false;
+  private isContextLost = false;
+  private hasCompiledScene = false;
   private sharedSparkGeo = new THREE.SphereGeometry(0.12, 5, 5);
   private sharedSparkMat = new THREE.MeshBasicMaterial({ color: 0xffe066 });
   private sharedChipGeo = new THREE.BoxGeometry(0.22, 0.22, 0.22);
@@ -295,6 +340,64 @@ export class WorldMap {
   private atmosphericClouds: Array<{ group: THREE.Group; baseX: number; baseZ: number; speedX: number; phase: number }> = [];
   private soaringEagles: Array<{ group: THREE.Group; cx: number; cz: number; baseY: number; radius: number; speed: number; phase: number }> = [];
 
+  // Animated Floating Crystal Shrines (hover crystal, twin gold orbit rings, rising flames, crackling lightning)
+  private animatedShrines: Array<{
+    crystalGroup: THREE.Group;
+    crystalBaseY: number;
+    orbitRing1: THREE.Mesh;
+    orbitRing2: THREE.Mesh;
+    portalBeam: THREE.Mesh;
+    portalDisc: THREE.Mesh;
+    flameTongues: Array<{
+      mesh: THREE.Mesh;
+      baseX: number;
+      baseY: number;
+      baseZ: number;
+      phase: number;
+      speed: number;
+    }>;
+    waterfallFoams: THREE.Mesh[];
+    banners: THREE.Mesh[];
+    lightningBolts: Array<{
+      line: THREE.Line;
+      positions: Float32Array;
+      startX: number;
+      startY: number;
+      startZ: number;
+      endX: number;
+      endY: number;
+      endZ: number;
+      jitter: number;
+      phase: number;
+    }>;
+    lightningMat: THREE.LineBasicMaterial;
+    lastBoltBucket: number;
+    phase: number;
+  }> = [];
+
+  // Dynamic Player Alliance Identity ([TAG] + 4-word Alias)
+  private playerAlliance: PlayerAllianceIdentity = loadAllianceIdentity();
+  private castleBadgeRefs = new Map<
+    string,
+    {
+      castle: CastleSpawnData;
+      group: THREE.Group;
+      badgeSprite: THREE.Sprite;
+      badgeY: number;
+    }
+  >();
+
+  private castleBurningMap = new Map<
+    string,
+    {
+      group: THREE.Group;
+      flamesGroup: THREE.Group;
+      isBurning: boolean;
+      intensity: number;
+      smokeTimer: number;
+    }
+  >();
+
   // Conquest references for Shrine C/B/A & The Congress ownership swapping
   private conqueredCrystalMat!: THREE.MeshStandardMaterial;
   private conqueredRingMat!: THREE.MeshStandardMaterial;
@@ -302,10 +405,21 @@ export class WorldMap {
     string,
     {
       crystalMeshes: THREE.Mesh[];
+      neutralCrystalMats: THREE.Material[];
       ringMesh?: THREE.Mesh;
+      neutralRingMat?: THREE.Material;
       badgeSprite: THREE.Sprite;
       group: THREE.Group;
       badgeY: number;
+      neutralBadge: {
+        title: string;
+        subtitle: string;
+        starsText: string;
+        borderColor: string;
+        accentColor: string;
+        scaleW: number;
+        scaleH: number;
+      };
     }
   >();
 
@@ -328,9 +442,11 @@ export class WorldMap {
   private onEnterKingdom?: () => void;
   private onInsideKingdomStateChange?: (state: InsideKingdomState) => void;
   private onCastlesUpdated?: (castles: CastleSpawnData[]) => void;
+  private onSceneReady?: () => void;
+  private hasNotifiedReady = false;
 
-  // 3D Inside Kingdom Walled Courtyard & Merge System
-  public insideKingdom3D!: InsideKingdom3D;
+  // 3D Inside Kingdom Walled Courtyard & Merge System (Lazily initialized on first enter)
+  public insideKingdom3D: InsideKingdom3D | null = null;
   public currentSceneMode: 'world' | 'kingdom' = 'world';
   private resizeObserver: ResizeObserver | null = null;
 
@@ -347,6 +463,7 @@ export class WorldMap {
     this.onEnterKingdom = options.onEnterKingdom;
     this.onInsideKingdomStateChange = options.onInsideKingdomStateChange;
     this.onCastlesUpdated = options.onCastlesUpdated;
+    this.onSceneReady = options.onSceneReady;
 
     this.sharedArrowGeo.rotateX(Math.PI / 2);
     this.sharedShockwaveGeo.rotateX(Math.PI / 2);
@@ -358,7 +475,6 @@ export class WorldMap {
     this.initKingdomBuildings();
     this.initStrategicDistanceLines();
     this.initRandomCastles();
-    this.initInsideKingdom3D();
     this.initMonsters();
     this.initResources();
     this.initArmyBattalion();
@@ -371,13 +487,11 @@ export class WorldMap {
       this.cameraController.setHomeCoordinates(myCastle.position[0], myCastle.position[2], true);
     }
 
-    if (!this.isSoftwareGl) {
-      this.renderer.compile(this.scene, this.cameraController.camera);
-    }
     this.startLoop();
   }
 
-  private initInsideKingdom3D() {
+  private ensureInsideKingdom3D(): InsideKingdom3D {
+    if (this.insideKingdom3D) return this.insideKingdom3D;
     this.insideKingdom3D = new InsideKingdom3D({
       onStateChange: (state) => {
         this.onInsideKingdomStateChange?.(state);
@@ -393,35 +507,52 @@ export class WorldMap {
     });
     this.insideKingdom3D.rootGroup.visible = false;
     this.scene.add(this.insideKingdom3D.rootGroup);
+    return this.insideKingdom3D;
   }
 
+  private onContextLost = (e: Event) => {
+    e.preventDefault();
+    this.isContextLost = true;
+    cancelAnimationFrame(this.animFrameId);
+    clearTimeout(this.animFrameId);
+  };
+
+  private onContextRestored = () => {
+    if (this.isDisposed) return;
+    this.isContextLost = false;
+    this.hasCompiledScene = false;
+    try {
+      const pmremGenerator = new THREE.PMREMGenerator(this.renderer);
+      const roomEnv = new RoomEnvironment();
+      const prevEnv = this.scene.environment;
+      this.scene.environment = pmremGenerator.fromScene(roomEnv, 0.04).texture;
+      roomEnv.dispose();
+      pmremGenerator.dispose();
+      prevEnv?.dispose();
+    } catch {
+      // Ignore transient restore errors
+    }
+    this.startLoop();
+  };
+
   private initScene() {
-    this.isSoftwareGl = (() => {
-      try {
-        const probe = document.createElement('canvas').getContext('webgl2');
-        if (!probe) return true;
-        const ext = probe.getExtension('WEBGL_debug_renderer_info');
-        const param = ext ? ext.UNMASKED_RENDERER_WEBGL : probe.RENDERER;
-        const gpu = String(probe.getParameter(param));
-        probe.getExtension('WEBGL_lose_context')?.loseContext();
-        return /SwiftShader|llvmpipe|softpipe|Software|Basic Render/i.test(gpu);
-      } catch {
-        return false;
-      }
-    })();
+    this.isSoftwareGl = detectSoftwareWebGL();
 
     this.scene = new THREE.Scene();
-    this.scene.background = new THREE.Color('#38648c');
-    this.scene.fog = new THREE.FogExp2('#537f9e', 0.00085);
+    this.scene.background = new THREE.Color('#b8d8eb');
+    this.scene.fog = new THREE.FogExp2('#c6dfee', 0.00032);
 
     this.renderer = new THREE.WebGLRenderer({
       antialias: !this.isSoftwareGl,
       powerPreference: 'high-performance',
     });
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
-    this.renderer.setSize(this.container.clientWidth, this.container.clientHeight);
+    this.renderer.setSize(
+      Math.max(1, this.container.clientWidth),
+      Math.max(1, this.container.clientHeight)
+    );
     this.renderer.setPixelRatio(
-      this.isSoftwareGl ? 1 : Math.min(window.devicePixelRatio, 2)
+      this.isSoftwareGl ? 1 : Math.min(window.devicePixelRatio, 1.75)
     );
     this.renderer.shadowMap.enabled = !this.isSoftwareGl;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
@@ -430,16 +561,20 @@ export class WorldMap {
 
     // Realistic Studio Environment Map for metallic gold spires, water, and armor
     const pmremGenerator = new THREE.PMREMGenerator(this.renderer);
-    this.scene.environment = pmremGenerator.fromScene(new RoomEnvironment(), 0.04).texture;
+    const roomEnv = new RoomEnvironment();
+    this.scene.environment = pmremGenerator.fromScene(roomEnv, 0.04).texture;
+    roomEnv.dispose();
     pmremGenerator.dispose();
 
     this.renderer.domElement.style.touchAction = 'none';
+    this.renderer.domElement.addEventListener('webglcontextlost', this.onContextLost);
+    this.renderer.domElement.addEventListener('webglcontextrestored', this.onContextRestored);
     this.container.appendChild(this.renderer.domElement);
 
-    // Panoramic Himalayan Mountain Skyline Background Dome (sized for full 100% Zoom Out)
+    // Panoramic Emerald Highland Mountain Skyline Background Dome
     const skyTex = createHimalayanSkylineTexture();
     skyTex.colorSpace = THREE.SRGBColorSpace;
-    const skyGeo = new THREE.CylinderGeometry(4400, 4400, 1800, 64, 1, true);
+    const skyGeo = new THREE.CylinderGeometry(10500, 10500, 4800, 64, 1, true);
     const skyMat = new THREE.MeshBasicMaterial({
       map: skyTex,
       side: THREE.BackSide,
@@ -447,7 +582,7 @@ export class WorldMap {
       fog: false,
     });
     const skyMesh = new THREE.Mesh(skyGeo, skyMat);
-    skyMesh.position.set(800, 260, 800);
+    skyMesh.position.set(WORLD_BOUNDS.CENTER_X, 500, WORLD_BOUNDS.CENTER_Z);
     this.scene.add(skyMesh);
   }
 
@@ -457,7 +592,7 @@ export class WorldMap {
 
     this.sunLight = new THREE.DirectionalLight(0xffedd5, 3.4);
     this.sunLight.castShadow = !this.isSoftwareGl;
-    this.sunLight.shadow.mapSize.set(2048, 2048);
+    this.sunLight.shadow.mapSize.set(1024, 1024);
     this.sunLight.shadow.camera.left = -135;
     this.sunLight.shadow.camera.right = 135;
     this.sunLight.shadow.camera.top = 135;
@@ -507,9 +642,9 @@ export class WorldMap {
     });
 
     const cloudSpots: Array<[number, number, number, number]> = [
-      [260, 86, 260, 1.4], [1340, 90, 290, 1.5], [290, 92, 1340, 1.6], [1320, 88, 1310, 1.4],
-      [620, 82, 460, 1.2], [980, 84, 1140, 1.3], [440, 94, 960, 1.45], [1160, 85, 580, 1.25],
-      [800, 98, 220, 1.5], [800, 98, 1380, 1.5],
+      [280, 90, 280, 1.6], [2920, 94, 310, 1.7], [310, 96, 2920, 1.7], [2890, 92, 2880, 1.6],
+      [980, 86, 820, 1.4], [2140, 88, 2280, 1.45], [720, 98, 1780, 1.5], [2280, 88, 980, 1.4],
+      [1600, 100, 280, 1.6], [1600, 100, 2920, 1.6],
     ];
 
     cloudSpots.forEach(([cx, cy, cz, scale], i) => {
@@ -537,8 +672,8 @@ export class WorldMap {
     const eagleMat = new THREE.MeshStandardMaterial({ color: 0x3b281c, roughness: 0.85 });
 
     const eaglePeaks: Array<[number, number, number]> = [
-      [240, 66, 240], [1360, 68, 240], [240, 70, 1360], [1360, 72, 1360],
-      [800, 62, 800], [560, 58, 720], [1160, 60, 720],
+      [240, 66, 240], [2960, 68, 240], [240, 70, 2960], [2960, 72, 2960],
+      [1600, 62, 1600], [1320, 58, 1480], [1960, 60, 1480],
     ];
 
     eaglePeaks.forEach(([ex, ey, ez], idx) => {
@@ -749,7 +884,7 @@ export class WorldMap {
 
     // =====================================================================
     // 1. CENTRAL THE CONGRESS ("Emperor Congress Citadel of Crystal and Gold")
-    //    Coordinate: [800, 10.0, 800]
+    //    Coordinate: [1600, 10.0, 1600]
     // =====================================================================
     const congressPlot = RESERVED_PLOTS.find((p) => p.type === 'congress');
     if (congressPlot) {
@@ -837,10 +972,13 @@ export class WorldMap {
       citadelGroundRing.userData = { isBlessingRing: true };
       citadelGroup.add(citadelGroundRing);
 
+      const cTitle = 'THE CONGRESS';
+      const cSub = `Continent 1 Citadel · [${Math.round(congressPlot.position[0])}, ${Math.round(congressPlot.position[2])}]`;
+      const cStars = '👑 ★★★ CONGRESS (2C+1B+1A REQ) ★★★';
       const citadelBadge = this.createFloatingBadgeSprite(
-        'THE CONGRESS',
-        `Continent 1 Citadel · [${Math.round(congressPlot.position[0])}, ${Math.round(congressPlot.position[2])}]`,
-        '👑 ★★★ CONGRESS (ATTACKABLE) ★★★',
+        cTitle,
+        cSub,
+        cStars,
         '#facc15',
         '#fde047',
         18.5,
@@ -860,10 +998,21 @@ export class WorldMap {
       this.buildingsGroup.add(citadelGroup);
       this.buildingConquestRefs.set(congressPlot.id, {
         crystalMeshes: congressCrystalMeshes,
+        neutralCrystalMats: congressCrystalMeshes.map((m) => m.material as THREE.Material),
         ringMesh: citadelGroundRing,
+        neutralRingMat: goldRingMat,
         badgeSprite: citadelBadge,
         group: citadelGroup,
         badgeY: 36.5,
+        neutralBadge: {
+          title: cTitle,
+          subtitle: cSub,
+          starsText: cStars,
+          borderColor: '#facc15',
+          accentColor: '#fde047',
+          scaleW: 18.5,
+          scaleH: 5.8,
+        },
       });
       registerEntity(citadelGroup, {
         id: congressPlot.id,
@@ -885,304 +1034,646 @@ export class WorldMap {
     }
 
     // =====================================================================
-    // 2. FOUR INNER SANCTUM SHRINES (Shrine A1–A4)
+    // 2, 3 & 4. FLOATING CRYSTAL SHRINES (C = Purple, B = Red, A = Blue)
+    //   Modeled after the Floating Crystal Shrine Reference Architecture:
+    //   Outer mossy stone rim + moat + twin waterfalls + lotus stair runner +
+    //   4 gold-capped bastion towers w/ blue banners + inner portal basin +
+    //   hovering faceted crystal + 2 tilted gold rings + colored flames + lightning
     // =====================================================================
-    const aBaseGeo = new THREE.CylinderGeometry(6.8, 7.6, 4.8, 8);
-    const aTrimGeo = new THREE.CylinderGeometry(7.2, 7.2, 0.55, 8);
-    const aMidGeo = new THREE.CylinderGeometry(5.0, 5.8, 5.2, 8);
-    const aCrownGeo = new THREE.CylinderGeometry(5.6, 5.2, 1.2, 8);
-    const aTurretGeo = new THREE.CylinderGeometry(1.4, 1.7, 6.2, 6);
-    const aTurretCapGeo = new THREE.CylinderGeometry(1.6, 1.6, 0.4, 6);
-    const aTurretTipGeo = new THREE.ConeGeometry(1.25, 3.8, 5);
-    const aSpireGeo = new THREE.ConeGeometry(3.8, 11.5, 6);
-    const aOrbGeo = new THREE.OctahedronGeometry(0.75, 0);
-    const aRingGeo = new THREE.RingGeometry(7.6, 8.6, 28);
 
-    const shrineASites = RESERVED_PLOTS.filter((p) => p.type === 'shrine_a');
-    shrineASites.forEach((site) => {
+    // Procedural Royal Blue Banner & Carpet Texture with Golden Lotus Crest
+    const bannerCanvas = document.createElement('canvas');
+    bannerCanvas.width = 256;
+    bannerCanvas.height = 512;
+    const bCtx = bannerCanvas.getContext('2d');
+    if (bCtx) {
+      const bGrad = bCtx.createLinearGradient(0, 0, 0, 512);
+      bGrad.addColorStop(0, '#1e3a8a');
+      bGrad.addColorStop(0.55, '#1d4ed8');
+      bGrad.addColorStop(1, '#172554');
+      bCtx.fillStyle = bGrad;
+      bCtx.fillRect(0, 0, 256, 512);
+
+      // Gold side borders & top/bottom trim
+      bCtx.strokeStyle = '#facc15';
+      bCtx.lineWidth = 14;
+      bCtx.strokeRect(10, 10, 236, 492);
+      bCtx.strokeStyle = '#fef08a';
+      bCtx.lineWidth = 4;
+      bCtx.strokeRect(22, 22, 212, 468);
+
+      // Golden 5-petal Lotus Emblem
+      bCtx.save();
+      bCtx.translate(128, 256);
+      bCtx.fillStyle = '#facc15';
+      bCtx.strokeStyle = '#fef08a';
+      bCtx.lineWidth = 3;
+      const drawPetal = (angle: number, len: number, wid: number) => {
+        bCtx.save();
+        bCtx.rotate(angle);
+        bCtx.beginPath();
+        bCtx.moveTo(0, 14);
+        bCtx.quadraticCurveTo(wid, -len * 0.45, 0, -len);
+        bCtx.quadraticCurveTo(-wid, -len * 0.45, 0, 14);
+        bCtx.fill();
+        bCtx.stroke();
+        bCtx.restore();
+      };
+      drawPetal(0, 74, 24);
+      drawPetal(-0.46, 62, 20);
+      drawPetal(0.46, 62, 20);
+      drawPetal(-0.92, 46, 16);
+      drawPetal(0.92, 46, 16);
+      bCtx.fillStyle = '#fde047';
+      bCtx.beginPath();
+      bCtx.ellipse(0, 24, 34, 10, 0, 0, Math.PI * 2);
+      bCtx.fill();
+      bCtx.restore();
+    }
+    const blueLotusTex = new THREE.CanvasTexture(bannerCanvas);
+    blueLotusTex.colorSpace = THREE.SRGBColorSpace;
+    blueLotusTex.anisotropy = Math.min(8, this.renderer.capabilities.getMaxAnisotropy());
+
+    const blueBannerMat = new THREE.MeshStandardMaterial({
+      map: blueLotusTex,
+      roughness: 0.48,
+      metalness: 0.18,
+      side: THREE.DoubleSide,
+    });
+    const moatWaterMat = new THREE.MeshStandardMaterial({
+      color: 0x0ea5e9,
+      emissive: 0x0284c7,
+      emissiveIntensity: 0.95,
+      roughness: 0.1,
+      metalness: 0.3,
+    });
+    const waterfallMat = new THREE.MeshStandardMaterial({
+      color: 0x7dd3fc,
+      emissive: 0x38bdf8,
+      emissiveIntensity: 1.35,
+      roughness: 0.15,
+      transparent: true,
+      opacity: 0.88,
+      side: THREE.DoubleSide,
+    });
+    const foamMat = new THREE.MeshStandardMaterial({
+      color: 0xe0f2fe,
+      emissive: 0x7dd3fc,
+      emissiveIntensity: 1.5,
+      roughness: 0.35,
+      transparent: true,
+      opacity: 0.85,
+    });
+    const mossRockMat = new THREE.MeshStandardMaterial({
+      color: 0x64748b,
+      roughness: 0.85,
+      metalness: 0.08,
+    });
+    const shrubMat = new THREE.MeshStandardMaterial({
+      color: 0x15803d,
+      roughness: 0.88,
+      metalness: 0.04,
+    });
+
+    // Shared Sanctuary Geometries (reused cleanly across all 36 shrines)
+    const shOuterFloorGeo = new THREE.CylinderGeometry(7.2, 7.5, 0.36, 32);
+    const shOuterRimGeo = new THREE.TorusGeometry(7.1, 0.24, 6, 32);
+    const shMoatGeo = new THREE.RingGeometry(4.78, 6.92, 32);
+    const shInnerBaseGeo = new THREE.CylinderGeometry(4.86, 5.18, 2.1, 24);
+    const shInnerGoldBandGeo = new THREE.CylinderGeometry(4.94, 4.94, 0.18, 24);
+    const shInnerWaterGeo = new THREE.CylinderGeometry(4.32, 4.32, 0.1, 24);
+    const shWalkNSGeo = new THREE.BoxGeometry(1.45, 0.3, 4.35);
+    const shWalkEWGeo = new THREE.BoxGeometry(4.35, 0.3, 1.45);
+    const shParapetArcGeo = new THREE.CylinderGeometry(4.65, 4.72, 1.05, 8, 1, false, 0, Math.PI * 0.36);
+    const shParapetWallBackGeo = new THREE.CylinderGeometry(4.65, 4.72, 1.05, 10, 1, false, Math.PI * 0.72, Math.PI * 0.56);
+
+    const shStairStepGeo = new THREE.BoxGeometry(2.2, 0.34, 0.45);
+    const shStairRailGeo = new THREE.BoxGeometry(0.22, 0.48, 2.75);
+    const shCarpetGeo = new THREE.PlaneGeometry(1.46, 2.65);
+
+    const shWaterfallLipGeo = new THREE.BoxGeometry(1.45, 0.26, 0.55);
+    const shWaterfallSheetGeo = new THREE.PlaneGeometry(1.38, 2.35, 1, 4);
+    const shWaterfallFoamGeo = new THREE.TorusGeometry(0.76, 0.15, 6, 16);
+
+    const shTowerLowerGeo = new THREE.BoxGeometry(1.36, 3.65, 1.36);
+    const shTowerUpperGeo = new THREE.BoxGeometry(1.12, 0.72, 1.12);
+    const shTowerGoldGeo = new THREE.BoxGeometry(1.26, 0.22, 1.26);
+    const shTowerFinialGeo = new THREE.ConeGeometry(0.45, 0.92, 4);
+    const shBannerGeo = new THREE.PlaneGeometry(0.74, 1.48);
+
+    const shGatePillarGeo = new THREE.BoxGeometry(0.95, 3.15, 0.95);
+    const shGateGoldGeo = new THREE.BoxGeometry(1.06, 0.2, 1.06);
+    const shGateFinialGeo = new THREE.ConeGeometry(0.36, 0.78, 4);
+
+    const shBeaconBaseGeo = new THREE.CylinderGeometry(0.42, 0.52, 0.62, 8);
+    const shBeaconGoldGeo = new THREE.CylinderGeometry(0.48, 0.48, 0.14, 8);
+    const shBeaconCrystalGeo = new THREE.ConeGeometry(0.32, 1.18, 6);
+
+    const shRockGeo = new THREE.DodecahedronGeometry(0.52, 0);
+    const shShrubGeo = new THREE.IcosahedronGeometry(0.44, 0);
+
+    const shAltarDrumGeo = new THREE.CylinderGeometry(1.92, 2.15, 0.46, 16);
+    const shAltarGoldRingGeo = new THREE.TorusGeometry(1.42, 0.14, 10, 28);
+    const shAltarPoolGeo = new THREE.CircleGeometry(1.32, 24);
+    const shRunePadGeo = new THREE.BoxGeometry(0.56, 0.16, 0.56);
+
+    // Faceted Floating Hero Crystal (double-pointed jewel bipyramid matching reference silhouette)
+    const shHeroCrystalGeo = new THREE.LatheGeometry(
+      [
+        new THREE.Vector2(0.0, -2.55),
+        new THREE.Vector2(1.08, -0.58),
+        new THREE.Vector2(1.38, 0.65),
+        new THREE.Vector2(0.82, 1.95),
+        new THREE.Vector2(0.0, 2.9),
+      ],
+      7
+    );
+    shHeroCrystalGeo.computeVertexNormals();
+    const shHeroCoreGeo = new THREE.LatheGeometry(
+      [
+        new THREE.Vector2(0.0, -1.45),
+        new THREE.Vector2(0.58, -0.32),
+        new THREE.Vector2(0.74, 0.38),
+        new THREE.Vector2(0.0, 1.65),
+      ],
+      7
+    );
+    const shGoldOrbitGeo1 = new THREE.TorusGeometry(2.05, 0.068, 8, 36);
+    const shGoldOrbitGeo2 = new THREE.TorusGeometry(2.58, 0.056, 8, 36);
+    const shPortalBeamGeo = new THREE.CylinderGeometry(0.32, 0.96, 4.4, 12, 1, true);
+    const shFlameGeo = new THREE.ConeGeometry(0.28, 1.65, 5);
+    shFlameGeo.translate(0, 0.82, 0);
+
+    // Tier visual presets (Purple for C, Red for B, Blue for A — banners/stairs/outer crystals stay blue+gold)
+    interface ShrineTierVisualPreset {
+      scale: number;
+      crystalColor: number;
+      crystalEmissive: number;
+      coreColor: number;
+      flameColor: number;
+      lightningColor: number;
+      ringColor: number;
+      ringEmissive: number;
+      badgeBorder: string;
+      badgeAccent: string;
+      starsText: string;
+      subRegion: string;
+      level: number;
+      health: number;
+      tier: number;
+      buffLabel: string;
+      ringRadiusInner: number;
+      ringRadiusOuter: number;
+    }
+
+    const tierPresets: Record<'shrine_c' | 'shrine_b' | 'shrine_a', ShrineTierVisualPreset> = {
+      shrine_c: {
+        scale: 1.0,
+        crystalColor: 0xa855f7,
+        crystalEmissive: 0x7e22ce,
+        coreColor: 0xf0abfc,
+        flameColor: 0xd946ef,
+        lightningColor: 0xe879f9,
+        ringColor: 0xc084fc,
+        ringEmissive: 0x9333ea,
+        badgeBorder: '#a855f7',
+        badgeAccent: '#e9d5ff',
+        starsText: '✦ TIER C · PURPLE CRYSTAL ✦',
+        subRegion: 'Frontier',
+        level: 12,
+        health: 3200,
+        tier: 1,
+        buffLabel: '+5% Resource Yield',
+        ringRadiusInner: 7.55,
+        ringRadiusOuter: 8.3,
+      },
+      shrine_b: {
+        scale: 1.18,
+        crystalColor: 0xef4444,
+        crystalEmissive: 0xb91c1c,
+        coreColor: 0xfca5a5,
+        flameColor: 0xff4d4f,
+        lightningColor: 0xfb7185,
+        ringColor: 0xf87171,
+        ringEmissive: 0xdc2626,
+        badgeBorder: '#ef4444',
+        badgeAccent: '#fecaca',
+        starsText: '★★ TIER B · RED CRYSTAL ★★',
+        subRegion: 'Mid Ring',
+        level: 16,
+        health: 4600,
+        tier: 2,
+        buffLabel: '+8% March Speed',
+        ringRadiusInner: 8.85,
+        ringRadiusOuter: 9.7,
+      },
+      shrine_a: {
+        scale: 1.36,
+        crystalColor: 0x38bdf8,
+        crystalEmissive: 0x0284c7,
+        coreColor: 0xbae6fd,
+        flameColor: 0x22d3ee,
+        lightningColor: 0x7dd3fc,
+        ringColor: 0x38bdf8,
+        ringEmissive: 0x0284c7,
+        badgeBorder: '#38bdf8',
+        badgeAccent: '#bae6fd',
+        starsText: '★★★ TIER A · BLUE CRYSTAL ★★★',
+        subRegion: 'Inner Sanctum',
+        level: 20,
+        health: 6500,
+        tier: 3,
+        buffLabel: '+12% Attack Power',
+        ringRadiusInner: 10.2,
+        ringRadiusOuter: 11.2,
+      },
+    };
+
+    const tierMaterials = (Object.keys(tierPresets) as Array<'shrine_c' | 'shrine_b' | 'shrine_a'>).reduce(
+      (acc, k) => {
+        const p = tierPresets[k];
+        acc[k] = {
+          crystalMat: new THREE.MeshStandardMaterial({
+            color: p.crystalColor,
+            emissive: p.crystalEmissive,
+            emissiveIntensity: 1.85,
+            roughness: 0.14,
+            metalness: 0.35,
+            flatShading: true,
+            transparent: true,
+            opacity: 0.9,
+          }),
+          coreMat: new THREE.MeshBasicMaterial({
+            color: p.coreColor,
+            transparent: true,
+            opacity: 0.82,
+          }),
+          beamMat: new THREE.MeshBasicMaterial({
+            color: p.flameColor,
+            transparent: true,
+            opacity: 0.38,
+            blending: THREE.AdditiveBlending,
+            depthWrite: false,
+            side: THREE.DoubleSide,
+          }),
+          flameMat: new THREE.MeshBasicMaterial({
+            color: p.flameColor,
+            transparent: true,
+            opacity: 0.85,
+            blending: THREE.AdditiveBlending,
+            depthWrite: false,
+            side: THREE.DoubleSide,
+          }),
+          poolMat: new THREE.MeshStandardMaterial({
+            color: p.coreColor,
+            emissive: p.flameColor,
+            emissiveIntensity: 2.1,
+            roughness: 0.15,
+          }),
+          ringMat: new THREE.MeshStandardMaterial({
+            color: p.ringColor,
+            emissive: p.ringEmissive,
+            emissiveIntensity: 2.0,
+            side: THREE.DoubleSide,
+            transparent: true,
+            opacity: 0.88,
+          }),
+          wardGeo: new THREE.RingGeometry(p.ringRadiusInner, p.ringRadiusOuter, 32),
+        };
+        return acc;
+      },
+      {} as Record<
+        'shrine_c' | 'shrine_b' | 'shrine_a',
+        {
+          crystalMat: THREE.MeshStandardMaterial;
+          coreMat: THREE.MeshBasicMaterial;
+          beamMat: THREE.MeshBasicMaterial;
+          flameMat: THREE.MeshBasicMaterial;
+          poolMat: THREE.MeshStandardMaterial;
+          ringMat: THREE.MeshStandardMaterial;
+          wardGeo: THREE.RingGeometry;
+        }
+      >
+    );
+
+    const buildFloatingCrystalShrine = (
+      site: (typeof RESERVED_PLOTS)[number],
+      tierKey: 'shrine_c' | 'shrine_b' | 'shrine_a',
+      idx: number
+    ) => {
+      const preset = tierPresets[tierKey];
+      const mats = tierMaterials[tierKey];
       const groundY = this.terrainGenerator.getHeightAt(site.position[0], site.position[2]);
       site.position[1] = groundY;
 
-      const bGroup = new THREE.Group();
-      bGroup.position.set(site.position[0], groundY, site.position[2]);
+      const rootGroup = new THREE.Group();
+      rootGroup.position.set(site.position[0], groundY, site.position[2]);
 
-      addMesh(bGroup, aBaseGeo, stoneMat, 0, 2.4, 0);
-      addMesh(bGroup, aTrimGeo, goldMat, 0, 4.9, 0);
-      addMesh(bGroup, aMidGeo, darkSlateMat, 0, 7.6, 0);
-      addMesh(bGroup, aCrownGeo, goldMat, 0, 10.6, 0);
+      // Scaled architectural container matching reference proportions
+      const archGroup = new THREE.Group();
+      archGroup.scale.setScalar(preset.scale);
+      rootGroup.add(archGroup);
 
-      for (const [tx, tz] of [
-        [-4.8, -4.8],
-        [4.8, -4.8],
-        [-4.8, 4.8],
-        [4.8, 4.8],
+      // 1. Outer Stone Floor, Rim & Moat
+      addMesh(archGroup, shOuterFloorGeo, stoneMat, 0, 0.18, 0);
+      const outerRim = addMesh(archGroup, shOuterRimGeo, stoneMat, 0, 0.44, 0);
+      outerRim.rotation.x = -Math.PI / 2;
+      const moat = addMesh(archGroup, shMoatGeo, moatWaterMat, 0, 0.37, 0, false);
+      moat.rotation.x = -Math.PI / 2;
+
+      // Outer mossy rocks & green foliage shrubs along rim & waterfall banks
+      for (const [rx, rz, rs] of [
+        [-5.3, 4.4, 1.1], [5.3, 4.4, 1.1],
+        [-6.3, 2.2, 0.9], [6.3, 2.2, 0.9],
+        [-5.8, -3.5, 1.0], [5.8, -3.5, 1.0],
+        [-3.2, -6.2, 0.95], [3.2, -6.2, 0.95],
       ]) {
-        addMesh(bGroup, aTurretGeo, stoneMat, tx, 3.1, tz);
-        addMesh(bGroup, aTurretCapGeo, goldMat, tx, 6.3, tz);
-        addMesh(bGroup, aTurretTipGeo, deepCrystalMat, tx, 8.4, tz);
+        const rock = addMesh(archGroup, shRockGeo, mossRockMat, rx, 0.55, rz);
+        rock.scale.setScalar(rs);
+        rock.rotation.set(rx * 0.4, rz * 0.5, 0.3);
+        const shrub = addMesh(archGroup, shShrubGeo, shrubMat, rx * 1.04, 0.72, rz * 1.02);
+        shrub.scale.setScalar(rs * 0.9);
       }
 
-      const aSpireMesh = addMesh(bGroup, aSpireGeo, arcaneCrystalMat, 0, 16.8, 0);
+      // 2. Inner Raised Circular Sanctuary Platform & Cross Walkways
+      addMesh(archGroup, shInnerBaseGeo, stoneMat, 0, 1.05, 0);
+      addMesh(archGroup, shInnerGoldBandGeo, goldMat, 0, 2.04, 0);
+      addMesh(archGroup, shInnerWaterGeo, moatWaterMat, 0, 2.15, 0, false);
+      addMesh(archGroup, shWalkNSGeo, stoneMat, 0, 2.22, 0);
+      addMesh(archGroup, shWalkEWGeo, stoneMat, 0, 2.22, 0);
 
-      for (let orbIdx = 0; orbIdx < 2; orbIdx++) {
-        const orb = addMesh(bGroup, aOrbGeo, goldMat, 0, 15.5, 0);
-        orb.userData = {
-          isWardOrb: true,
-          orbitRadius: 6.5,
-          orbitSpeed: 1.8,
-          orbitPhase: orbIdx * Math.PI,
-        };
+      // Curved stone colonnade parapet walls (left, right, and rear) leaving front stair open
+      const leftParapet = addMesh(archGroup, shParapetArcGeo, stoneMat, 0, 2.65, 0);
+      leftParapet.rotation.y = Math.PI * 0.28;
+      const rightParapet = addMesh(archGroup, shParapetArcGeo, stoneMat, 0, 2.65, 0);
+      rightParapet.rotation.y = -Math.PI * 0.64;
+      addMesh(archGroup, shParapetWallBackGeo, stoneMat, 0, 2.65, 0);
+
+      // 3. Front Grand Staircase (+Z) + Royal Blue & Gold Lotus Carpet Runner
+      for (let step = 0; step < 6; step++) {
+        const frac = step / 5;
+        const sy = 0.45 + frac * 1.65;
+        const sz = 6.7 - frac * 2.15;
+        addMesh(archGroup, shStairStepGeo, stoneMat, 0, sy, sz);
+      }
+      const stairSlopeAngle = Math.atan2(1.75, 2.25);
+      for (const side of [-1, 1]) {
+        const rail = addMesh(archGroup, shStairRailGeo, goldMat, side * 1.15, 1.48, 5.65);
+        rail.rotation.x = stairSlopeAngle;
+      }
+      const carpet = addMesh(archGroup, shCarpetGeo, blueBannerMat, 0, 1.46, 5.65, false);
+      carpet.rotation.x = -Math.PI / 2 + stairSlopeAngle;
+
+      // 4. Twin Cascading Waterfalls Flanking the Front Stairs
+      const waterfallFoams: THREE.Mesh[] = [];
+      for (const side of [-1, 1]) {
+        addMesh(archGroup, shWaterfallLipGeo, stoneMat, side * 2.75, 2.1, 4.45);
+        const sheet = addMesh(archGroup, shWaterfallSheetGeo, waterfallMat, side * 2.85, 1.28, 5.25, false);
+        sheet.rotation.x = -0.58;
+        sheet.rotation.z = side * -0.06;
+        const foam = addMesh(archGroup, shWaterfallFoamGeo, foamMat, side * 2.95, 0.42, 5.88, false);
+        foam.rotation.x = -Math.PI / 2;
+        waterfallFoams.push(foam);
       }
 
-      const outerRing = new THREE.Mesh(aRingGeo, goldRingMat);
+      // 5. Four Corner Bastion Towers + 2 Front Gate Pillars (Gold Caps, Sapphire Pyramid Finials, Blue Lotus Banners)
+      const banners: THREE.Mesh[] = [];
+      const towerCoords: Array<[number, number, number]> = [
+        [-3.25, 3.15, -0.55],
+        [3.25, 3.15, 0.55],
+        [-3.25, -3.15, -2.35],
+        [3.25, -3.15, 2.35],
+      ];
+      for (const [tx, tz, rotY] of towerCoords) {
+        addMesh(archGroup, shTowerLowerGeo, stoneMat, tx, 1.85, tz);
+        addMesh(archGroup, shTowerUpperGeo, stoneMat, tx, 4.02, tz);
+        addMesh(archGroup, shTowerGoldGeo, goldMat, tx, 4.48, tz);
+        const finial = addMesh(archGroup, shTowerFinialGeo, arcaneCrystalMat, tx, 5.05, tz);
+        finial.rotation.y = Math.PI / 4;
+
+        // Vertical Royal Blue Golden Lotus Banner on outward face of tower
+        const bGroup = new THREE.Group();
+        bGroup.position.set(tx + Math.sin(rotY) * 0.72, 2.55, tz + Math.cos(rotY) * 0.72);
+        bGroup.rotation.y = rotY;
+        const bMesh = addMesh(bGroup, shBannerGeo, blueBannerMat, 0, -0.55, 0);
+        archGroup.add(bGroup);
+        banners.push(bMesh);
+      }
+      // 2 Front Stair Gate Pillars (Blue & Gold matching reference)
+      for (const side of [-1, 1]) {
+        addMesh(archGroup, shGatePillarGeo, stoneMat, side * 1.48, 1.62, 4.55);
+        addMesh(archGroup, shGateGoldGeo, goldMat, side * 1.48, 3.26, 4.55);
+        const gateFinial = addMesh(archGroup, shGateFinialGeo, arcaneCrystalMat, side * 1.48, 3.75, 4.55);
+        gateFinial.rotation.y = Math.PI / 4;
+      }
+
+      // 6. Four Small Glowing Blue Perimeter Crystal Beacons (2 stair foot + 2 outer moat sides)
+      for (const [bx, by, bz] of [
+        [-1.68, 0.45, 6.48],
+        [1.68, 0.45, 6.48],
+        [-6.45, 0.5, 0.0],
+        [6.45, 0.5, 0.0],
+      ]) {
+        addMesh(archGroup, shBeaconBaseGeo, stoneMat, bx, by + 0.3, bz);
+        addMesh(archGroup, shBeaconGoldGeo, goldMat, bx, by + 0.65, bz);
+        addMesh(archGroup, shBeaconCrystalGeo, arcaneCrystalMat, bx, by + 1.26, bz);
+      }
+
+      // 7. Central Golden Portal Basin & 4 Rune Pads
+      addMesh(archGroup, shAltarDrumGeo, stoneMat, 0, 2.42, 0);
+      const altarGoldRing = addMesh(archGroup, shAltarGoldRingGeo, goldMat, 0, 2.7, 0);
+      altarGoldRing.rotation.x = -Math.PI / 2;
+      const portalDisc = addMesh(archGroup, shAltarPoolGeo, mats.poolMat, 0, 2.64, 0, false);
+      portalDisc.rotation.x = -Math.PI / 2;
+      for (const [rx, rz] of [
+        [-1.85, 0],
+        [1.85, 0],
+        [0, -1.85],
+        [0, 1.85],
+      ]) {
+        addMesh(archGroup, shRunePadGeo, arcaneCrystalMat, rx, 2.38, rz);
+      }
+
+      // 8. Huge Faceted Floating Hero Crystal + Glow Core + Twin Tilted Gold Orbit Rings
+      const crystalGroup = new THREE.Group();
+      const crystalBaseY = 6.95;
+      crystalGroup.position.set(0, crystalBaseY, 0);
+      addMesh(crystalGroup, shHeroCrystalGeo, mats.crystalMat, 0, 0, 0);
+      addMesh(crystalGroup, shHeroCoreGeo, mats.coreMat, 0, 0, 0, false);
+
+      const orbitRing1 = addMesh(crystalGroup, shGoldOrbitGeo1, goldMat, 0, -0.35, 0, false);
+      orbitRing1.rotation.set(Math.PI / 2 + 0.38, 0.25, 0);
+      const orbitRing2 = addMesh(crystalGroup, shGoldOrbitGeo2, goldMat, 0, 0.3, 0, false);
+      orbitRing2.rotation.set(Math.PI / 2 - 0.42, -0.3, 0);
+      archGroup.add(crystalGroup);
+
+      // 9. Vertical Rising Energy Beam + 6 Rising Tier-Colored Flame Tongues
+      const portalBeam = addMesh(archGroup, shPortalBeamGeo, mats.beamMat, 0, 4.75, 0, false);
+      const flameTongues: Array<{
+        mesh: THREE.Mesh;
+        baseX: number;
+        baseY: number;
+        baseZ: number;
+        phase: number;
+        speed: number;
+      }> = [];
+      for (let f = 0; f < 6; f++) {
+        const ang = (f * Math.PI * 2) / 6;
+        const rad = f % 2 === 0 ? 1.15 : 0.72;
+        const fx = Math.cos(ang) * rad;
+        const fz = Math.sin(ang) * rad;
+        const fy = 2.68;
+        const flameMesh = addMesh(archGroup, shFlameGeo, mats.flameMat, fx, fy, fz, false);
+        flameTongues.push({
+          mesh: flameMesh,
+          baseX: fx,
+          baseY: fy,
+          baseZ: fz,
+          phase: idx * 0.7 + f * 1.15,
+          speed: 5.5 + (f % 3) * 1.4,
+        });
+      }
+
+      // 10. Crackling 3D Lightning Arcs (4 pre-allocated bolts spanning corner spires -> floating crystal)
+      const lightningMat = new THREE.LineBasicMaterial({
+        color: preset.lightningColor,
+        transparent: true,
+        opacity: 0.9,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+      });
+      const lightningBolts: Array<{
+        line: THREE.Line;
+        positions: Float32Array;
+        startX: number;
+        startY: number;
+        startZ: number;
+        endX: number;
+        endY: number;
+        endZ: number;
+        jitter: number;
+        phase: number;
+      }> = [];
+      const boltAnchors: Array<[number, number, number, number, number, number]> = [
+        [-3.25, 5.15, 3.15, -0.65, 6.95, 0.55],
+        [3.25, 5.15, 3.15, 0.65, 7.35, 0.55],
+        [-3.25, 5.15, -3.15, -0.55, 7.65, -0.55],
+        [3.25, 5.15, -3.15, 0.55, 6.55, -0.55],
+      ];
+      boltAnchors.forEach(([sx, sy, sz, ex, ey, ez], bIdx) => {
+        const positions = new Float32Array(7 * 3);
+        const geo = new THREE.BufferGeometry();
+        const attr = new THREE.BufferAttribute(positions, 3);
+        attr.setUsage(THREE.DynamicDrawUsage);
+        geo.setAttribute('position', attr);
+        const line = new THREE.Line(geo, lightningMat);
+        line.frustumCulled = false;
+        archGroup.add(line);
+        lightningBolts.push({
+          line,
+          positions,
+          startX: sx,
+          startY: sy,
+          startZ: sz,
+          endX: ex,
+          endY: ey,
+          endZ: ez,
+          jitter: 0.52,
+          phase: idx * 1.3 + bIdx * 1.7,
+        });
+      });
+
+      this.animatedShrines.push({
+        crystalGroup,
+        crystalBaseY,
+        orbitRing1,
+        orbitRing2,
+        portalBeam,
+        portalDisc,
+        flameTongues,
+        waterfallFoams,
+        banners,
+        lightningBolts,
+        lightningMat,
+        lastBoltBucket: -1,
+        phase: idx * 0.85,
+      });
+
+      // 11. Outer Ground Sovereignty Ring (Tier-colored when neutral -> Emerald when captured)
+      const outerRing = new THREE.Mesh(mats.wardGeo, mats.ringMat);
       outerRing.rotation.x = -Math.PI / 2;
       outerRing.position.y = 0.22;
       outerRing.userData = { isWardRing: true };
-      bGroup.add(outerRing);
+      rootGroup.add(outerRing);
 
+      // 12. Floating HUD Badge Sprite
+      const sTitle = site.name.toUpperCase();
+      const sSub = `[${Math.round(site.position[0])}, ${Math.round(site.position[2])}] · ${preset.subRegion}`;
+      const badgeW = tierKey === 'shrine_a' ? 14.5 : tierKey === 'shrine_b' ? 13.2 : 12.0;
+      const badgeH = tierKey === 'shrine_a' ? 4.6 : tierKey === 'shrine_b' ? 4.3 : 4.0;
+      const badgeY = (crystalBaseY + 3.4) * preset.scale + 4.4;
       const badge = this.createFloatingBadgeSprite(
-        site.name.toUpperCase(),
-        `[${Math.round(site.position[0])}, ${Math.round(site.position[2])}] · Inner Sanctum`,
-        '★★★ TIER A · ATTACK ★★★',
-        '#facc15',
-        '#38bdf8',
-        14.5,
-        4.6
+        sTitle,
+        sSub,
+        preset.starsText,
+        preset.badgeBorder,
+        preset.badgeAccent,
+        badgeW,
+        badgeH
       );
-      badge.position.set(0, 26.2, 0);
-      bGroup.add(badge);
+      badge.position.set(0, badgeY, 0);
+      rootGroup.add(badge);
 
-      const aCrystals: THREE.Mesh[] = [aSpireMesh];
-      bGroup.traverse((ch) => {
-        const m = ch as THREE.Mesh;
-        if (m.isMesh && m.material === deepCrystalMat) aCrystals.push(m);
-      });
-
-      this.buildingsGroup.add(bGroup);
+      this.buildingsGroup.add(rootGroup);
+      // Keep crystalMeshes empty on shrines so captured shrines preserve Purple/Red/Blue crystals
+      // while turning the ground ring & floating badge emerald green.
       this.buildingConquestRefs.set(site.id, {
-        crystalMeshes: aCrystals,
+        crystalMeshes: [],
+        neutralCrystalMats: [],
         ringMesh: outerRing,
+        neutralRingMat: mats.ringMat,
         badgeSprite: badge,
-        group: bGroup,
-        badgeY: 26.2,
+        group: rootGroup,
+        badgeY,
+        neutralBadge: {
+          title: sTitle,
+          subtitle: sSub,
+          starsText: preset.starsText,
+          borderColor: preset.badgeBorder,
+          accentColor: preset.badgeAccent,
+          scaleW: badgeW,
+          scaleH: badgeH,
+        },
       });
-      registerEntity(bGroup, {
+
+      registerEntity(rootGroup, {
         id: site.id,
         name: site.name,
         category: 'building',
-        type: 'shrine_a',
-        subtype: 'shrine_a',
-        level: 20,
+        type: tierKey,
+        subtype: tierKey,
+        level: preset.level,
         position: site.position,
         radius: site.radius,
-        health: 6500,
-        maxHealth: 6500,
-        tier: 3,
+        health: preset.health,
+        maxHealth: preset.health,
+        tier: preset.tier,
         ownerFaction: 'neutral',
-        buffLabel: '+12% Attack Power',
+        buffLabel: preset.buffLabel,
         description: site.description,
         actions: ['attack', 'rally', 'scout', 'inspect'],
       });
-    });
+    };
 
-    // =====================================================================
-    // 3. TWELVE MID-RING SHRINES (Shrine B1–B12)
-    // =====================================================================
-    const bTier1Geo = new THREE.CylinderGeometry(6.0, 6.8, 1.2, 8);
-    const bTier2Geo = new THREE.CylinderGeometry(4.8, 5.4, 1.1, 8);
-    const bTier3Geo = new THREE.CylinderGeometry(3.6, 4.0, 1.0, 8);
-    const bPillarGeo = new THREE.CylinderGeometry(0.42, 0.52, 5.2, 8);
-    const bPillarCapGeo = new THREE.SphereGeometry(0.6, 8, 8);
-    const bCoreGeo = new THREE.OctahedronGeometry(2.6, 0);
-    const bShardGeo = new THREE.ConeGeometry(1.1, 4.8, 5);
-    const bRingGeo = new THREE.RingGeometry(6.2, 7.1, 24);
-
-    const shrineBSites = RESERVED_PLOTS.filter((p) => p.type === 'shrine_b');
-    shrineBSites.forEach((site, idx) => {
-      const groundY = this.terrainGenerator.getHeightAt(site.position[0], site.position[2]);
-      site.position[1] = groundY;
-
-      const sGroup = new THREE.Group();
-      sGroup.position.set(site.position[0], groundY, site.position[2]);
-
-      addMesh(sGroup, bTier1Geo, stoneMat, 0, 0.6, 0);
-      addMesh(sGroup, bTier2Geo, goldMat, 0, 1.75, 0);
-      addMesh(sGroup, bTier3Geo, darkSlateMat, 0, 2.8, 0);
-
-      for (const [px, pz] of [
-        [-3.6, -3.6],
-        [3.6, -3.6],
-        [-3.6, 3.6],
-        [3.6, 3.6],
-      ]) {
-        addMesh(sGroup, bPillarGeo, goldMat, px, 3.4, pz);
-        addMesh(sGroup, bPillarCapGeo, arcaneCrystalMat, px, 6.2, pz);
-      }
-
-      const centerCrystal = addMesh(sGroup, bCoreGeo, arcaneCrystalMat, 0, 7.4, 0);
-      centerCrystal.scale.set(0.85, 1.85, 0.85);
-      centerCrystal.userData = { isFloatingRock: true, phase: idx * 0.9 };
-
-      for (let k = 0; k < 4; k++) {
-        const ang = (k * Math.PI) / 2;
-        const shard = addMesh(
-          sGroup,
-          bShardGeo,
-          deepCrystalMat,
-          Math.cos(ang) * 2.3,
-          5.0,
-          Math.sin(ang) * 2.3
-        );
-        shard.rotation.x = Math.sin(ang) * 0.4;
-        shard.rotation.z = -Math.cos(ang) * 0.4;
-      }
-
-      const bRingMesh = new THREE.Mesh(bRingGeo, cyanRingMat);
-      bRingMesh.rotation.x = -Math.PI / 2;
-      bRingMesh.position.y = 0.2;
-      bRingMesh.userData = { isBlessingRing: true };
-      sGroup.add(bRingMesh);
-
-      const badge = this.createFloatingBadgeSprite(
-        site.name.toUpperCase(),
-        `[${Math.round(site.position[0])}, ${Math.round(site.position[2])}] · Mid Ring`,
-        '★★ TIER B · ATTACK ★★',
-        '#38bdf8',
-        '#7dd3fc',
-        13.2,
-        4.3
-      );
-      badge.position.set(0, 15.5, 0);
-      sGroup.add(badge);
-
-      const bCrystals: THREE.Mesh[] = [centerCrystal];
-      sGroup.traverse((ch) => {
-        const m = ch as THREE.Mesh;
-        if (m.isMesh && (m.material === arcaneCrystalMat || m.material === deepCrystalMat) && m !== centerCrystal) {
-          bCrystals.push(m);
-        }
-      });
-
-      this.buildingsGroup.add(sGroup);
-      this.buildingConquestRefs.set(site.id, {
-        crystalMeshes: bCrystals,
-        ringMesh: bRingMesh,
-        badgeSprite: badge,
-        group: sGroup,
-        badgeY: 15.5,
-      });
-      registerEntity(sGroup, {
-        id: site.id,
-        name: site.name,
-        category: 'building',
-        type: 'shrine_b',
-        subtype: 'shrine_b',
-        level: 16,
-        position: site.position,
-        radius: site.radius,
-        health: 4600,
-        maxHealth: 4600,
-        tier: 2,
-        ownerFaction: 'neutral',
-        buffLabel: '+8% March Speed',
-        description: site.description,
-        actions: ['attack', 'rally', 'scout', 'inspect'],
-      });
-    });
-
-    // =====================================================================
-    // 4. TWENTY OUTER PERIMETER SHRINES (Shrine C1–C20)
-    // =====================================================================
-    const cPedestalGeo = new THREE.CylinderGeometry(4.0, 4.6, 1.9, 8);
-    const cCollarGeo = new THREE.CylinderGeometry(4.3, 4.3, 0.38, 8);
-    const cShaftGeo = new THREE.CylinderGeometry(2.5, 3.2, 7.0, 8);
-    const cCapGeo = new THREE.CylinderGeometry(3.0, 2.7, 1.0, 8);
-    const cSpireGeo = new THREE.ConeGeometry(2.2, 6.8, 6);
-    const cMiniShardGeo = new THREE.ConeGeometry(0.7, 3.0, 5);
-    const cCrownOrbGeo = new THREE.OctahedronGeometry(0.8, 0);
-    const cWardRingGeo = new THREE.RingGeometry(4.6, 5.4, 20);
-
-    const shrineCSites = RESERVED_PLOTS.filter((p) => p.type === 'shrine_c');
-    shrineCSites.forEach((site) => {
-      const groundY = this.terrainGenerator.getHeightAt(site.position[0], site.position[2]);
-      site.position[1] = groundY;
-
-      const tGroup = new THREE.Group();
-      tGroup.position.set(site.position[0], groundY, site.position[2]);
-
-      addMesh(tGroup, cPedestalGeo, stoneMat, 0, 0.95, 0);
-      addMesh(tGroup, cCollarGeo, goldMat, 0, 2.0, 0);
-      addMesh(tGroup, cShaftGeo, darkSlateMat, 0, 5.5, 0);
-      addMesh(tGroup, cCapGeo, goldMat, 0, 9.5, 0);
-      const cSpireMesh = addMesh(tGroup, cSpireGeo, arcaneCrystalMat, 0, 13.4, 0);
-
-      for (let c = 0; c < 4; c++) {
-        const ang = (c * Math.PI) / 2 + Math.PI / 4;
-        const miniShard = addMesh(
-          tGroup,
-          cMiniShardGeo,
-          deepCrystalMat,
-          Math.cos(ang) * 2.6,
-          10.2,
-          Math.sin(ang) * 2.6
-        );
-        miniShard.rotation.x = Math.sin(ang) * 0.25;
-        miniShard.rotation.z = -Math.cos(ang) * 0.25;
-      }
-
-      const starOrb = addMesh(tGroup, cCrownOrbGeo, goldMat, 0, 17.5, 0);
-      starOrb.userData = { isBrazier: true };
-
-      const wardMesh = new THREE.Mesh(cWardRingGeo, cyanRingMat);
-      wardMesh.rotation.x = -Math.PI / 2;
-      wardMesh.position.y = 0.2;
-      wardMesh.userData = { isWardRing: true };
-      tGroup.add(wardMesh);
-
-      const badge = this.createFloatingBadgeSprite(
-        site.name.toUpperCase(),
-        `[${Math.round(site.position[0])}, ${Math.round(site.position[2])}] · Frontier`,
-        '✦ TIER C · ATTACK ✦',
-        '#38bdf8',
-        '#bae6fd',
-        12.0,
-        4.0
-      );
-      badge.position.set(0, 21.2, 0);
-      tGroup.add(badge);
-
-      const cCrystals: THREE.Mesh[] = [cSpireMesh];
-      tGroup.traverse((ch) => {
-        const m = ch as THREE.Mesh;
-        if (m.isMesh && m.material === deepCrystalMat) cCrystals.push(m);
-      });
-
-      this.buildingsGroup.add(tGroup);
-      this.buildingConquestRefs.set(site.id, {
-        crystalMeshes: cCrystals,
-        ringMesh: wardMesh,
-        badgeSprite: badge,
-        group: tGroup,
-        badgeY: 21.2,
-      });
-      registerEntity(tGroup, {
-        id: site.id,
-        name: site.name,
-        category: 'building',
-        type: 'shrine_c',
-        subtype: 'shrine_c',
-        level: 12,
-        position: site.position,
-        radius: site.radius,
-        health: 3200,
-        maxHealth: 3200,
-        tier: 1,
-        ownerFaction: 'neutral',
-        buffLabel: '+5% Resource Yield',
-        description: site.description,
-        actions: ['attack', 'rally', 'scout', 'inspect'],
-      });
-    });
+    RESERVED_PLOTS.filter((p) => p.type === 'shrine_a').forEach((site, idx) =>
+      buildFloatingCrystalShrine(site, 'shrine_a', idx)
+    );
+    RESERVED_PLOTS.filter((p) => p.type === 'shrine_b').forEach((site, idx) =>
+      buildFloatingCrystalShrine(site, 'shrine_b', idx + 10)
+    );
+    RESERVED_PLOTS.filter((p) => p.type === 'shrine_c').forEach((site, idx) =>
+      buildFloatingCrystalShrine(site, 'shrine_c', idx + 30)
+    );
   }
 
   /**
@@ -1434,6 +1925,22 @@ export class WorldMap {
         roughness: 0.94,
         metalness: 0.02,
       }),
+      crystalOreMat: new THREE.MeshStandardMaterial({
+        color: 0x38bdf8,
+        emissive: 0x0284c7,
+        emissiveIntensity: 1.45,
+        roughness: 0.14,
+        metalness: 0.25,
+        transparent: true,
+        opacity: 0.92,
+      }),
+      crystalCoreMat: new THREE.MeshStandardMaterial({
+        color: 0xa5f3fc,
+        emissive: 0x22d3ee,
+        emissiveIntensity: 2.1,
+        roughness: 0.08,
+        metalness: 0.3,
+      }),
     };
 
     return this.sharedMats;
@@ -1458,6 +1965,8 @@ export class WorldMap {
     for (const c of this.castlesList) {
       this.entitiesMap.delete(c.id);
       this.buildingMeshesMap.delete(c.id);
+      this.castleBadgeRefs.delete(c.id);
+      this.castleBurningMap.delete(c.id);
     }
 
     while (this.castlesGroup.children.length > 0) {
@@ -1465,8 +1974,11 @@ export class WorldMap {
       this.castlesGroup.remove(child);
     }
 
-    // 2. Generate new non-overlapping random coordinates for My Castle + 10 Alliance Castles
-    this.castlesList = generateRandomCastles((x, z) => this.terrainGenerator.getHeightAt(x, z));
+    // 2. Generate new non-overlapping random coordinates for My Castle + 10 Alliance Castles + 6 Enemy Castles
+    this.castlesList = generateRandomCastles(
+      (x, z) => this.terrainGenerator.getHeightAt(x, z),
+      this.playerAlliance
+    );
 
     const mats = this.ensureRealisticMaterials();
 
@@ -1654,22 +2166,28 @@ export class WorldMap {
       ring.position.y = 0.25;
       cGroup.add(ring);
 
-      // Floating 3D Identification Badge
+      // Floating 3D Identification Badge (displays 4-char Tag + 4-word Alliance Alias)
       const badge = this.createFloatingBadgeSprite(
         isMine
           ? '🏰 MY CASTLE (LORD DANGOL)'
           : isEnemy
             ? `⚔️ ${castle.name.toUpperCase()}`
             : `🛡️ ${castle.owner.toUpperCase()}`,
-        `${castle.allianceTag} · Lv.${castle.level} · [${castle.position[0]}, ${castle.position[2]}]`,
-        isMine ? '👑 MY CASTLE 👑' : isEnemy ? '☠️ ENEMY CITADEL · ATTACK' : '⚔️ ALLIANCE MEMBER',
+        `${castle.allianceTag} ${castle.allianceAlias || ''} · Lv.${castle.level}`,
+        isMine ? '👑 MY CASTLE 👑' : isEnemy ? '☠️ ENEMY CITADEL · ATTACK' : `⚔️ [${castle.position[0]}, ${castle.position[2]}] ALLIANCE`,
         isMine ? '#10b981' : isEnemy ? '#ef4444' : '#38bdf8',
         isMine ? '#fde047' : isEnemy ? '#fca5a5' : '#93c5fd',
-        isMine ? 16.5 : isEnemy ? 14.5 : 13.5,
+        isMine ? 17.5 : isEnemy ? 15.5 : 14.5,
         isMine ? 5.2 : 4.4
       );
       badge.position.set(0, 22.8 * s, 0);
       cGroup.add(badge);
+      this.castleBadgeRefs.set(castle.id, {
+        castle,
+        group: cGroup,
+        badgeSprite: badge,
+        badgeY: 22.8 * s,
+      });
 
       // Update Army Home Position when placing My Castle
       if (isMine) {
@@ -1682,6 +2200,43 @@ export class WorldMap {
         }
       }
 
+      // Reusable Burning Citadel Flame Cones for Enemy Castles (zero shader recompilation at runtime)
+      if (isEnemy) {
+        const flamesGroup = new THREE.Group();
+        flamesGroup.visible = false;
+        const flameCoords: Array<[number, number, number, number, number]> = [
+          [0, 12.2 * s, -1.0 * s, 2.2 * s, 4.8 * s],
+          [-2.9 * s, 9.6 * s, 1.4 * s, 1.45 * s, 3.4 * s],
+          [3.1 * s, 9.6 * s, -2.4 * s, 1.45 * s, 3.4 * s],
+          [-2.55 * s, 7.6 * s, 8.0 * s, 1.15 * s, 2.9 * s],
+          [2.55 * s, 7.6 * s, 8.0 * s, 1.15 * s, 2.9 * s],
+          [0, 5.8 * s, 7.8 * s, 1.25 * s, 2.7 * s],
+        ];
+        flameCoords.forEach(([fx, fy, fz, radius, height], fIdx) => {
+          const cone = new THREE.Mesh(
+            new THREE.ConeGeometry(radius, height, 6),
+            mats.flameEmber
+          );
+          cone.position.set(fx, fy, fz);
+          cone.userData = {
+            isCastleFireCone: true,
+            baseY: fy,
+            baseScale: 1,
+            phase: fIdx * 1.37,
+          };
+          flamesGroup.add(cone);
+        });
+        cGroup.add(flamesGroup);
+        this.castleBurningMap.set(castle.id, {
+          group: cGroup,
+          flamesGroup,
+          isBurning: false,
+          intensity: 1.0,
+          smokeTimer: 0,
+        });
+      }
+
+      const enemyMaxHp = isEnemy ? getEnemyCastleMaxHp(castle.power, castle.level) : isMine ? 10000 : 7500;
       const entity: WorldEntity = {
         id: castle.id,
         name: castle.name,
@@ -1693,8 +2248,8 @@ export class WorldMap {
         level: castle.level,
         position: castle.position,
         radius: castle.radius,
-        health: isMine ? 10000 : isEnemy ? 5200 : 7500,
-        maxHealth: isMine ? 10000 : isEnemy ? 5200 : 7500,
+        health: enemyMaxHp,
+        maxHealth: enemyMaxHp,
         power: castle.power,
         tier: 3,
         description: castle.description,
@@ -1823,8 +2378,8 @@ export class WorldMap {
         wx += sp.dx > 0 ? 6 : -6;
         wz += sp.dz > 0 ? 6 : -6;
       }
-      wx = Math.max(80, Math.min(1520, wx));
-      wz = Math.max(80, Math.min(1520, wz));
+      wx = Math.max(80, Math.min(3120, wx));
+      wz = Math.max(80, Math.min(3120, wz));
 
       const groundY = this.terrainGenerator.getHeightAt(wx, wz);
       const entity: WorldEntity = {
@@ -1845,6 +2400,7 @@ export class WorldMap {
       const rGroup = this.buildRealisticResourceGroup(entity);
       rGroup.userData = { gameEntity: entity };
       this.entitiesMap.set(entity.id, entity);
+      this.resourceMeshesMap.set(entity.id, rGroup);
 
       const hitCollider = new THREE.Mesh(
         new THREE.CylinderGeometry(entity.radius, entity.radius, 9, 8),
@@ -2287,6 +2843,37 @@ export class WorldMap {
         spark.userData = { isGoldGlint: true, phase: sp * 2.1 };
         rGroup.add(spark);
       }
+    } else if (sub === 'crystal') {
+      // HIMALAYAN ARCANE CRYSTAL VEIN: Basalt crater plinth, towering faceted cyan crystal spires,
+      // glowing inner crystal core & orbiting starlight glints.
+      addPart(rGroup, new THREE.CylinderGeometry(4.6, 5.4, 0.42, 10), mats.castleDarkStone, 0, -0.02, 0);
+      addPart(rGroup, new THREE.DodecahedronGeometry(1.9, 0), mats.graniteRock, -1.6, 0.9, -1.3);
+      addPart(rGroup, new THREE.DodecahedronGeometry(1.6, 0), mats.graniteRock, 1.8, 0.75, 1.1);
+
+      const mainSpire = addPart(rGroup, new THREE.CylinderGeometry(0.18, 1.05, 5.2, 6), mats.crystalCoreMat, 0, 2.6, 0);
+      mainSpire.rotation.z = 0.08;
+
+      const shardOffsets: Array<[number, number, number, number, number]> = [
+        [-1.35, 1.8, 0.65, 3.6, 0.32],
+        [1.35, 1.9, -0.55, 3.8, -0.3],
+        [0.45, 1.65, 1.4, 3.2, -0.22],
+        [-0.6, 1.7, -1.35, 3.4, 0.25],
+      ];
+      for (const [sx, sy, sz, sh, rot] of shardOffsets) {
+        const shard = addPart(rGroup, new THREE.CylinderGeometry(0.12, 0.65, sh, 6), mats.crystalOreMat, sx, sy, sz);
+        shard.rotation.z = rot;
+        shard.rotation.x = rot * 0.6;
+      }
+
+      for (let sp = 0; sp < 4; sp++) {
+        const spark = new THREE.Mesh(
+          new THREE.OctahedronGeometry(0.24, 0),
+          new THREE.MeshBasicMaterial({ color: 0x67e8f9 })
+        );
+        spark.position.set(Math.cos(sp * 1.57) * 2.3, 3.1, Math.sin(sp * 1.57) * 2.3);
+        spark.userData = { isGoldGlint: true, phase: sp * 1.57 };
+        rGroup.add(spark);
+      }
     } else {
       // IRON & COPPER MINE: Timber-shored mine face, iron ore boulders, brick/stone smelter blast furnace,
       // molten ember glow, iron ingot stacks, and minecart hoist wheel.
@@ -2321,6 +2908,7 @@ export class WorldMap {
     const registerResource = (group: THREE.Group, entity: WorldEntity) => {
       group.userData = { gameEntity: entity };
       this.entitiesMap.set(entity.id, entity);
+      this.resourceMeshesMap.set(entity.id, group);
 
       const hitCollider = new THREE.Mesh(
         new THREE.CylinderGeometry(entity.radius, entity.radius, 9, 8),
@@ -2468,8 +3056,8 @@ export class WorldMap {
       domElement: this.container,
       camera: null as any,
       terrainGenerator: this.terrainGenerator,
-      initialTarget: [800, 10, 768],
-      minZoom: 0.048,
+      initialTarget: [1600, 10, 1568],
+      minZoom: 0.023,
       maxZoom: 3.2,
       onUpdate: onCameraUpdate,
       onSelectObject: this.handleObjectSelection,
@@ -2503,7 +3091,7 @@ export class WorldMap {
         curPlotObj = curPlotObj.parent;
       }
       if (foundPlotId) {
-        this.insideKingdom3D.handlePlotClick(foundPlotId);
+        this.insideKingdom3D?.handlePlotClick(foundPlotId);
       }
       return;
     }
@@ -2569,13 +3157,6 @@ export class WorldMap {
       this.totalMarchDist = this.armyPos.distanceTo(dest);
       this.combatTimer = 0.55; // Fire initial volley shortly after reaching siege range
       this.onArmyStatusUpdate?.(`Vanguard marching to attack ${target.name}...`, 10, 'Marching', [this.armyPos.x, this.armyPos.y, this.armyPos.z]);
-      this.onBulletNotify?.({
-        text:
-          action === 'rally'
-            ? `🚩 ALLIANCE RALLY LAUNCHED against ${target.name}!`
-            : `⚔️ Lord Dangol dispatched Vanguard Battalion to assault ${target.name}!`,
-        category: action === 'rally' ? 'rally' : 'attack',
-      });
     } else if (action === 'mine') {
       this.armyState = 'GATHERING';
       this.armyGroup.position.copy(this.armyHomePos);
@@ -2612,6 +3193,246 @@ export class WorldMap {
       this.onAddCombatFloater?.('🔨 UPGRADE COMMENCED', '#fef08a', screenX, screenY - 20);
     } else {
       this.onAddCombatFloater?.('🛡️ GARRISON REINFORCED', '#818cf8', screenX, screenY - 20);
+    }
+  }
+
+  public setStructureBarrierActive(structureId: string, active: boolean) {
+    const group = this.buildingMeshesMap.get(structureId);
+    const entity = this.entitiesMap.get(structureId);
+    if (!group || !entity) return;
+
+    let dome = this.barrierMeshesMap.get(structureId);
+    if (!dome && active) {
+      const radius = Math.max(6.5, (entity.radius || 8) * 1.15);
+      const geo = new THREE.SphereGeometry(radius, 20, 14, 0, Math.PI * 2, 0, Math.PI * 0.56);
+      const mat = new THREE.MeshBasicMaterial({
+        color: entity.type === 'congress' ? 0xfacc15 : 0x38bdf8,
+        transparent: true,
+        opacity: 0.22,
+        wireframe: true,
+        depthWrite: false,
+      });
+      dome = new THREE.Mesh(geo, mat);
+      dome.position.y = 0.2;
+      group.add(dome);
+      this.barrierMeshesMap.set(structureId, dome);
+    }
+    if (dome) {
+      dome.visible = active;
+    }
+  }
+
+  public updateEntityLiveState(
+    id: string,
+    patch: Partial<Pick<WorldEntity, 'health' | 'maxHealth' | 'yieldAmount' | 'isDefeated' | 'respawnAt' | 'ownerFaction'>>
+  ) {
+    const ent = this.entitiesMap.get(id);
+    if (!ent) return;
+    const wasDefeated = Boolean(ent.isDefeated);
+    Object.assign(ent, patch);
+
+    if (ent.category === 'monster') {
+      const grp = this.monsterMeshesMap.get(id);
+      if (grp) {
+        if (!wasDefeated && patch.isDefeated) {
+          this.dissolveMonsterIntoSmoke(grp, 'monster');
+        } else if (wasDefeated && patch.isDefeated === false) {
+          grp.visible = true;
+          this.spawnImpactSparks(grp.position);
+        }
+      }
+    } else if (ent.category === 'resource') {
+      const grp = this.resourceMeshesMap.get(id);
+      if (grp) {
+        if (!wasDefeated && patch.isDefeated) {
+          this.dissolveMonsterIntoSmoke(grp, 'resource');
+        } else if (wasDefeated && patch.isDefeated === false) {
+          grp.visible = true;
+          this.spawnImpactSparks(grp.position);
+        } else if (patch.isDefeated !== undefined) {
+          grp.visible = !patch.isDefeated;
+        }
+      }
+    }
+  }
+
+  public setCastleBurningState(castleId: string, isBurning: boolean, currentHp?: number, maxHp?: number) {
+    const entity = this.entitiesMap.get(castleId);
+    if (entity) {
+      if (typeof currentHp === 'number') entity.health = currentHp;
+      if (typeof maxHp === 'number') entity.maxHealth = maxHp;
+    }
+    const burnEntry = this.castleBurningMap.get(castleId);
+    if (!burnEntry) return;
+
+    const wasBurning = burnEntry.isBurning;
+    burnEntry.isBurning = isBurning;
+    burnEntry.flamesGroup.visible = isBurning;
+    if (typeof currentHp === 'number' && typeof maxHp === 'number' && maxHp > 0) {
+      const ratio = Math.max(0, Math.min(1, currentHp / maxHp));
+      burnEntry.intensity = 0.65 + (1 - ratio) * 0.85;
+    } else {
+      burnEntry.intensity = 1.0;
+    }
+
+    if (isBurning && !wasBurning) {
+      burnEntry.smokeTimer = 0.16;
+      this.spawnSiegeSmokeBurst(burnEntry.group.position, 14);
+      this.triggerFlinchShake(burnEntry.group);
+    }
+  }
+
+  public teleportEnemyCastle(
+    castleId: string,
+    forcedPos?: [number, number, number]
+  ): [number, number, number] | null {
+    const castle = this.castlesList.find((c) => c.id === castleId && c.faction === 'enemy');
+    const cGroup = this.buildingMeshesMap.get(castleId);
+    const entity = this.entitiesMap.get(castleId);
+    if (!castle || !cGroup || !entity) return null;
+
+    const oldPos: [number, number, number] = [...castle.position];
+    const oldVec = new THREE.Vector3(oldPos[0], oldPos[1], oldPos[2]);
+
+    const otherCastlePositions = this.castlesList
+      .filter((c) => c.id !== castleId)
+      .map((c) => c.position);
+
+    const newPos =
+      forcedPos ||
+      pickValidCastleCoordinate(otherCastlePositions, {
+        minDistFromCenter: 340,
+        maxDistFromCenter: 1420,
+        minCastleDist: 96,
+        oldPos,
+        minJumpFromOld: 340,
+        getHeightAt: (x, z) => this.terrainGenerator.getHeightAt(x, z),
+      });
+
+    // Departure destruction + portal shockwave at the fallen citadel coordinates
+    this.spawnConquestPillar(oldVec, 0xef4444);
+    this.spawnShockwave(oldVec, 0xef4444, entity.radius * 2.2, 0.95);
+    this.spawnShockwave(oldVec, 0x38bdf8, entity.radius * 1.75, 0.85);
+    this.spawnSiegeSmokeBurst(oldVec, 24);
+
+    // Clear burning fire state & restore full HP at the new stronghold
+    this.setCastleBurningState(castleId, false, entity.maxHealth ?? 45000, entity.maxHealth ?? 45000);
+    entity.isDefeated = false;
+    entity.health = entity.maxHealth ?? 45000;
+    castle.position = [...newPos];
+    entity.position = [...newPos];
+    cGroup.position.set(newPos[0], newPos[1], newPos[2]);
+
+    // Refresh floating badge sprite with new [X, Z] coords cleanly
+    const badgeRef = this.castleBadgeRefs.get(castleId);
+    if (badgeRef) {
+      cGroup.remove(badgeRef.badgeSprite);
+      if (badgeRef.badgeSprite.material.map) badgeRef.badgeSprite.material.map.dispose();
+      badgeRef.badgeSprite.material.dispose();
+      const refreshedBadge = this.createFloatingBadgeSprite(
+        `⚔️ ${castle.name.toUpperCase()}`,
+        `${castle.allianceTag} ${castle.allianceAlias || ''} · Lv.${castle.level}`,
+        `☠️ [${Math.round(newPos[0])}, ${Math.round(newPos[2])}] ENEMY CITADEL`,
+        '#ef4444',
+        '#fca5a5',
+        15.5,
+        4.4
+      );
+      refreshedBadge.position.set(0, badgeRef.badgeY, 0);
+      cGroup.add(refreshedBadge);
+      badgeRef.badgeSprite = refreshedBadge;
+    }
+
+    if (this.selectedEntity?.id === castleId) {
+      this.selectionIndicator.position.set(newPos[0], newPos[1] + 0.18, newPos[2]);
+    }
+
+    // Arrival cyan-gold teleportation portal at the new random area
+    const newVec = new THREE.Vector3(newPos[0], newPos[1], newPos[2]);
+    this.spawnConquestPillar(newVec, 0x38bdf8);
+    this.spawnShockwave(newVec, 0x38bdf8, entity.radius * 2.1, 1.0);
+    this.spawnShockwave(newVec, 0xfacc15, entity.radius * 1.5, 0.85);
+    this.spawnImpactSparks(newVec);
+
+    this.onCastlesUpdated?.([...this.castlesList]);
+    return [...newPos];
+  }
+
+  public setMarchVisual(
+    visual: {
+      from: [number, number, number];
+      to: [number, number, number];
+      progress01: number;
+      label: string;
+      isReturning?: boolean;
+      inCombatOrGathering?: boolean;
+      resourceType?: string;
+    } | null
+  ) {
+    this.externalMarchVisual = visual;
+    if (!visual) {
+      if (this.armyState === 'IDLE') {
+        this.armyGroup.visible = false;
+        this.tacticalLine.visible = false;
+      }
+      return;
+    }
+
+    const t = Math.max(0, Math.min(1, visual.progress01));
+    const ax = THREE.MathUtils.lerp(visual.from[0], visual.to[0], t);
+    const az = THREE.MathUtils.lerp(visual.from[2], visual.to[2], t);
+    const ay = this.terrainGenerator.getHeightAt(ax, az);
+
+    this.armyGroup.position.set(ax, ay, az);
+    this.armyPos.set(ax, ay, az);
+    this.armyGroup.visible = this.currentSceneMode === 'world';
+
+    const dx = visual.to[0] - visual.from[0];
+    const dz = visual.to[2] - visual.from[2];
+    if (Math.hypot(dx, dz) > 0.1) {
+      this.armyGroup.rotation.y = Math.atan2(dx, dz);
+    }
+
+    this.tacticalLine.visible = this.currentSceneMode === 'world';
+    this._linePts[0].set(ax, ay + 0.35, az);
+    this._linePts[1].set(visual.to[0], this.terrainGenerator.getHeightAt(visual.to[0], visual.to[2]) + 0.35, visual.to[2]);
+    this.tacticalLine.geometry.setFromPoints(this._linePts);
+  }
+
+  public triggerCombatVfxAtTarget(targetId: string, damageText: string, color = '#ff4d4f', isHeavy = false) {
+    const ent = this.entitiesMap.get(targetId);
+    if (!ent) return;
+    const meshGroup =
+      ent.category === 'monster'
+        ? this.monsterMeshesMap.get(targetId)
+        : ent.category === 'resource'
+          ? this.resourceMeshesMap.get(targetId)
+          : this.buildingMeshesMap.get(targetId);
+    if (!meshGroup) return;
+
+    const proj = meshGroup.position.clone();
+    proj.y += ent.category === 'monster' ? 2.5 : 4.5;
+    if (ent.category === 'resource') {
+      this.spawnDebrisChips(meshGroup.position, ent.resourceType === 'crystal' ? 'iron' : ent.subtype);
+      this.spawnImpactSparks(proj);
+    } else {
+      this.spawnSiegeVolley(this.armyGroup.position, meshGroup.position, isHeavy);
+      this.triggerFlinchShake(meshGroup);
+      this.spawnImpactSparks(proj);
+      this.spawnShockwave(meshGroup.position, isHeavy ? 0xfacc15 : 0xf87171, Math.max(4.5, ent.radius * 0.9), 0.5);
+    }
+
+    proj.project(this.cameraController.camera);
+    const screenX = ((proj.x + 1) * this.container.clientWidth) / 2;
+    const screenY = ((-proj.y + 1) * this.container.clientHeight) / 2;
+    this.onAddCombatFloater?.(damageText, color, screenX, screenY - 22);
+  }
+
+  public conquerStructureById(structureId: string, silent = false) {
+    const ent = this.entitiesMap.get(structureId);
+    const meshGroup = this.buildingMeshesMap.get(structureId);
+    if (ent && meshGroup) {
+      this.conquerStructure(ent, meshGroup, silent);
     }
   }
 
@@ -2751,36 +3572,43 @@ export class WorldMap {
     });
   }
 
-  private conquerStructure(entity: WorldEntity, meshGroup: THREE.Group) {
+  private conquerStructure(entity: WorldEntity, meshGroup: THREE.Group, silent = false) {
+    const tagBracket = `[${this.playerAlliance.tag}]`;
     entity.ownerFaction = 'alliance';
-    entity.conqueredBy = 'Lord Dangol [CRYSTAL]';
+    entity.conqueredBy = `Lord Dangol ${tagBracket} · ${this.playerAlliance.alias}`;
     entity.health = entity.maxHealth ?? 5000;
     entity.actions = ['garrison', 'upgrade', 'inspect'];
 
     const refs = this.buildingConquestRefs.get(entity.id);
     if (refs) {
-      for (const m of refs.crystalMeshes) {
-        m.material = this.conqueredCrystalMat;
+      if (entity.type === 'congress') {
+        for (const m of refs.crystalMeshes) {
+          m.material = this.conqueredCrystalMat;
+        }
       }
       if (refs.ringMesh) {
         refs.ringMesh.material = this.conqueredRingMat;
       }
       // Replace floating badge with Conquered Alliance Sovereign badge
       meshGroup.remove(refs.badgeSprite);
+      if (refs.badgeSprite.material.map) refs.badgeSprite.material.map.dispose();
+      refs.badgeSprite.material.dispose();
       const isCongress = entity.type === 'congress';
       const newBadge = this.createFloatingBadgeSprite(
         entity.name.toUpperCase(),
-        `👑 CONQUERED BY [CRYSTAL] · ${entity.buffLabel || 'ALLIANCE'}`,
-        isCongress ? '👑 IMPERIAL SOVEREIGNTY 👑' : '⚔️ ALLIANCE CONQUERED',
+        `${tagBracket} ${this.playerAlliance.alias}`,
+        isCongress ? '👑 IMPERIAL SOVEREIGNTY 👑' : `⚔️ HELD · ${entity.buffLabel || 'ALLIANCE'}`,
         '#10b981',
         '#fde047',
-        isCongress ? 19.0 : 14.5,
+        isCongress ? 19.5 : 15.0,
         isCongress ? 5.8 : 4.5
       );
       newBadge.position.set(0, refs.badgeY, 0);
       meshGroup.add(newBadge);
       refs.badgeSprite = newBadge;
     }
+
+    if (silent) return;
 
     const origin = meshGroup.position;
     this.spawnConquestPillar(origin, entity.type === 'congress' ? 0xfacc15 : 0x10b981);
@@ -2790,10 +3618,111 @@ export class WorldMap {
 
     const buffLabel = entity.buffLabel || '+5% Territory Buff';
     this.onStructureConquered?.(entity, buffLabel);
-    this.onBulletNotify?.({
-      text: `👑 CONQUEST! [CRYSTAL] Lord Dangol captured ${entity.name} (${buffLabel})!`,
-      category: 'conquest',
+  }
+
+  public setStructureNeutral(structureId: string) {
+    const entity = this.entitiesMap.get(structureId);
+    const meshGroup = this.buildingMeshesMap.get(structureId);
+    if (!entity || !meshGroup) return;
+
+    entity.ownerFaction = 'neutral';
+    entity.conqueredBy = undefined;
+    entity.health = entity.maxHealth ?? 5000;
+    entity.actions = ['attack', 'rally', 'scout', 'inspect'];
+
+    const refs = this.buildingConquestRefs.get(structureId);
+    if (refs) {
+      refs.crystalMeshes.forEach((m, idx) => {
+        if (refs.neutralCrystalMats[idx]) {
+          m.material = refs.neutralCrystalMats[idx];
+        }
+      });
+      if (refs.ringMesh && refs.neutralRingMat) {
+        refs.ringMesh.material = refs.neutralRingMat;
+      }
+      meshGroup.remove(refs.badgeSprite);
+      if (refs.badgeSprite.material.map) refs.badgeSprite.material.map.dispose();
+      refs.badgeSprite.material.dispose();
+
+      const nb = refs.neutralBadge;
+      const neutralSprite = this.createFloatingBadgeSprite(
+        nb.title,
+        nb.subtitle,
+        nb.starsText,
+        nb.borderColor,
+        nb.accentColor,
+        nb.scaleW,
+        nb.scaleH
+      );
+      neutralSprite.position.set(0, refs.badgeY, 0);
+      meshGroup.add(neutralSprite);
+      refs.badgeSprite = neutralSprite;
+    }
+
+    this.spawnShockwave(meshGroup.position, 0x38bdf8, entity.radius * 1.6, 0.7);
+  }
+
+  public setAllianceIdentity(identity: PlayerAllianceIdentity) {
+    this.playerAlliance = identity;
+    const tagBracket = `[${identity.tag}]`;
+
+    // Update all player & alliance castle data + floating badges
+    for (const castle of this.castlesList) {
+      if (castle.faction === 'enemy') continue;
+      castle.allianceTag = tagBracket;
+      castle.allianceAlias = identity.alias;
+
+      const entity = this.entitiesMap.get(castle.id);
+      if (entity) {
+        entity.description = `${tagBracket} ${identity.alias} · ${castle.owner}'s fortified stronghold.`;
+      }
+
+      const ref = this.castleBadgeRefs.get(castle.id);
+      if (ref) {
+        ref.group.remove(ref.badgeSprite);
+        if (ref.badgeSprite.material.map) ref.badgeSprite.material.map.dispose();
+        ref.badgeSprite.material.dispose();
+
+        const isMine = castle.isMyCastle;
+        const newBadge = this.createFloatingBadgeSprite(
+          isMine ? '🏰 MY CASTLE (LORD DANGOL)' : `🛡️ ${castle.owner.toUpperCase()}`,
+          `${tagBracket} ${identity.alias} · Lv.${castle.level}`,
+          isMine ? '👑 MY CASTLE 👑' : `⚔️ [${castle.position[0]}, ${castle.position[2]}] ALLIANCE`,
+          isMine ? '#10b981' : '#38bdf8',
+          isMine ? '#fde047' : '#93c5fd',
+          isMine ? 17.5 : 14.5,
+          isMine ? 5.2 : 4.4
+        );
+        newBadge.position.set(0, ref.badgeY, 0);
+        ref.group.add(newBadge);
+        ref.badgeSprite = newBadge;
+      }
+    }
+
+    // Refresh badges on any already-conquered Shrines or Congress
+    this.buildingConquestRefs.forEach((refs, id) => {
+      const entity = this.entitiesMap.get(id);
+      if (!entity || entity.ownerFaction !== 'alliance') return;
+      entity.conqueredBy = `Lord Dangol ${tagBracket} · ${identity.alias}`;
+      refs.group.remove(refs.badgeSprite);
+      if (refs.badgeSprite.material.map) refs.badgeSprite.material.map.dispose();
+      refs.badgeSprite.material.dispose();
+      const isCongress = entity.type === 'congress';
+      const newBadge = this.createFloatingBadgeSprite(
+        entity.name.toUpperCase(),
+        `${tagBracket} ${identity.alias}`,
+        isCongress ? '👑 IMPERIAL SOVEREIGNTY 👑' : `⚔️ HELD · ${entity.buffLabel || 'ALLIANCE'}`,
+        '#10b981',
+        '#fde047',
+        isCongress ? 19.5 : 15.0,
+        isCongress ? 5.8 : 4.5
+      );
+      newBadge.position.set(0, refs.badgeY, 0);
+      refs.group.add(newBadge);
+      refs.badgeSprite = newBadge;
     });
+
+    this.onCastlesUpdated?.([...this.castlesList]);
   }
 
   private applyCombatStrike(target: WorldEntity, damage: number) {
@@ -2835,6 +3764,10 @@ export class WorldMap {
       this.onAddCombatFloater?.(`-${damage.toLocaleString()} HP`, '#ff4d4f', screenX, screenY - 20);
       this.onAddCombatFloater?.(isMonster ? '⚔️ CLASH' : '☄️ SIEGE HIT!', '#dfba6e', screenX, screenY - 45);
 
+      if (isEnemyCastle) {
+        this.setCastleBurningState(entity.id, true, newHp, entity.maxHealth ?? 45000);
+      }
+
       if (isMonster) {
         meshGroup.traverse((child) => {
           const m = child as THREE.Mesh;
@@ -2854,25 +3787,14 @@ export class WorldMap {
       this.onAddCombatFloater?.('💀 VANQUISHED!', '#dfba6e', screenX, screenY - 60);
 
       entity.isDefeated = true;
-      this.dissolveMonsterIntoSmoke(meshGroup);
+      this.dissolveMonsterIntoSmoke(meshGroup, 'monster');
       this.onMonsterDefeated?.(entity);
-      this.onBulletNotify?.({
-        text: `💀 SLAYER! Lord Dangol vanquished ${entity.name} (Lv.${entity.level})!`,
-        category: 'monster',
-      });
     } else if (isEnemyCastle) {
       this.onAddCombatFloater?.('🔥 CITADEL BREACHED!', '#ff4d4f', screenX, screenY - 15);
-      this.onAddCombatFloater?.('💰 +2,500 GOLD PLUNDERED!', '#facc15', screenX, screenY - 45);
+      this.onAddCombatFloater?.('🌀 RANDOM TELEPORT!', '#38bdf8', screenX, screenY - 45);
 
-      entity.isDefeated = true;
-      this.spawnConquestPillar(meshGroup.position, 0xef4444);
-      this.spawnShockwave(meshGroup.position, 0xef4444, entity.radius * 2.2, 1.0);
-      this.dissolveMonsterIntoSmoke(meshGroup);
+      this.teleportEnemyCastle(entity.id);
       this.onEnemyCastleDefeated?.(entity);
-      this.onBulletNotify?.({
-        text: `🔥 VICTORY! ${entity.name} breached & plundered by Lord Dangol!`,
-        category: 'attack',
-      });
     } else if (isConquerableStructure) {
       this.onAddCombatFloater?.('👑 CONQUERED!', '#10b981', screenX, screenY - 18);
       this.onAddCombatFloater?.(`✨ ${entity.buffLabel || 'ALLIANCE BUFF'}`, '#fde047', screenX, screenY - 48);
@@ -2883,12 +3805,56 @@ export class WorldMap {
     this.totalMarchDist = this.armyGroup.position.distanceTo(this.armyHomePos);
   }
 
-  private dissolveMonsterIntoSmoke(group: THREE.Group) {
+  private spawnSiegeSmokeBurst(origin: THREE.Vector3, count = 14) {
+    const darkShades = [0x1e293b, 0x334155, 0x475569, 0x64748b];
+    const maxAllowed = Math.min(count, Math.max(4, 180 - this.activeSmokeParticles.length));
+    for (let i = 0; i < maxAllowed; i++) {
+      const mat = new THREE.MeshStandardMaterial({
+        color: darkShades[Math.floor(Math.random() * darkShades.length)],
+        roughness: 0.96,
+        transparent: true,
+        opacity: 0.88,
+        depthWrite: false,
+      });
+      const puff = new THREE.Mesh(this.sharedSmokeGeo, mat);
+      puff.position.set(
+        origin.x + (Math.random() - 0.5) * 9.5,
+        origin.y + 4.0 + Math.random() * 6.5,
+        origin.z + (Math.random() - 0.5) * 9.5
+      );
+      this.scene.add(puff);
+
+      this.activeSmokeParticles.push({
+        mesh: puff,
+        velocity: new THREE.Vector3(
+          (Math.random() - 0.5) * 3.0,
+          3.4 + Math.random() * 3.6,
+          (Math.random() - 0.5) * 3.0
+        ),
+        rotSpeed: new THREE.Vector3(
+          (Math.random() - 0.5) * 3,
+          (Math.random() - 0.5) * 3,
+          (Math.random() - 0.5) * 3
+        ),
+        life: 0,
+        maxLife: 2.1 + Math.random() * 0.7,
+        initialScale: 0.8 + Math.random() * 0.5,
+        targetScale: 4.2 + Math.random() * 1.8,
+      });
+    }
+  }
+
+  private dissolveMonsterIntoSmoke(group: THREE.Group, variant: 'monster' | 'resource' = 'monster') {
     group.visible = false;
     const origin = group.position;
 
-    const smokeShades = [0xf1f5f9, 0xe2e8f0, 0xcbd5e1, 0x94a3b8];
-    for (let i = 0; i < 28; i++) {
+    const smokeShades =
+      variant === 'resource'
+        ? [0xf5f5f4, 0xe7e5e4, 0xd6d3d1, 0xa8a29e]
+        : [0xf1f5f9, 0xe2e8f0, 0xcbd5e1, 0x94a3b8];
+    const puffCount = Math.min(28, Math.max(8, 185 - this.activeSmokeParticles.length));
+    const spread = variant === 'resource' ? 3.2 : 2.2;
+    for (let i = 0; i < puffCount; i++) {
       const mat = new THREE.MeshStandardMaterial({
         color: smokeShades[Math.floor(Math.random() * smokeShades.length)],
         roughness: 0.95,
@@ -2898,9 +3864,9 @@ export class WorldMap {
       });
       const puff = new THREE.Mesh(this.sharedSmokeGeo, mat);
       puff.position.set(
-        origin.x + (Math.random() - 0.5) * 2.2,
-        origin.y + 0.4 + Math.random() * 1.5,
-        origin.z + (Math.random() - 0.5) * 2.2
+        origin.x + (Math.random() - 0.5) * spread,
+        origin.y + 0.5 + Math.random() * 1.8,
+        origin.z + (Math.random() - 0.5) * spread
       );
       this.scene.add(puff);
 
@@ -2910,8 +3876,8 @@ export class WorldMap {
         rotSpeed: new THREE.Vector3((Math.random() - 0.5) * 4, (Math.random() - 0.5) * 4, (Math.random() - 0.5) * 4),
         life: 0,
         maxLife: 2.0 + Math.random() * 0.6,
-        initialScale: 0.4 + Math.random() * 0.3,
-        targetScale: 2.8 + Math.random() * 1.4,
+        initialScale: 0.45 + Math.random() * 0.35,
+        targetScale: 2.9 + Math.random() * 1.4,
       });
     }
   }
@@ -2949,15 +3915,28 @@ export class WorldMap {
   // 7. HIGH-PERFORMANCE ANIMATION & RENDER LOOP (Zero-GC + Software-GL Pacing)
   // ============================================================
   private startLoop() {
+    if (this.isDisposed || this.isContextLost) return;
+
     const afterDraw = (cb: () => void) => {
+      if (this.isDisposed || this.isContextLost) return;
       const gl = this.renderer.getContext() as WebGL2RenderingContext;
-      if (!gl || !gl.fenceSync) {
+      if (!gl || gl.isContextLost() || !gl.fenceSync) {
         this.animFrameId = window.setTimeout(cb, 80);
         return;
       }
       const sync = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0);
       gl.flush();
       const poll = () => {
+        if (this.isDisposed || this.isContextLost || gl.isContextLost()) {
+          if (sync) {
+            try {
+              gl.deleteSync(sync);
+            } catch {
+              // Ignore on lost context
+            }
+          }
+          return;
+        }
         const state = sync && gl.getSyncParameter(sync, gl.SYNC_STATUS);
         if (state === gl.UNSIGNALED) {
           this.animFrameId = window.setTimeout(poll, 5);
@@ -2970,14 +3949,30 @@ export class WorldMap {
     };
 
     const loop = () => {
+      if (this.isDisposed || this.isContextLost) return;
+      const gl = this.renderer.getContext();
+      if (!gl || gl.isContextLost()) {
+        this.isContextLost = true;
+        return;
+      }
+
+      if (!this.hasCompiledScene && !this.isSoftwareGl) {
+        this.hasCompiledScene = true;
+        this.renderer.compile(this.scene, this.cameraController.camera);
+        if (gl.isContextLost()) {
+          this.isContextLost = true;
+          return;
+        }
+      }
+
       const delta = Math.min(0.1, this.clock.getDelta());
       const elapsed = this.clock.getElapsedTime();
 
       this.cameraController.update(delta);
 
-      // Dynamically scale fog density with zoom so Zoom Out 100 keeps the whole 1600x1600 continent crisp
+      // Dynamically scale fog density with zoom so Zoom Out 100 keeps the whole 3200x3200 green continent crisp
       if (this.scene.fog instanceof THREE.FogExp2) {
-        this.scene.fog.density = 0.00085 * Math.min(1.0, Math.max(0.18, this.cameraController.zoom / 0.85));
+        this.scene.fog.density = 0.00042 * Math.min(1.0, Math.max(0.06, (this.cameraController.zoom - 0.015) / 0.85));
       }
 
       // 0. Update Regional LOD Chunks, Waterfalls, Smooth Rivers & Mist
@@ -2988,7 +3983,7 @@ export class WorldMap {
         for (let i = 0; i < this.atmosphericClouds.length; i++) {
           const c = this.atmosphericClouds[i];
           c.group.position.x += c.speedX * delta;
-          if (c.group.position.x > 1950) c.group.position.x = -350;
+          if (c.group.position.x > 3650) c.group.position.x = -450;
           c.group.position.y += Math.sin(elapsed * 0.4 + c.phase) * 0.015;
         }
         for (let i = 0; i < this.soaringEagles.length; i++) {
@@ -3086,6 +4081,51 @@ export class WorldMap {
         }
       }
 
+      // 3a. Burning Enemy Castle Destruction Flames & Rising Siege Smoke Plumes
+      this.castleBurningMap.forEach((entry) => {
+        if (!entry.isBurning) return;
+        const cones = entry.flamesGroup.children;
+        for (let f = 0; f < cones.length; f++) {
+          const cone = cones[f];
+          const ph = cone.userData?.phase || 0;
+          const flickerY = (0.78 + Math.sin(elapsed * 13.5 + ph) * 0.26) * entry.intensity;
+          const flickerXZ = 0.86 + Math.cos(elapsed * 11.2 + ph) * 0.16;
+          cone.scale.set(flickerXZ, flickerY, flickerXZ);
+          cone.rotation.y = elapsed * 2.6 + ph;
+        }
+        entry.smokeTimer += delta;
+        if (entry.smokeTimer >= 0.22) {
+          entry.smokeTimer = 0;
+          if (this.activeSmokeParticles.length < 165) {
+            const darkShades = [0x1e293b, 0x334155, 0x475569];
+            const puffMat = new THREE.MeshStandardMaterial({
+              color: darkShades[Math.floor(Math.random() * darkShades.length)],
+              roughness: 0.96,
+              transparent: true,
+              opacity: 0.8,
+              depthWrite: false,
+            });
+            const puff = new THREE.Mesh(this.sharedSmokeGeo, puffMat);
+            const origin = entry.group.position;
+            puff.position.set(
+              origin.x + (Math.random() - 0.5) * 8.0,
+              origin.y + 8.5 + Math.random() * 5.0,
+              origin.z + (Math.random() - 0.5) * 8.0
+            );
+            this.scene.add(puff);
+            this.activeSmokeParticles.push({
+              mesh: puff,
+              velocity: new THREE.Vector3((Math.random() - 0.5) * 1.6, 3.2 + Math.random() * 2.2, (Math.random() - 0.5) * 1.6),
+              rotSpeed: new THREE.Vector3((Math.random() - 0.5) * 2.5, (Math.random() - 0.5) * 2.5, (Math.random() - 0.5) * 2.5),
+              life: 0,
+              maxLife: 2.2 + Math.random() * 0.6,
+              initialScale: 0.9 * entry.intensity,
+              targetScale: 3.6 * entry.intensity,
+            });
+          }
+        }
+      });
+
       const bGroups = this.buildingsGroup.children;
       for (let idx = 0; idx < bGroups.length; idx++) {
         const bChildren = bGroups[idx].children;
@@ -3114,8 +4154,122 @@ export class WorldMap {
         }
       }
 
-      // 4. Army marching and interaction loop (Zero-GC pre-allocated vectors)
-      if (this.armyGroup && this.armyState !== 'IDLE') {
+      // 3b. Animated Floating Crystal Shrines (Hover Crystal, Twin Gold Orbit Rings, Colored Flames, Crackling Lightning)
+      for (let sIdx = 0; sIdx < this.animatedShrines.length; sIdx++) {
+        const sh = this.animatedShrines[sIdx];
+        const ph = sh.phase;
+
+        // Hovering crystal vertical bob & graceful axial rotation
+        sh.crystalGroup.position.y = sh.crystalBaseY + Math.sin(elapsed * 2.1 + ph) * 0.36;
+        sh.crystalGroup.rotation.y += delta * 0.55;
+
+        // Counter-rotating diagonal golden energy rings
+        sh.orbitRing1.rotation.z += delta * 1.45;
+        sh.orbitRing2.rotation.z -= delta * 1.15;
+
+        // Portal energy beam shimmer
+        const beamPulse = 0.88 + Math.sin(elapsed * 5.2 + ph) * 0.14;
+        sh.portalBeam.scale.set(beamPulse, 1.0, beamPulse);
+
+        // Rising tier-colored flame tongues around central portal
+        for (let f = 0; f < sh.flameTongues.length; f++) {
+          const fl = sh.flameTongues[f];
+          const tWave = (elapsed * fl.speed + fl.phase) % 1;
+          const flicker = 0.72 + Math.sin(elapsed * 13.0 + fl.phase) * 0.28;
+          const heightScale = 0.75 + Math.sin(tWave * Math.PI) * 0.95;
+          const widthScale = (1.0 - tWave * 0.48) * flicker;
+          fl.mesh.position.set(
+            fl.baseX * (1.0 - tWave * 0.28) + Math.sin(elapsed * 7.0 + fl.phase) * 0.08,
+            fl.baseY + tWave * 0.75,
+            fl.baseZ * (1.0 - tWave * 0.28) + Math.cos(elapsed * 6.5 + fl.phase) * 0.08
+          );
+          fl.mesh.scale.set(widthScale, heightScale, widthScale);
+          fl.mesh.rotation.y = elapsed * 2.2 + fl.phase;
+        }
+
+        // Waterfall splash foam rings & swaying blue lotus banners
+        for (let w = 0; w < sh.waterfallFoams.length; w++) {
+          const wf = sh.waterfallFoams[w];
+          const s = 0.92 + Math.sin(elapsed * 7.5 + ph + w) * 0.14;
+          wf.scale.set(s, s, 1);
+        }
+        for (let b = 0; b < sh.banners.length; b++) {
+          sh.banners[b].rotation.x = 0.05 + Math.sin(elapsed * 3.4 + ph + b) * 0.09;
+        }
+
+        // Crackling stepped ~16 Hz 3D lightning arcs between corner spires and hovering crystal
+        const boltBucket = Math.floor(elapsed * 16 + ph * 3.1);
+        const burstPulse = Math.sin(elapsed * 9.5 + ph * 2.1);
+        sh.lightningMat.opacity = burstPulse > -0.15 ? 0.55 + Math.abs(Math.sin(elapsed * 29.0 + ph)) * 0.45 : 0.12;
+
+        if (boltBucket !== sh.lastBoltBucket) {
+          sh.lastBoltBucket = boltBucket;
+          const crystalYOffset = sh.crystalGroup.position.y - sh.crystalBaseY;
+          for (let l = 0; l < sh.lightningBolts.length; l++) {
+            const bolt = sh.lightningBolts[l];
+            const pos = bolt.positions;
+            const segs = 6;
+            for (let p = 0; p <= segs; p++) {
+              const t = p / segs;
+              const bx = bolt.startX + (bolt.endX - bolt.startX) * t;
+              const by = bolt.startY + ((bolt.endY + crystalYOffset) - bolt.startY) * t;
+              const bz = bolt.startZ + (bolt.endZ - bolt.startZ) * t;
+              const amp = p === 0 || p === segs ? 0 : bolt.jitter * Math.sin(t * Math.PI);
+              // Deterministic pseudo-random crackle seeded by bucket + vertex index (zero allocations)
+              const h1 = Math.sin(boltBucket * 12.9898 + p * 78.233 + bolt.phase) * 43758.5453;
+              const h2 = Math.sin(boltBucket * 39.3468 + p * 19.137 + bolt.phase) * 21345.6789;
+              const h3 = Math.sin(boltBucket * 51.7131 + p * 63.412 + bolt.phase) * 19432.1234;
+              const n1 = (h1 - Math.floor(h1)) * 2 - 1;
+              const n2 = (h2 - Math.floor(h2)) * 2 - 1;
+              const n3 = (h3 - Math.floor(h3)) * 2 - 1;
+              pos[p * 3] = bx + n1 * amp;
+              pos[p * 3 + 1] = by + n2 * amp * 0.85;
+              pos[p * 3 + 2] = bz + n3 * amp;
+            }
+            (bolt.line.geometry.attributes.position as THREE.BufferAttribute).needsUpdate = true;
+          }
+        }
+      }
+
+      // 4. Army marching and interaction loop (App simulation visual OR legacy fallback)
+      if (this.externalMarchVisual && this.armyGroup) {
+        const curPos = this.armyGroup.position;
+        if (!this.externalMarchVisual.inCombatOrGathering) {
+          this.dustTimer += delta;
+          if (this.dustTimer >= 0.14) {
+            this.dustTimer = 0;
+            this.spawnMarchingDustPuff(curPos);
+          }
+          this.armyGroup.children.forEach((child) => {
+            if (child.userData?.isArmyBanner) {
+              child.rotation.y = Math.sin(elapsed * 6.0) * 0.22;
+            }
+            const w = child as THREE.Group;
+            if (w.userData?.idx !== undefined) {
+              const idx = w.userData.idx;
+              w.position.y = Math.abs(Math.sin(elapsed * 14 + idx * 0.5)) * 0.15;
+              w.children.forEach((m) => {
+                if (m.userData?.isLegLeft) m.rotation.x = Math.sin(elapsed * 14 + idx) * 0.55;
+                else if (m.userData?.isLegRight) m.rotation.x = -Math.sin(elapsed * 14 + idx) * 0.55;
+              });
+            }
+          });
+        } else {
+          this.externalMiningTimer += delta;
+          if (this.externalMiningTimer >= 0.45) {
+            this.externalMiningTimer = 0;
+            this._tempDest.set(
+              this.externalMarchVisual.to[0],
+              this.terrainGenerator.getHeightAt(this.externalMarchVisual.to[0], this.externalMarchVisual.to[2]),
+              this.externalMarchVisual.to[2]
+            );
+            this.spawnDebrisChips(this._tempDest, this.externalMarchVisual.resourceType || 'stone');
+            if (this.externalMarchVisual.resourceType === 'crystal') {
+              this.spawnImpactSparks(this._tempDest);
+            }
+          }
+        }
+      } else if (this.armyGroup && this.armyState !== 'IDLE') {
         const curPos = this.armyGroup.position;
 
         if (this.armyState === 'ATTACKING' || this.armyState === 'GATHERING') {
@@ -3438,7 +4592,12 @@ export class WorldMap {
       }
 
       this.renderer.render(this.scene, this.cameraController.camera);
+      if (!this.hasNotifiedReady) {
+        this.hasNotifiedReady = true;
+        this.onSceneReady?.();
+      }
 
+      if (this.isDisposed || this.isContextLost) return;
       if (this.isSoftwareGl) {
         afterDraw(loop);
       } else {
@@ -3446,7 +4605,12 @@ export class WorldMap {
       }
     };
 
-    loop();
+    // Schedule first frame asynchronously so React StrictMode unmount can cancel throwaway mounts cleanly
+    if (this.isSoftwareGl) {
+      this.animFrameId = window.setTimeout(loop, 0);
+    } else {
+      this.animFrameId = requestAnimationFrame(loop);
+    }
   }
 
   private onOrientationChange = () => {
@@ -3503,12 +4667,15 @@ export class WorldMap {
       this.selectionIndicator.visible = false;
       this.terrainGenerator.plotMarkersGroup.visible = false;
 
-      this.insideKingdom3D.rootGroup.visible = true;
-      this.cameraController.setPickables(this.insideKingdom3D.pickableObjects);
+      const inside3D = this.ensureInsideKingdom3D();
+      inside3D.rootGroup.visible = true;
+      this.cameraController.setPickables(inside3D.pickableObjects);
       this.cameraController.focusInsideKingdom();
-      this.onInsideKingdomStateChange?.(this.insideKingdom3D.getState());
+      this.onInsideKingdomStateChange?.(inside3D.getState());
     } else {
-      this.insideKingdom3D.rootGroup.visible = false;
+      if (this.insideKingdom3D) {
+        this.insideKingdom3D.rootGroup.visible = false;
+      }
 
       this.buildingsGroup.visible = true;
       this.castlesGroup.visible = true;
@@ -3526,7 +4693,7 @@ export class WorldMap {
 
   /**
    * Toggle 3D World Map Filter to display ONLY:
-   * - The Congress (center [800, 800])
+   * - The Congress (center [1600, 1600])
    * - 4 Inner Sanctum Shrines (Shrine A1–A4)
    * - 12 Mid-Ring Shrines (Shrine B1–B12)
    * - 20 Frontier Shrines (Shrine C1–C20)
@@ -3548,31 +4715,31 @@ export class WorldMap {
     return this.castlesList;
   }
 
-  public getInsideKingdomState(): InsideKingdomState {
-    return this.insideKingdom3D.getState();
+  public getInsideKingdomState(): InsideKingdomState | null {
+    return this.insideKingdom3D ? this.insideKingdom3D.getState() : null;
   }
 
   public selectInsidePlot(plotId: string) {
-    return this.insideKingdom3D.handlePlotClick(plotId);
+    return this.ensureInsideKingdom3D().handlePlotClick(plotId);
   }
 
   public mergeSelectedInsideBuilding(): boolean {
-    return this.insideKingdom3D.mergeSelectedWithMatchingTwin();
+    return this.ensureInsideKingdom3D().mergeSelectedWithMatchingTwin();
   }
 
   public autoMergeInsideKingdom(): number {
-    return this.insideKingdom3D.autoMergeAll();
+    return this.ensureInsideKingdom3D().autoMergeAll();
   }
 
   public constructInsideBuilding(
     category: MergeBuildingCategory,
     preferredPlotId?: string
   ): KingdomMergePlot | null {
-    return this.insideKingdom3D.constructBuilding(category, preferredPlotId);
+    return this.ensureInsideKingdom3D().constructBuilding(category, preferredPlotId);
   }
 
   public upgradeInsideImperialKeep(): boolean {
-    return this.insideKingdom3D.upgradeImperialKeep();
+    return this.ensureInsideKingdom3D().upgradeImperialKeep();
   }
 
   public zoomOutTo100() {
@@ -3611,6 +4778,7 @@ export class WorldMap {
   }
 
   public dispose() {
+    this.isDisposed = true;
     cancelAnimationFrame(this.animFrameId);
     clearTimeout(this.animFrameId);
     window.removeEventListener('resize', this.onResize);
@@ -3618,9 +4786,64 @@ export class WorldMap {
     this.resizeObserver?.disconnect();
     this.resizeObserver = null;
     this.cameraController.dispose();
+
+    const domEl = this.renderer?.domElement;
+    if (domEl) {
+      domEl.removeEventListener('webglcontextlost', this.onContextLost);
+      domEl.removeEventListener('webglcontextrestored', this.onContextRestored);
+    }
+
+    if (this.scene) {
+      if (this.scene.environment) {
+        this.scene.environment.dispose();
+        this.scene.environment = null;
+      }
+      const disposedGeos = new Set<THREE.BufferGeometry>();
+      const disposedMats = new Set<THREE.Material>();
+      const disposedTexs = new Set<THREE.Texture>();
+      const disposeMat = (m: THREE.Material) => {
+        if (disposedMats.has(m)) return;
+        disposedMats.add(m);
+        const rec = m as unknown as Record<string, unknown>;
+        for (const key of ['map', 'normalMap', 'roughnessMap', 'metalnessMap', 'emissiveMap', 'alphaMap', 'aoMap', 'bumpMap']) {
+          const val = rec[key];
+          if (val && typeof val === 'object' && 'isTexture' in val) {
+            const tex = val as THREE.Texture;
+            if (!disposedTexs.has(tex)) {
+              disposedTexs.add(tex);
+              tex.dispose();
+            }
+          }
+        }
+        m.dispose();
+      };
+      this.scene.traverse((obj) => {
+        const meshLike = obj as THREE.Mesh;
+        if (meshLike.geometry && !disposedGeos.has(meshLike.geometry)) {
+          disposedGeos.add(meshLike.geometry);
+          meshLike.geometry.dispose();
+        }
+        if (meshLike.material) {
+          if (Array.isArray(meshLike.material)) {
+            meshLike.material.forEach(disposeMat);
+          } else {
+            disposeMat(meshLike.material);
+          }
+        }
+      });
+    }
+
     this.renderer.dispose();
-    if (this.container && this.container.contains(this.renderer.domElement)) {
-      this.container.removeChild(this.renderer.domElement);
+    if (this.container && domEl && this.container.contains(domEl)) {
+      this.container.removeChild(domEl);
+    }
+    try {
+      const gl = this.renderer.getContext();
+      if (gl && !gl.isContextLost()) {
+        this.renderer.forceContextLoss();
+      }
+    } catch {
+      // Ignore context-loss cleanup errors
     }
   }
 }

@@ -6,10 +6,37 @@ import {
   WORLD_RESOURCES,
   RESERVED_PLOTS,
   WorldCoordinates,
-  TroopUnit,
-  INITIAL_TROOP_ROSTER,
   CastleSpawnData,
+  NILE_DELTA_FORK_Z,
+  getNileMainX,
+  getNileWestDeltaX,
+  getNileEastDeltaX,
 } from '../game/WorldCoordinates';
+import {
+  ActiveMarch,
+  AllianceShrineRuleStatus,
+  CalculatedBonuses,
+  GameBalanceConfig,
+  NEPALESE_HEROES,
+  PlayerAllianceIdentity,
+  PlayerResources,
+  ResourceKind,
+  ShrineGarrisonState,
+  StructureTierKey,
+  TroopClassId,
+  TroopInventory,
+  TroopLevel,
+  TroopStack,
+  calculateArmyMetrics,
+  calculateMarchTiming,
+  calculateResourceGatherTiming,
+  getEnemyCastleMaxHp,
+  getHeroById,
+  getRecommendedMonsterBand,
+  normalizeAllianceTag,
+  validateAllianceAlias,
+} from '../game/NepaleseBalanceConfig';
+import type { CommandHubTab, LiveCastleStatus, LiveMonsterStatus, LiveNodeStatus } from './CommandHubDrawer';
 import { usePWAInstall, useOnlineStatus } from '../hooks/usePWAInstall';
 
 const CASTLE_EMBLEM_SRC = '/assets/aistudio/Gemini_Generated_Image_fzxzmyfzxzmyfzxz_6436d71f.jfif';
@@ -42,14 +69,35 @@ interface MapNavigationUIProps {
   armyPos: [number, number, number];
   armyStatusText: string;
   armyProgressPct: number;
-  resources: { wood: number; stone: number; iron: number; food: number; gold: number; gems: number };
+  resources: PlayerResources;
   conqueredPlots?: Record<string, 'neutral' | 'enemy' | 'alliance'>;
   onGrantReward?: (
-    type: 'wood' | 'stone' | 'iron' | 'food' | 'gold' | 'gems',
+    type: 'wood' | 'stone' | 'iron' | 'food' | 'crystal' | 'gold' | 'gems',
     amount: number,
     label: string
   ) => void;
   onShowToast?: (msg: string) => void;
+  balanceConfig: GameBalanceConfig;
+  bonuses: CalculatedBonuses;
+  troopInventory: TroopInventory;
+  activeMarches: ActiveMarch[];
+  activeMarchesCount: number;
+  battleReportsCount: number;
+  nodeStates: Record<string, LiveNodeStatus>;
+  monsterStates: Record<string, LiveMonsterStatus>;
+  castleStates: Record<string, LiveCastleStatus>;
+  onDispatchNepaleseMarch: (
+    target: WorldEntity,
+    action: EntityAction,
+    stacks: TroopStack[],
+    heroId?: string
+  ) => boolean;
+  onOpenCommandHub: (tab: CommandHubTab, structureId?: string) => void;
+  playerAlliance: PlayerAllianceIdentity;
+  onUpdateAllianceIdentity: (tag: string, alias: string) => boolean;
+  shrineRuleStatus: AllianceShrineRuleStatus;
+  shrineGarrisons: Record<string, ShrineGarrisonState>;
+  onRelinquishStructure: (structureId: string) => void;
 }
 
 interface BookmarkPin {
@@ -61,11 +109,12 @@ interface BookmarkPin {
   createdAt: number;
 }
 
-const BOOKMARKS_STORAGE_KEY = 'himalayan_realm_bookmarks_v1';
+const BOOKMARKS_STORAGE_KEY = 'himalayan_realm_bookmarks_v3';
 
 const DEFAULT_BOOKMARKS: BookmarkPin[] = [
-  { id: 'bm-shrine-a1', name: 'Shrine A1 Sanctum', x: 684, y: 684, category: 'shrine', createdAt: 1 },
-  { id: 'bm-frost-boss', name: 'Frost Yeti Lair', x: 300, y: 1360, category: 'enemy', createdAt: 2 },
+  { id: 'bm-shrine-a1', name: 'Shrine A1 Sanctum', x: 1352, y: 1352, category: 'shrine', createdAt: 1 },
+  { id: 'bm-congress', name: 'The Congress Citadel', x: 1600, y: 1600, category: 'shrine', createdAt: 2 },
+  { id: 'bm-highland-boss', name: 'Highland Yeti Sovereign', x: 240, y: 2960, category: 'enemy', createdAt: 3 },
 ];
 
 interface InventoryItemData {
@@ -135,6 +184,22 @@ export const MapNavigationUI: React.FC<MapNavigationUIProps> = ({
   conqueredPlots,
   onGrantReward,
   onShowToast,
+  balanceConfig,
+  bonuses,
+  troopInventory,
+  activeMarches,
+  activeMarchesCount,
+  battleReportsCount,
+  nodeStates,
+  monsterStates,
+  castleStates,
+  onDispatchNepaleseMarch,
+  onOpenCommandHub,
+  playerAlliance,
+  onUpdateAllianceIdentity,
+  shrineRuleStatus,
+  shrineGarrisons,
+  onRelinquishStructure,
 }) => {
   const minimapCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const isMinimapDraggingRef = useRef<boolean>(false);
@@ -208,12 +273,48 @@ export const MapNavigationUI: React.FC<MapNavigationUIProps> = ({
     }
   }, [bookmarks]);
 
-  // 1x1 Troop Formation Selection State
-  const [troopRoster, setTroopRoster] = useState<TroopUnit[]>(INITIAL_TROOP_ROSTER);
-  const [activeUnitIndex, setActiveUnitIndex] = useState<number>(0);
+  // Nepalese Contextual Battalion & Lead Hero Selector State (Magar Inf / Limbu Arc / Thakuri Cav Lv 1-5)
+  const [selectedHeroId, setSelectedHeroId] = useState<string>(NEPALESE_HEROES[0].id);
+  const [selectedTroopLv, setSelectedTroopLv] = useState<TroopLevel>(3);
+  const [marchCounts, setMarchCounts] = useState<Record<TroopClassId, number>>({
+    infantry: 500,
+    archer: 300,
+    cavalry: 200,
+  });
 
-  // Currently active unit in the 1x1 card
-  const currentUnit = troopRoster[activeUnitIndex] || troopRoster[0];
+  const occupiedHeroMap = useMemo(() => {
+    const map = new Map<string, ActiveMarch>();
+    for (const m of activeMarches) {
+      if (m.heroId) map.set(m.heroId, m);
+    }
+    return map;
+  }, [activeMarches]);
+
+  const activeHero = useMemo(() => {
+    const chosen = getHeroById(selectedHeroId);
+    if (chosen && !occupiedHeroMap.has(chosen.id)) return chosen;
+    return NEPALESE_HEROES.find((h) => !occupiedHeroMap.has(h.id)) || null;
+  }, [selectedHeroId, occupiedHeroMap]);
+
+  const effectiveBonuses = useMemo<CalculatedBonuses>(() => {
+    if (!activeHero) return bonuses;
+    const classAttackMults = {
+      ...(bonuses.classAttackMults || { infantry: 1, archer: 1, cavalry: 1 }),
+    };
+    classAttackMults[activeHero.classBonusClass] =
+      (classAttackMults[activeHero.classBonusClass] ?? 1) + activeHero.classAttackPct;
+    return {
+      ...bonuses,
+      attackMult: bonuses.attackMult + activeHero.attackPct,
+      hpMult: bonuses.hpMult + activeHero.hpPct,
+      powerMult: bonuses.powerMult + (activeHero.attackPct + activeHero.hpPct) * 0.5,
+      loadMult: bonuses.loadMult + activeHero.loadPct,
+      gatherMult: bonuses.gatherMult + activeHero.gatherPct,
+      marchMult: bonuses.marchMult + activeHero.marchPct,
+      siegeDamageMult: (bonuses.siegeDamageMult ?? 1) + activeHero.siegeDamagePct,
+      classAttackMults,
+    };
+  }, [bonuses, activeHero]);
 
   // Dock Toggles
   const [isChatOpen, setIsChatOpen] = useState(false);
@@ -222,17 +323,24 @@ export const MapNavigationUI: React.FC<MapNavigationUIProps> = ({
   const [chatMessages, setChatMessages] = useState<Array<{ id: string; sender: string; tag: string; text: string; time: string }>>([
     { id: '1', sender: 'Lord Kazi', tag: 'Vanguard', text: 'Ironcrest Pass is secured. Watch for Rock Drake patrols.', time: '14:22' },
     { id: '2', sender: 'Lady Maya', tag: 'Alliance', text: 'Gathering granite for Citadel Level 21 foundation upgrade.', time: '14:25' },
-    { id: '3', sender: 'Herald Gorkha', tag: 'System', text: 'Ancient Frost Yeti King spotted in Northern Glaciers [300, 1360]!', time: '14:28' },
+    { id: '3', sender: 'Herald Gorkha', tag: 'System', text: 'Ancient Highland Yeti Sovereign spotted in SW Green Corner [240, 2960]!', time: '14:28' },
   ]);
 
   const [isRadarOpen, setIsRadarOpen] = useState(false);
   const [radarCategory, setRadarCategory] = useState<
-    'all' | 'enemies' | 'shrines' | 'monsters' | 'gold' | 'iron' | 'stone' | 'wood' | 'farm'
+    'all' | 'enemies' | 'shrines' | 'monsters' | 'gold' | 'iron' | 'stone' | 'wood' | 'farm' | 'crystal'
   >('all');
 
   // Alliance Hub Modal State
   const [isAllianceOpen, setIsAllianceOpen] = useState(false);
-  const [allianceTab, setAllianceTab] = useState<'overview' | 'members' | 'war'>('overview');
+  const [allianceTab, setAllianceTab] = useState<'profile' | 'overview' | 'members' | 'war'>('profile');
+  const [allianceTagDraft, setAllianceTagDraft] = useState(playerAlliance.tag);
+  const [allianceAliasDraft, setAllianceAliasDraft] = useState(playerAlliance.alias);
+
+  useEffect(() => {
+    setAllianceTagDraft(playerAlliance.tag);
+    setAllianceAliasDraft(playerAlliance.alias);
+  }, [playerAlliance.tag, playerAlliance.alias]);
 
   // 3D Inventory, Quests & Mail Modals State
   const [isInventoryOpen, setIsInventoryOpen] = useState(false);
@@ -326,7 +434,7 @@ export const MapNavigationUI: React.FC<MapNavigationUIProps> = ({
       id: 'q-inspect-congress',
       tab: 'imperial',
       title: 'Reconnoiter The Congress & 36 Shrines',
-      desc: 'Open the Parchment WorldMap to inspect The Congress at [800, 800] and Shrines A1–A4, B1–B12, and C1–C20.',
+      desc: 'Open the Parchment WorldMap to inspect The Congress at [1600, 1600] and Shrines A1–A4, B1–B12, and C1–C20.',
       progress: 1,
       target: 1,
       rewardType: 'stone',
@@ -339,7 +447,7 @@ export const MapNavigationUI: React.FC<MapNavigationUIProps> = ({
       id: 'q-alliance-castles',
       tab: 'imperial',
       title: 'Coordinate with 10 Alliance Member Castles',
-      desc: 'Verify randomized spawn coordinates for My Castle and all 10 Alliance Member Castles across the 1600×1600 continent.',
+      desc: 'Verify randomized spawn coordinates for My Castle and all 10 Alliance Member Castles across the 3200×3200 green continent.',
       progress: 10,
       target: 10,
       rewardType: 'wood',
@@ -381,11 +489,11 @@ export const MapNavigationUI: React.FC<MapNavigationUIProps> = ({
     {
       id: 'mail-1',
       category: 'system',
-      title: '👑 The Congress Consecrated at [800, 800]',
+      title: '👑 The Congress Awaits at [1600, 1600]',
       sender: 'Imperial High Council',
       time: 'Just now',
-      body: 'The central Arcane Blue Crystal & Gold Congress Citadel at [800, 800] is online! 4 Inner Sanctum Shrines (A1–A4), 12 Mid-Ring Shrines (B1–B12), and 20 Frontier Shrines (C1–C20) form the Continent 1 lattice.',
-      coords: [800, 800],
+      body: 'The central Arcane Blue Crystal & Gold Congress Citadel stands at [1600, 1600]! Hold at least 2 C Shrines, 1 B Shrine, and 1 A Shrine within your 5-Shrine alliance cap before claiming The Congress.',
+      coords: [1600, 1600],
       read: false,
       claimed: false,
       rewardType: 'gold',
@@ -396,10 +504,10 @@ export const MapNavigationUI: React.FC<MapNavigationUIProps> = ({
       id: 'mail-2',
       category: 'alliance',
       title: '🏰 Alliance Castles Deployed Across Realm',
-      sender: 'Commander Kazi [VGD]',
+      sender: `Commander Kazi [${playerAlliance.tag}]`,
       time: '8m ago',
-      body: 'My Lord, all 10 Alliance Member Castles have established fortifications around the continent alongside My Castle. Use the WorldMap at any time to jump to allied strongholds or relocate positions.',
-      coords: [800, 760],
+      body: 'My Lord, all 10 Alliance Member Castles have established fortifications across the 3200×3200 continent alongside My Castle. Use the WorldMap at any time to jump to allied strongholds or relocate positions.',
+      coords: [1600, 1568],
       read: false,
       claimed: false,
       rewardType: 'wood',
@@ -412,8 +520,8 @@ export const MapNavigationUI: React.FC<MapNavigationUIProps> = ({
       title: '⚔️ Shrine A1 Inner Sanctum Recon Report',
       sender: 'Falcon Scout Corps',
       time: '19m ago',
-      body: 'Our scouts surveyed Inner Sanctum Shrine A1 at [684, 684] and linking Mid-Ring Shrine B1 at [452, 452]. Arcane mana conduits are at 100% capacity. Claim recovered war spoils below.',
-      coords: [684, 684],
+      body: 'Our scouts surveyed Inner Sanctum Shrine A1 at [1352, 1352] and linking Mid-Ring Shrine B1 at [856, 856]. Arcane mana conduits are at 100% capacity. Claim recovered war spoils below.',
+      coords: [1352, 1352],
       read: false,
       claimed: false,
       rewardType: 'iron',
@@ -427,7 +535,7 @@ export const MapNavigationUI: React.FC<MapNavigationUIProps> = ({
       sender: 'Royal Quartermaster',
       time: '35m ago',
       body: 'To accelerate your 3D Barracks, Watchtower, Resource Mill, and Shrine merges inside the walled Citadel courtyard, the Quartermaster has dispatched a shipment of dressed granite.',
-      coords: [800, 800],
+      coords: [1600, 1600],
       read: true,
       claimed: false,
       rewardType: 'stone',
@@ -545,12 +653,21 @@ export const MapNavigationUI: React.FC<MapNavigationUIProps> = ({
     onShowToast?.(`✉️ Claimed rewards from ${unclaimed.length} Imperial Dispatches!`);
   };
 
-  // Sculpted 3D Isometric SVG Models for Inventory, Quests, Alliance, Mail, Radar, Chat
+  // Sculpted 3D Isometric SVG Models for Inventory, Quests, Alliance, Mail, Radar, Chat, Hub
   const render3DModelIcon = (
-    type: 'inventory' | 'quests' | 'alliance' | 'mail' | 'radar' | 'chat',
+    type: 'inventory' | 'quests' | 'alliance' | 'mail' | 'radar' | 'chat' | 'hub',
     size = 28
   ) => {
     switch (type) {
+      case 'hub':
+        return (
+          <svg width={size} height={size} viewBox="0 0 36 36" fill="none">
+            <ellipse cx="18" cy="31" rx="12" ry="3" fill="rgba(0,0,0,0.55)" />
+            <polygon points="18,4 29,11 29,24 18,30 7,24 7,11" fill="#0f172a" stroke="#38bdf8" strokeWidth="1.4" />
+            <polygon points="18,7 26,12 26,22 18,26.5 10,22 10,12" fill="#0284c7" stroke="#fef08a" strokeWidth="1" />
+            <circle cx="18" cy="17" r="4" fill="#fde047" />
+          </svg>
+        );
       case 'inventory':
         return (
           <svg width={size} height={size} viewBox="0 0 36 36" fill="none">
@@ -672,7 +789,7 @@ export const MapNavigationUI: React.FC<MapNavigationUIProps> = ({
   };
 
   // Crisp inline SVG resource & navigation icons (eliminates OS font missing-glyph boxes)
-  const renderResourceSvg = (res: 'wood' | 'stone' | 'iron' | 'food' | 'gold' | 'gems') => {
+  const renderResourceSvg = (res: 'wood' | 'stone' | 'iron' | 'food' | 'crystal' | 'gold' | 'gems') => {
     switch (res) {
       case 'wood':
         return (
@@ -705,6 +822,13 @@ export const MapNavigationUI: React.FC<MapNavigationUIProps> = ({
             <ellipse cx="12.5" cy="11.5" rx="2.2" ry="1.3" transform="rotate(30 12.5 11.5)" fill="#eab308" />
           </svg>
         );
+      case 'crystal':
+        return (
+          <svg width="14" height="14" viewBox="0 0 20 20" fill="none">
+            <polygon points="10,2 16,8 13,18 7,18 4,8" fill="#06b6d4" stroke="#a5f3fc" strokeWidth="1.2" />
+            <polygon points="10,2 16,8 10,13 4,8" fill="#67e8f9" opacity="0.7" />
+          </svg>
+        );
       case 'gold':
         return (
           <svg width="14" height="14" viewBox="0 0 20 20" fill="none">
@@ -722,70 +846,128 @@ export const MapNavigationUI: React.FC<MapNavigationUIProps> = ({
     }
   };
 
-  // Unit carousel handlers
-  const handlePrevUnit = () => {
-    setActiveUnitIndex((prev) => (prev > 0 ? prev - 1 : troopRoster.length - 1));
-  };
-
-  const handleNextUnit = () => {
-    setActiveUnitIndex((prev) => (prev < troopRoster.length - 1 ? prev + 1 : 0));
-  };
-
-  // Adjust unit count for the active 1x1 unit card
-  const updateActiveUnitCount = (delta: number) => {
-    setTroopRoster((prev) =>
-      prev.map((u, idx) => {
-        if (idx === activeUnitIndex) {
-          const newCount = Math.max(0, Math.min(u.maxCount, u.selectedCount + delta));
-          return { ...u, selectedCount: newCount };
-        }
-        return u;
-      })
-    );
-  };
-
-  const setActiveUnitRatio = (ratio: number) => {
-    setTroopRoster((prev) =>
-      prev.map((u, idx) => {
-        if (idx === activeUnitIndex) {
-          return { ...u, selectedCount: Math.round(u.maxCount * ratio) };
-        }
-        return u;
-      })
-    );
-  };
-
-  // Calculate Marching Power & Total Units from all configured battalions
-  const { totalTroopCount, totalMarchPower } = useMemo(() => {
-    let count = 0;
-    let power = 0;
-    for (const unit of troopRoster) {
-      count += unit.selectedCount;
-      power += unit.selectedCount * unit.powerPerUnit;
+  // Standing Kingdom Army Power + Selected Battalion Calculations
+  const standingPower = useMemo(() => {
+    const allStacks: TroopStack[] = [];
+    for (const cls of ['infantry', 'archer', 'cavalry'] as TroopClassId[]) {
+      for (const lv of [1, 2, 3, 4, 5] as TroopLevel[]) {
+        const count = troopInventory[cls]?.[lv] || 0;
+        if (count > 0) allStacks.push({ classId: cls, level: lv, count });
+      }
     }
-    return { totalTroopCount: count, totalMarchPower: power };
-  }, [troopRoster]);
+    return calculateArmyMetrics(allStacks, balanceConfig, bonuses).totalPower;
+  }, [troopInventory, balanceConfig, bonuses]);
+
+  const selectedBattalionStacks = useMemo<TroopStack[]>(() => {
+    return (['infantry', 'archer', 'cavalry'] as TroopClassId[])
+      .map((cls) => ({
+        classId: cls,
+        level: selectedTroopLv,
+        count: Math.min(marchCounts[cls] || 0, troopInventory[cls]?.[selectedTroopLv] || 0),
+      }))
+      .filter((s) => s.count > 0);
+  }, [marchCounts, selectedTroopLv, troopInventory]);
+
+  const selectedBattalionMetrics = useMemo(
+    () => calculateArmyMetrics(selectedBattalionStacks, balanceConfig, effectiveBonuses, activeHero),
+    [selectedBattalionStacks, balanceConfig, effectiveBonuses, activeHero]
+  );
+
+  const applyBattalionRatio = (ratio: number) => {
+    setMarchCounts({
+      infantry: Math.round((troopInventory.infantry?.[selectedTroopLv] || 0) * ratio),
+      archer: Math.round((troopInventory.archer?.[selectedTroopLv] || 0) * ratio),
+      cavalry: Math.round((troopInventory.cavalry?.[selectedTroopLv] || 0) * ratio),
+    });
+  };
+
+  const applyRecommendedPreset = (target: WorldEntity) => {
+    const targetLv = target.level || 1;
+    const recLv: TroopLevel =
+      target.category === 'monster'
+        ? targetLv <= 2
+          ? 1
+          : targetLv <= 3
+            ? 2
+            : targetLv <= 5
+              ? 3
+              : targetLv <= 7
+                ? 4
+                : 5
+        : targetLv >= 7
+          ? 4
+          : targetLv >= 4
+            ? 3
+            : 1;
+    setSelectedTroopLv(recLv);
+    const reqCap = target.requiredTroopCapacity || (target.category === 'monster' ? targetLv * 220 : 400);
+    const availInf = troopInventory.infantry?.[recLv] || 0;
+    const availArc = troopInventory.archer?.[recLv] || 0;
+    const availCav = troopInventory.cavalry?.[recLv] || 0;
+    setMarchCounts({
+      infantry: Math.min(availInf, Math.ceil(reqCap * 0.5)),
+      archer: Math.min(availArc, Math.ceil(reqCap * 0.3)),
+      cavalry: Math.min(availCav, Math.ceil(reqCap * 0.25)),
+    });
+  };
 
   const myCastleCoords = useMemo<[number, number]>(() => {
     const mc = castles.find((c) => c.isMyCastle);
-    return mc ? [mc.position[0], mc.position[2]] : [800, 780];
+    return mc ? [mc.position[0], mc.position[2]] : [1600, 1568];
   }, [castles]);
 
-  // Target distance & estimated march time from My Castle
+  // Target distance, march formula, and gathering formula from My Castle
   const targetDistanceInfo = useMemo(() => {
-    if (!selectedEntity) return { dist: 0, seconds: 0 };
+    if (!selectedEntity) {
+      return { dist: 0, distanceTiles: 0, seconds: 0, formulaMinutes: 0, gatherSpeedPerMin: 0, gatherMinutes: 0 };
+    }
     const dist = Math.round(
       Math.hypot(
         selectedEntity.position[0] - myCastleCoords[0],
         selectedEntity.position[2] - myCastleCoords[1]
       )
     );
-    const seconds = Math.max(2, Math.round(dist / 24));
-    return { dist, seconds };
-  }, [selectedEntity, myCastleCoords]);
+    const timing = calculateMarchTiming(
+      [myCastleCoords[0], 0, myCastleCoords[1]],
+      selectedEntity.position,
+      selectedBattalionMetrics.marchSpeedTilesPerMin,
+      balanceConfig
+    );
+    let gatherSpeedPerMin = 0;
+    let gatherMinutes = 0;
+    if (selectedEntity.category === 'resource') {
+      const rKind = (
+        selectedEntity.resourceType === 'gold' || !selectedEntity.resourceType
+          ? selectedEntity.subtype === 'farm'
+            ? 'food'
+            : selectedEntity.subtype === 'crystal'
+              ? 'crystal'
+              : 'food'
+          : selectedEntity.resourceType
+      ) as ResourceKind;
+      const liveYield = nodeStates[selectedEntity.id]?.remainingYield ?? selectedEntity.yieldAmount ?? 5000;
+      const targetCollect = Math.min(liveYield, Math.max(1, selectedBattalionMetrics.totalLoad));
+      const gTiming = calculateResourceGatherTiming(
+        targetCollect,
+        rKind,
+        Math.max(1, selectedBattalionMetrics.baseGatheringSpeedPerMin),
+        balanceConfig
+      );
+      gatherSpeedPerMin = gTiming.effectiveGatherSpeedPerMin;
+      gatherMinutes = gTiming.formulaMinutes;
+    }
+    return {
+      dist,
+      distanceTiles: timing.distanceTiles,
+      seconds: Math.round(timing.realSeconds),
+      formulaMinutes: timing.formulaMinutes,
+      gatherSpeedPerMin,
+      gatherMinutes,
+    };
+  }, [selectedEntity, myCastleCoords, selectedBattalionMetrics, balanceConfig, nodeStates]);
 
   // ============================================================
-  // 1. RENDER FIXED 2x2 SQUARE MINIMAP (112x112 Compact, 1600x1600 Continent)
+  // 1. RENDER FIXED 2x2 SQUARE MINIMAP (112x112 Compact, 3200x3200 Green Continent)
   // ============================================================
   useEffect(() => {
     const canvas = minimapCanvasRef.current;
@@ -795,57 +977,77 @@ export const MapNavigationUI: React.FC<MapNavigationUIProps> = ({
 
     const size = 112;
 
-    // 1. Hand-Painted Alpine Loam Base
-    ctx.fillStyle = '#1c2d23';
+    // 1. Lush Emerald Highland Loam Base
+    ctx.fillStyle = '#1f4428';
     ctx.fillRect(0, 0, size, size);
 
-    // 2. Glacial Snow Sector (Z > 1040)
-    const snowTop = WorldCoordinates.worldToMinimap(0, 1040, size, size);
-    ctx.fillStyle = '#cbd5e1';
-    ctx.fillRect(0, snowTop.my, size, size - snowTop.my);
+    // 2. Full Green Highland Corner Coverage Across All 4 Outer Corners (No Snow)
+    for (const [sx, sy] of [
+      [0, 0],
+      [size, 0],
+      [0, size],
+      [size, size],
+    ] as const) {
+      const greenGrad = ctx.createRadialGradient(sx, sy, 4, sx, sy, size * 0.4);
+      greenGrad.addColorStop(0, 'rgba(74, 150, 72, 0.72)');
+      greenGrad.addColorStop(0.6, 'rgba(46, 108, 52, 0.34)');
+      greenGrad.addColorStop(1, 'rgba(46, 108, 52, 0)');
+      ctx.fillStyle = greenGrad;
+      ctx.fillRect(0, 0, size, size);
+    }
 
-    // 3. Paved Imperial Cobblestone Highways
+    // 3. Paved Imperial Cobblestone Highways (Centered at [1600, 1600])
     ctx.strokeStyle = '#64748b';
     ctx.lineWidth = 1.6;
 
-    const h1Start = WorldCoordinates.worldToMinimap(800, 220, size, size);
-    const h1End = WorldCoordinates.worldToMinimap(800, 1380, size, size);
+    const h1Start = WorldCoordinates.worldToMinimap(1600, 360, size, size);
+    const h1End = WorldCoordinates.worldToMinimap(1600, 2840, size, size);
     ctx.beginPath();
     ctx.moveTo(h1Start.mx, h1Start.my);
     ctx.lineTo(h1End.mx, h1End.my);
     ctx.stroke();
 
-    const h2Start = WorldCoordinates.worldToMinimap(220, 800, size, size);
-    const h2End = WorldCoordinates.worldToMinimap(1380, 800, size, size);
+    const h2Start = WorldCoordinates.worldToMinimap(360, 1600, size, size);
+    const h2End = WorldCoordinates.worldToMinimap(2840, 1600, size, size);
     ctx.beginPath();
     ctx.moveTo(h2Start.mx, h2Start.my);
     ctx.lineTo(h2End.mx, h2End.my);
     ctx.stroke();
 
-    // 3b. Wetland Marsh Basins & Winding Streams on Minimap
-    ctx.fillStyle = 'rgba(20, 184, 166, 0.45)';
-    for (const [wx, wz] of [[430, 500], [970, 430]]) {
-      const mPos = WorldCoordinates.worldToMinimap(wx, wz, size, size);
+    // 3b. Winding South-to-North Nile River, Fertile Banks & Northern Delta on Minimap
+    const drawMinimapRiver = (
+      xFn: (z: number) => number,
+      zStart: number,
+      zEnd: number,
+      strokeCol: string,
+      width: number
+    ) => {
+      ctx.strokeStyle = strokeCol;
+      ctx.lineWidth = width;
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
       ctx.beginPath();
-      ctx.arc(mPos.mx, mPos.my, 4.5, 0, Math.PI * 2);
-      ctx.fill();
-    }
-    ctx.strokeStyle = 'rgba(56, 189, 248, 0.55)';
-    ctx.lineWidth = 1.2;
-    const s1a = WorldCoordinates.worldToMinimap(560, 720, size, size);
-    const s1b = WorldCoordinates.worldToMinimap(430, 500, size, size);
-    ctx.beginPath();
-    ctx.moveTo(s1a.mx, s1a.my);
-    ctx.lineTo(s1b.mx, s1b.my);
-    ctx.stroke();
-    const s2a = WorldCoordinates.worldToMinimap(1160, 720, size, size);
-    const s2b = WorldCoordinates.worldToMinimap(970, 430, size, size);
-    ctx.beginPath();
-    ctx.moveTo(s2a.mx, s2a.my);
-    ctx.lineTo(s2b.mx, s2b.my);
-    ctx.stroke();
+      const steps = 28;
+      for (let i = 0; i <= steps; i++) {
+        const z = zStart + (zEnd - zStart) * (i / steps);
+        const pt = WorldCoordinates.worldToMinimap(xFn(z), z, size, size);
+        if (i === 0) ctx.moveTo(pt.mx, pt.my);
+        else ctx.lineTo(pt.mx, pt.my);
+      }
+      ctx.stroke();
+    };
 
-    // 4. Fixed 2x2 Sector Quadrant Grid Lines (Dividing at center 800)
+    // Fertile green floodplain glow along Nile course & delta
+    drawMinimapRiver(getNileMainX, 3200, NILE_DELTA_FORK_Z, 'rgba(34, 197, 94, 0.25)', 5.2);
+    drawMinimapRiver(getNileWestDeltaX, NILE_DELTA_FORK_Z, 0, 'rgba(34, 197, 94, 0.22)', 4.2);
+    drawMinimapRiver(getNileEastDeltaX, NILE_DELTA_FORK_Z, 0, 'rgba(34, 197, 94, 0.22)', 4.2);
+
+    // Crisp azure Nile River channel & Northern Delta fork
+    drawMinimapRiver(getNileMainX, 3200, NILE_DELTA_FORK_Z, 'rgba(14, 165, 233, 0.9)', 2.1);
+    drawMinimapRiver(getNileWestDeltaX, NILE_DELTA_FORK_Z, 0, 'rgba(56, 189, 248, 0.85)', 1.5);
+    drawMinimapRiver(getNileEastDeltaX, NILE_DELTA_FORK_Z, 0, 'rgba(56, 189, 248, 0.85)', 1.5);
+
+    // 4. Fixed 2x2 Sector Quadrant Grid Lines (Dividing at center 1600)
     ctx.strokeStyle = 'rgba(255, 255, 255, 0.22)';
     ctx.lineWidth = 1.0;
 
@@ -860,12 +1062,12 @@ export const MapNavigationUI: React.FC<MapNavigationUIProps> = ({
     ctx.stroke();
 
     // Quadrant Corner Labels
-    ctx.fillStyle = 'rgba(241, 245, 249, 0.48)';
-    ctx.font = "700 6.5px 'Barlow Condensed', sans-serif";
-    ctx.fillText('GLACIERS', 4, size - 4);
-    ctx.fillText('PASS', size / 2 + 4, size - 4);
-    ctx.fillText('PINES', 4, 9);
-    ctx.fillText('BASIN', size / 2 + 4, 9);
+    ctx.fillStyle = 'rgba(220, 252, 231, 0.78)';
+    ctx.font = "700 6px 'Barlow Condensed', sans-serif";
+    ctx.fillText('SW LAND', 4, size - 4);
+    ctx.fillText('SE LAND', size - 27, size - 4);
+    ctx.fillText('NW LAND', 4, 8);
+    ctx.fillText('NE LAND', size - 27, 8);
 
     // 5. Continent 1 Network: The Congress + 36 Shrines (A1-A4, B1-B12, C1-C20)
     for (const plot of RESERVED_PLOTS) {
@@ -965,6 +1167,11 @@ export const MapNavigationUI: React.FC<MapNavigationUIProps> = ({
           ctx.beginPath();
           ctx.arc(mx, my, 1.2, 0, Math.PI * 2);
           ctx.fill();
+        } else if (r.subtype === 'crystal') {
+          ctx.fillStyle = '#22d3ee';
+          ctx.beginPath();
+          ctx.arc(mx, my, 1.6, 0, Math.PI * 2);
+          ctx.fill();
         } else {
           ctx.fillStyle = '#38bdf8';
           ctx.beginPath();
@@ -986,10 +1193,10 @@ export const MapNavigationUI: React.FC<MapNavigationUIProps> = ({
       ctx.stroke();
     }
 
-    // 9. Camera View Frustum Box (scaled to 1600x1600 continent)
+    // 9. Camera View Frustum Box (scaled to 3200x3200 continent)
     const camCenter = WorldCoordinates.worldToMinimap(cameraInfo.x, cameraInfo.z, size, size);
-    const frustumW = Math.max(10, (70 / cameraInfo.zoom) * (size / 1600));
-    const frustumH = Math.max(8, (54 / cameraInfo.zoom) * (size / 1600));
+    const frustumW = Math.max(8, (70 / cameraInfo.zoom) * (size / 3200));
+    const frustumH = Math.max(6, (54 / cameraInfo.zoom) * (size / 3200));
 
     ctx.strokeStyle = '#fef08a';
     ctx.lineWidth = 1.4;
@@ -1142,7 +1349,7 @@ export const MapNavigationUI: React.FC<MapNavigationUIProps> = ({
   const latestChatMessage = chatMessages[chatMessages.length - 1];
   const zoomOutScore = Math.min(
     100,
-    Math.max(0, Math.round(((3.2 - cameraInfo.zoom) / (3.2 - 0.048)) * 100))
+    Math.max(0, Math.round(((3.2 - cameraInfo.zoom) / (3.2 - 0.023)) * 100))
   );
 
   return (
@@ -1214,10 +1421,40 @@ export const MapNavigationUI: React.FC<MapNavigationUIProps> = ({
             </div>
 
             <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '10px', color: '#94a3b8', marginTop: '1px', whiteSpace: 'nowrap' }}>
-              <span>Lv. 18 Emperor</span>
+              <button
+                type="button"
+                onClick={() => {
+                  setAllianceTab('profile');
+                  setIsAllianceOpen(true);
+                }}
+                title="Open Alliance Profile & Held Shrines"
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '5px',
+                  background: 'transparent',
+                  border: 'none',
+                  padding: 0,
+                  margin: 0,
+                  cursor: 'pointer',
+                  fontSize: '10px',
+                  color: 'inherit',
+                  fontFamily: 'inherit',
+                  textAlign: 'left',
+                }}
+              >
+                <span style={{ color: '#a7f3d0', fontWeight: 700 }}>[{playerAlliance.tag}]</span>
+                <span style={{ color: 'rgba(255,255,255,0.2)' }}>·</span>
+                <span style={{ color: '#cbd5e1', maxWidth: '145px', overflow: 'hidden', textOverflow: 'ellipsis' }} title={playerAlliance.alias}>{playerAlliance.alias}</span>
+                <span style={{ color: 'rgba(255,255,255,0.2)' }}>·</span>
+                <span style={{ color: shrineRuleStatus.atShrineCap ? '#fca5a5' : '#86efac', fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>
+                  Shrines {shrineRuleStatus.totalShrinesHeld}/{shrineRuleStatus.maxShrinesPerAlliance}
+                </span>
+                <span style={{ color: '#6ee7b7', fontSize: '10px' }}>›</span>
+              </button>
               <span style={{ color: 'rgba(255,255,255,0.2)' }}>·</span>
               <span style={{ color: '#38bdf8', fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>
-                {totalMarchPower.toLocaleString()} ⚡
+                {standingPower.toLocaleString()} ⚡
               </span>
             </div>
           </div>
@@ -1267,7 +1504,7 @@ export const MapNavigationUI: React.FC<MapNavigationUIProps> = ({
               pointerEvents: 'none',
             }}
           >
-            1600×1600 · C1
+            3200×3200 · C1
           </div>
         </div>
 
@@ -1483,7 +1720,7 @@ export const MapNavigationUI: React.FC<MapNavigationUIProps> = ({
             <div style={{ maxHeight: '190px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '5px', paddingRight: '2px' }}>
               {[
                 { id: 'preset-castle', name: 'My Castle', x: Math.round(myCastleCoords[0]), y: Math.round(myCastleCoords[1]), tag: 'HOME', isPreset: true },
-                { id: 'preset-congress', name: 'The Congress', x: 800, y: 800, tag: 'CENTER', isPreset: true },
+                { id: 'preset-congress', name: 'The Congress', x: 1600, y: 1600, tag: 'CENTER', isPreset: true },
                 ...bookmarks.map((b) => ({
                   id: b.id,
                   name: b.name,
@@ -1611,6 +1848,12 @@ export const MapNavigationUI: React.FC<MapNavigationUIProps> = ({
           <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }} title="Food Reserves">
             {renderResourceSvg('food')}
             <span style={{ font: "700 11.5px 'Barlow Condensed'", color: '#fde68a' }}>{resources.food.toLocaleString()}</span>
+          </div>
+          <div style={{ width: '1px', height: '13px', background: 'rgba(255,255,255,0.14)' }} />
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }} title="Himalayan Crystal Reserves">
+            {renderResourceSvg('crystal')}
+            <span style={{ font: "700 11.5px 'Barlow Condensed'", color: '#22d3ee' }}>{resources.crystal.toLocaleString()}</span>
           </div>
           <div style={{ width: '1px', height: '13px', background: 'rgba(255,255,255,0.14)' }} />
 
@@ -2015,6 +2258,83 @@ export const MapNavigationUI: React.FC<MapNavigationUIProps> = ({
           pointerEvents: 'auto',
         }}
       >
+        <button
+          type="button"
+          onPointerDown={() => handleHudPointerDown('hub')}
+          onPointerLeave={() => handleHudPointerLeave('hub')}
+          onPointerCancel={() => handleHudPointerLeave('hub')}
+          onClick={(e) => {
+            triggerTouchVfx(e, 'hub');
+            onOpenCommandHub('barracks');
+          }}
+          className={springPopKey === 'hub' ? 'hud-spring-pop' : undefined}
+          style={{
+            position: 'relative',
+            overflow: 'visible',
+            width: '52px',
+            height: '54px',
+            borderRadius: '9px',
+            background: 'linear-gradient(180deg, #0369a1 0%, #0f172a 100%)',
+            borderTop: '1.5px solid #38bdf8',
+            borderLeft: '1.5px solid #38bdf8',
+            borderRight: '1.5px solid #38bdf8',
+            borderBottom: '3.5px solid #082f49',
+            boxShadow: '0 4px 12px rgba(56, 189, 248, 0.25)',
+            color: '#f8fafc',
+            cursor: 'pointer',
+            touchAction: 'manipulation',
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: '2px',
+            padding: '3px 2px',
+            transform: pressedBtnKey === 'hub' ? 'scale(0.90) translateY(2px)' : 'none',
+            transition: 'transform 0.14s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.15s ease',
+          }}
+          title="Open 8-Panel Nepalese Kingdom Command Hub (Barracks, Shrines, Congress, Marches & Config)"
+        >
+          {activeMarchesCount + battleReportsCount > 0 && (
+            <span
+              style={{
+                position: 'absolute',
+                top: '-5px',
+                right: '-4px',
+                minWidth: '16px',
+                height: '16px',
+                padding: '0 4px',
+                borderRadius: '999px',
+                background: activeMarchesCount > 0 ? '#0284c7' : '#d97706',
+                border: '1.5px solid #fef08a',
+                color: '#fff',
+                font: "800 9px 'Barlow Condensed', sans-serif",
+                fontVariantNumeric: 'tabular-nums',
+                display: 'grid',
+                placeItems: 'center',
+                zIndex: 3,
+              }}
+            >
+              {activeMarchesCount > 0 ? activeMarchesCount : battleReportsCount}
+            </span>
+          )}
+          <div style={{ filter: 'drop-shadow(0 2px 4px rgba(0,0,0,0.65))', position: 'relative', zIndex: 2 }}>
+            {render3DModelIcon('hub', 25)}
+          </div>
+          <span
+            style={{
+              position: 'relative',
+              zIndex: 2,
+              font: "800 8.5px 'Barlow Condensed', sans-serif",
+              color: '#bae6fd',
+              letterSpacing: '0.03em',
+              lineHeight: 1,
+              whiteSpace: 'nowrap',
+            }}
+          >
+            COMMAND
+          </span>
+        </button>
+
         {[
           {
             key: 'inventory' as const,
@@ -2386,542 +2706,598 @@ export const MapNavigationUI: React.FC<MapNavigationUIProps> = ({
       </div>
 
       {/* ============================================================ */}
-      {/* 5B. RIGHT-SIDE 1x1 BATTALION COMMANDER (ABOVE BOTTOM-RIGHT)  */}
+      {/* 5B. RIGHT-SIDE NEPALESE BATTALION COMMANDER POPUP            */}
       {/* ============================================================ */}
-      {viewMode === 'world' && selectedEntity && (
-        <div
-          className="bottom-1x1-troop-card"
-          style={{
-            position: 'absolute',
-            right: '14px',
-            bottom: '84px',
-            width: '295px',
-            maxWidth: 'calc(100vw - 28px)',
-            zIndex: 65,
-            background: 'rgba(10, 16, 26, 0.98)',
-            borderTop: '1.5px solid #dfba6e',
-            borderLeft: '1.5px solid #dfba6e',
-            borderRight: '1.5px solid #dfba6e',
-            borderBottom: '4px solid #78350f',
-            borderRadius: '12px',
-            padding: '9px 12px',
-            boxShadow: '0 6px 0 rgba(0, 0, 0, 0.6), 0 16px 36px rgba(0, 0, 0, 0.9)',
-            display: 'flex',
-            flexDirection: 'column',
-            gap: '7px',
-            pointerEvents: 'auto',
-            animation: 'slideUpCard 0.2s cubic-bezier(0.16, 1, 0.3, 1)',
-          }}
-        >
-          {/* Top Target Summary */}
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid rgba(255,255,255,0.08)', paddingBottom: '5px' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '7px', minWidth: 0 }}>
-              <div
-                style={{
-                  width: '26px',
-                  height: '26px',
-                  minWidth: '26px',
-                  borderRadius: '6px',
-                  background: 'linear-gradient(135deg, #1e293b, #0f172a)',
-                  borderTop: '1px solid #dfba6e',
-                  borderLeft: '1px solid #dfba6e',
-                  borderRight: '1px solid #dfba6e',
-                  borderBottom: '2.5px solid #78350f',
-                  boxShadow: '0 2px 0 rgba(0,0,0,0.5)',
-                  display: 'grid',
-                  placeItems: 'center',
-                  fontSize: '14px',
-                }}
-              >
-                {selectedEntity.category === 'monster' ? '🐲' : selectedEntity.category === 'resource' ? '📦' : '🏰'}
-              </div>
+      {viewMode === 'world' && selectedEntity && (() => {
+        const isMonster = selectedEntity.category === 'monster';
+        const isResource = selectedEntity.category === 'resource';
+        const isEnemyCastle = selectedEntity.type === 'enemy_castle';
+        const isStructure =
+          selectedEntity.type === 'shrine_c' ||
+          selectedEntity.type === 'shrine_b' ||
+          selectedEntity.type === 'shrine_a' ||
+          selectedEntity.type === 'congress';
+        const canLeadWithHero = isMonster || isResource || isEnemyCastle || isStructure;
+
+        const liveMon = monsterStates[selectedEntity.id];
+        const liveNode = nodeStates[selectedEntity.id];
+        const liveCastle = castleStates[selectedEntity.id];
+        const mCfg = isMonster
+          ? balanceConfig.monstersByLevel[Math.max(0, Math.min(9, (selectedEntity.level || 1) - 1))]
+          : null;
+        const rCfg = isResource
+          ? balanceConfig.resourcesByLevel[Math.max(0, Math.min(9, (selectedEntity.level || 1) - 1))]
+          : null;
+
+        const curHp = liveMon?.currentHp ?? selectedEntity.health ?? mCfg?.hp ?? 0;
+        const maxHp = liveMon?.maxHp ?? selectedEntity.maxHealth ?? mCfg?.hp ?? 0;
+        const castleMaxHp =
+          liveCastle?.maxHp ??
+          selectedEntity.maxHealth ??
+          getEnemyCastleMaxHp(selectedEntity.power || 160000, selectedEntity.level || 1);
+        const castleCurHp = liveCastle?.currentHp ?? selectedEntity.health ?? castleMaxHp;
+        const castleHpPct = castleMaxHp > 0 ? Math.max(0, Math.min(100, (castleCurHp / castleMaxHp) * 100)) : 100;
+        const castleBurning = Boolean(liveCastle?.isBurning || castleCurHp < castleMaxHp);
+        const remYield = liveNode?.remainingYield ?? selectedEntity.yieldAmount ?? 0;
+        const maxYield = liveNode?.maxYield ?? selectedEntity.maxYieldAmount ?? selectedEntity.yieldAmount ?? 0;
+        const reqCap = selectedEntity.requiredTroopCapacity || rCfg?.requiredTroopCapacity || 0;
+        const belowReqCap = isResource && reqCap > 0 && selectedBattalionMetrics.totalCount < reqCap;
+        const [recMinM, recMaxM] = getRecommendedMonsterBand(selectedTroopLv);
+        const isMonsterMatch = isMonster && selectedEntity.level >= recMinM && selectedEntity.level <= recMaxM;
+
+        return (
+          <div
+            className="bottom-1x1-troop-card"
+            style={{
+              position: 'absolute',
+              right: '14px',
+              bottom: '84px',
+              width: '330px',
+              maxWidth: 'calc(100vw - 24px)',
+              maxHeight: '62dvh',
+              overflowY: 'auto',
+              zIndex: 65,
+              background: 'rgba(10, 16, 26, 0.97)',
+              borderTop: '1.5px solid #dfba6e',
+              borderLeft: '1.5px solid #dfba6e',
+              borderRight: '1.5px solid #dfba6e',
+              borderBottom: '4px solid #78350f',
+              borderRadius: '12px',
+              padding: '9px 11px',
+              boxShadow: '0 6px 0 rgba(0, 0, 0, 0.6), 0 16px 36px rgba(0, 0, 0, 0.9)',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '7px',
+              pointerEvents: 'auto',
+              animation: 'slideUpCard 0.2s cubic-bezier(0.16, 1, 0.3, 1)',
+              fontVariantNumeric: 'tabular-nums',
+            }}
+          >
+            {/* Target Summary Header */}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid rgba(255,255,255,0.08)', paddingBottom: '5px' }}>
               <div style={{ minWidth: 0 }}>
-                <div style={{ font: "700 12.5px 'Barlow Condensed'", color: '#fef08a', lineHeight: 1.1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                <div style={{ font: "800 13px 'Barlow Condensed'", color: '#fef08a', lineHeight: 1.1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                   {selectedEntity.name} (Lv.{selectedEntity.level})
                 </div>
-                <div style={{ fontSize: '9px', color: '#94a3b8' }}>
-                  {selectedEntity.subtype} · {targetDistanceInfo.dist}m ({targetDistanceInfo.seconds}s march)
+                <div style={{ fontSize: '9.5px', color: '#94a3b8' }}>
+                  {targetDistanceInfo.distanceTiles} tiles · {targetDistanceInfo.formulaMinutes}m formula ({targetDistanceInfo.seconds}s live)
                 </div>
               </div>
-            </div>
-
-            <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
-              {selectedEntity.health !== undefined && (
-                <span style={{ fontSize: '9.5px', color: '#f87171', fontWeight: 600 }}>
-                  HP: {selectedEntity.health}
-                </span>
-              )}
-              {selectedEntity.yieldAmount !== undefined && (
-                <span style={{ fontSize: '9.5px', color: '#86efac', fontWeight: 600 }}>
-                  +{selectedEntity.yieldAmount}
-                </span>
-              )}
               <button
                 onClick={onCloseSelection}
                 style={{
-                  background: 'linear-gradient(180deg, #334155, #1e293b)',
-                  borderTop: '1px solid rgba(255,255,255,0.2)',
-                  borderLeft: '1px solid rgba(255,255,255,0.2)',
-                  borderRight: '1px solid rgba(255,255,255,0.2)',
-                  borderBottom: '2px solid #0f172a',
-                  boxShadow: '0 1.5px 0 #020617',
-                  color: '#94a3b8',
-                  fontSize: '11px',
+                  background: 'rgba(30, 41, 59, 0.9)',
+                  border: '1px solid rgba(148,163,184,0.3)',
+                  color: '#cbd5e1',
+                  fontSize: '12px',
                   cursor: 'pointer',
-                  padding: '2px 5px',
-                  borderRadius: '4px',
-                  lineHeight: 1,
+                  padding: '4px 8px',
+                  borderRadius: '5px',
+                  minHeight: '30px',
                 }}
                 title="Close Target"
               >
                 ✕
               </button>
             </div>
-          </div>
 
-          {/* Center: 1x1 Troop Selection Card with 3D Icons & Quick Carousel */}
-          <div
-            style={{
-              background: 'rgba(15, 23, 42, 0.9)',
-              borderTop: '1.5px solid #38bdf8',
-              borderLeft: '1.5px solid #38bdf8',
-              borderRight: '1.5px solid #38bdf8',
-              borderBottom: '3.5px solid #0369a1',
-              boxShadow: '0 3px 0 #082f49',
-              borderRadius: '8px',
-              padding: '6px 8px',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '8px',
-            }}
-          >
-            {/* Unit Carousel Left 3D Button */}
-            <button
-              onClick={handlePrevUnit}
-              style={{
-                width: '24px',
-                height: '36px',
-                borderRadius: '6px',
-                background: 'linear-gradient(180deg, #334155, #1e293b)',
-                borderTop: '1px solid rgba(255, 255, 255, 0.2)',
-                borderLeft: '1px solid rgba(255, 255, 255, 0.2)',
-                borderRight: '1px solid rgba(255, 255, 255, 0.2)',
-                borderBottom: '3px solid #0f172a',
-                boxShadow: '0 2px 0 #020617',
-                color: '#e0f2fe',
-                fontSize: '13px',
-                cursor: 'pointer',
-                display: 'grid',
-                placeItems: 'center',
-                transition: 'all 0.1s ease',
-              }}
-              title="Previous Unit"
-            >
-              ◄
-            </button>
+            {/* Target Live Stats Row */}
+            {isMonster && mCfg && (
+              <div style={{ fontSize: '10.5px', color: '#e2e8f0', background: 'rgba(220,38,38,0.12)', padding: '5px 8px', borderRadius: '6px' }}>
+                <div>
+                  HP: <strong style={{ color: '#fca5a5' }}>{curHp.toLocaleString()}/{maxHp.toLocaleString()}</strong> · ATK {mCfg.attack.toLocaleString()} · DEF {mCfg.defense.toLocaleString()}
+                </div>
+                <div style={{ fontSize: '9.5px', color: isMonsterMatch ? '#34d399' : '#fbbf24' }}>
+                  Reward ~{mCfg.suggestedReward.toLocaleString()} + XP {mCfg.xpReward} · Lv.{selectedTroopLv} Ideal Band: Lv.{recMinM}–{recMaxM}
+                </div>
+              </div>
+            )}
 
-            {/* 1x1 Unit Avatar 3D Frame & Details */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flex: 1, minWidth: 0 }}>
+            {isResource && (
+              <div style={{ fontSize: '10.5px', color: '#e2e8f0', background: 'rgba(16,185,129,0.1)', padding: '5px 8px', borderRadius: '6px' }}>
+                <div>
+                  Yield: <strong style={{ color: '#86efac' }}>{remYield.toLocaleString()}/{maxYield.toLocaleString()}</strong> {(selectedEntity.resourceType || selectedEntity.subtype).toUpperCase()} · Diff {(selectedEntity.difficulty || 1).toFixed(2)}×
+                </div>
+                <div style={{ fontSize: '9.5px', color: belowReqCap ? '#f87171' : '#38bdf8' }}>
+                  Req. Capacity: {reqCap.toLocaleString()} troops · Gather Rate: {targetDistanceInfo.gatherSpeedPerMin.toLocaleString()}/m (~{targetDistanceInfo.gatherMinutes}m)
+                </div>
+              </div>
+            )}
+
+            {isEnemyCastle && (
               <div
                 style={{
-                  width: '38px',
-                  height: '38px',
-                  minWidth: '38px',
-                  borderRadius: '8px',
-                  background: 'linear-gradient(135deg, #1e3a8a, #0c1838)',
-                  borderTop: '2px solid #38bdf8',
-                  borderLeft: '2px solid #38bdf8',
-                  borderRight: '2px solid #38bdf8',
-                  borderBottom: '3.5px solid #0284c7',
-                  boxShadow: '0 3px 0 #0369a1, 0 4px 12px rgba(56, 189, 248, 0.4)',
-                  display: 'grid',
-                  placeItems: 'center',
-                  fontSize: '20px',
+                  fontSize: '10.5px',
+                  color: '#e2e8f0',
+                  background: castleBurning ? 'rgba(185, 28, 28, 0.22)' : 'rgba(220, 38, 38, 0.12)',
+                  border: castleBurning ? '1px solid rgba(248, 113, 113, 0.5)' : '1px solid rgba(248, 113, 113, 0.2)',
+                  padding: '6px 8px',
+                  borderRadius: '6px',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '4px',
                 }}
               >
-                {currentUnit.icon}
-              </div>
-
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
-                  <span style={{ font: "700 12px 'Barlow Condensed'", color: '#fff', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                    {currentUnit.name}
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '6px' }}>
+                  <span>
+                    Fortress HP:{' '}
+                    <strong style={{ color: '#fca5a5' }}>
+                      {castleCurHp.toLocaleString()}/{castleMaxHp.toLocaleString()}
+                    </strong>
                   </span>
-                  <span
+                  {castleBurning ? (
+                    <span
+                      style={{
+                        padding: '1px 6px',
+                        borderRadius: '4px',
+                        background: 'rgba(220, 38, 38, 0.4)',
+                        border: '1px solid #f87171',
+                        color: '#fef08a',
+                        font: "800 9.5px 'Barlow Condensed'",
+                        letterSpacing: '0.05em',
+                      }}
+                    >
+                      🔥 BURNING
+                    </span>
+                  ) : (
+                    <span style={{ fontSize: '9.5px', color: '#94a3b8' }}>
+                      PWR {(selectedEntity.power || 160000).toLocaleString()}
+                    </span>
+                  )}
+                </div>
+                <div style={{ width: '100%', height: '5px', background: 'rgba(15, 23, 42, 0.9)', borderRadius: '3px', overflow: 'hidden' }}>
+                  <div
                     style={{
-                      font: "700 7.5px 'Barlow Condensed'",
-                      background: currentUnit.tier >= 4 ? '#b45309' : '#334155',
-                      borderBottom: '1.5px solid rgba(0,0,0,0.4)',
-                      color: currentUnit.tier >= 4 ? '#fef08a' : '#cbd5e1',
-                      padding: '1px 4px',
-                      borderRadius: '3px',
+                      width: `${castleHpPct}%`,
+                      height: '100%',
+                      background: castleBurning
+                        ? 'linear-gradient(90deg, #ef4444, #f59e0b)'
+                        : 'linear-gradient(90deg, #dc2626, #fb7185)',
+                      transition: 'width 0.25s ease',
                     }}
-                  >
-                    T{currentUnit.tier}
+                  />
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '9.5px', color: '#cbd5e1' }}>
+                  <span>0 HP triggers random realm teleport</span>
+                  <span style={{ color: '#fbbf24' }}>Teleports: {liveCastle?.teleportCount || 0}</span>
+                </div>
+              </div>
+            )}
+
+            {isStructure && (() => {
+              const sType = selectedEntity.type as StructureTierKey;
+              const isHeldByAlliance = conqueredPlots?.[selectedEntity.id] === 'alliance' || shrineRuleStatus.heldIds.has(selectedEntity.id);
+              const isCongressTarget = sType === 'congress';
+              const lockMsg =
+                isCongressTarget && !shrineRuleStatus.congressUnlocked
+                  ? shrineRuleStatus.congressRequirementText
+                  : !isCongressTarget && !isHeldByAlliance && shrineRuleStatus.atShrineCap
+                    ? `5-Shrine Cap Reached (${shrineRuleStatus.totalShrinesHeld}/${shrineRuleStatus.maxShrinesPerAlliance}) — Relinquish a Shrine first`
+                    : null;
+
+              return (
+                <div style={{ fontSize: '10.5px', color: '#bae6fd', background: 'rgba(2,132,199,0.14)', padding: '6px 8px', borderRadius: '6px', display: 'flex', flexDirection: 'column', gap: '5px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '6px' }}>
+                    <div>
+                      <div>Garrison Cap: {balanceConfig.structures[sType].totalCapacity.toLocaleString()}</div>
+                      <div style={{ fontSize: '9.5px', color: '#94a3b8' }}>
+                        Req Lv.{balanceConfig.structures[sType].requiredTroopLevel}+ Mixed Classes · Shrines {shrineRuleStatus.totalShrinesHeld}/{shrineRuleStatus.maxShrinesPerAlliance}
+                      </div>
+                    </div>
+                    <div style={{ display: 'flex', gap: '4px' }}>
+                      {isHeldByAlliance && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            onRelinquishStructure(selectedEntity.id);
+                            onCloseSelection();
+                          }}
+                          style={{
+                            minHeight: '34px',
+                            padding: '4px 8px',
+                            borderRadius: '6px',
+                            background: 'rgba(153, 27, 27, 0.55)',
+                            border: '1px solid #f87171',
+                            color: '#fecaca',
+                            font: "700 10.5px 'Barlow Condensed'",
+                            cursor: 'pointer',
+                          }}
+                        >
+                          Relinquish
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          onOpenCommandHub(
+                            isCongressTarget ? 'congress' : 'shrines',
+                            selectedEntity.id
+                          );
+                          onCloseSelection();
+                        }}
+                        style={{
+                          minHeight: '34px',
+                          padding: '4px 9px',
+                          borderRadius: '6px',
+                          background: '#0284c7',
+                          border: '1px solid #38bdf8',
+                          color: '#fff',
+                          font: "700 10.5px 'Barlow Condensed'",
+                          cursor: 'pointer',
+                        }}
+                      >
+                        Open Garrison Hub
+                      </button>
+                    </div>
+                  </div>
+                  {lockMsg && (
+                    <div style={{ fontSize: '9.5px', color: '#fbbf24', fontWeight: 700 }}>
+                      ⚠️ {lockMsg}
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
+
+            {/* Lead Hero Commander Selector (Locked while leading an active march) */}
+            {canLeadWithHero && (
+              <div
+                style={{
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '4px',
+                  background: 'rgba(15, 23, 42, 0.9)',
+                  padding: '6px 7px',
+                  borderRadius: '7px',
+                  border: '1px solid rgba(250, 204, 21, 0.28)',
+                }}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '9.5px' }}>
+                  <span style={{ font: "800 10.5px 'Barlow Condensed'", color: '#fde047', letterSpacing: '0.04em' }}>
+                    LEAD HERO COMMANDER
+                  </span>
+                  <span style={{ color: activeHero ? '#86efac' : '#f87171', fontWeight: 700 }}>
+                    {activeHero ? `${activeHero.name} Ready` : 'All 5 Heroes On March'}
                   </span>
                 </div>
 
-                <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '1px' }}>
-                  <span style={{ fontSize: '11px', fontWeight: 700, color: '#fef08a' }}>
-                    {currentUnit.selectedCount}/{currentUnit.maxCount}
-                  </span>
-                  <span style={{ fontSize: '9px', color: '#38bdf8' }}>
-                    ({(currentUnit.selectedCount * currentUnit.powerPerUnit).toLocaleString()} ⚡)
-                  </span>
-                  <span style={{ fontSize: '8.5px', color: '#64748b' }}>
-                    {activeUnitIndex + 1}/12
-                  </span>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, minmax(0, 1fr))', gap: '3px' }}>
+                  {NEPALESE_HEROES.map((hero) => {
+                    const lockedMarch = occupiedHeroMap.get(hero.id);
+                    const isLocked = Boolean(lockedMarch);
+                    const isSelected = activeHero?.id === hero.id;
+                    const shortName = hero.name.split(' ')[0];
+                    const buffTag =
+                      hero.specialty === 'gather'
+                        ? `+${Math.round(hero.gatherPct * 100)}% GATH`
+                        : hero.specialty === 'siege'
+                          ? `+${Math.round(hero.siegeDamagePct * 100)}% SIEGE`
+                          : `+${Math.round(hero.classAttackPct * 100)}% ${hero.classBonusClass.slice(0, 3).toUpperCase()}`;
+
+                    return (
+                      <button
+                        key={hero.id}
+                        type="button"
+                        disabled={isLocked}
+                        onClick={() => setSelectedHeroId(hero.id)}
+                        title={
+                          isLocked
+                            ? `${hero.name} is on march to ${lockedMarch?.targetName}`
+                            : `${hero.name} — ${hero.title}`
+                        }
+                        style={{
+                          display: 'flex',
+                          flexDirection: 'column',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          gap: '1px',
+                          padding: '4px 2px',
+                          borderRadius: '5px',
+                          background: isLocked
+                            ? 'rgba(30, 41, 59, 0.45)'
+                            : isSelected
+                              ? 'rgba(180, 83, 9, 0.45)'
+                              : 'rgba(30, 41, 59, 0.85)',
+                          border: isSelected
+                            ? '1.5px solid #fde047'
+                            : isLocked
+                              ? '1px solid rgba(100, 116, 139, 0.25)'
+                              : `1px solid ${hero.crestColor}55`,
+                          color: isLocked ? '#64748b' : '#f8fafc',
+                          cursor: isLocked ? 'not-allowed' : 'pointer',
+                          opacity: isLocked ? 0.62 : 1,
+                        }}
+                      >
+                        <svg width="14" height="14" viewBox="0 0 20 20" fill="none">
+                          {hero.specialty === 'infantry' && (
+                            <polygon points="10,2 17,5 15,14 10,18 5,14 3,5" fill={hero.crestColor} stroke="#fef08a" strokeWidth="1" />
+                          )}
+                          {hero.specialty === 'archer' && (
+                            <>
+                              <path d="M5 15C9 15 15 9 15 5" stroke={hero.crestColor} strokeWidth="2" strokeLinecap="round" />
+                              <line x1="4" y1="16" x2="16" y2="4" stroke="#fef08a" strokeWidth="1.5" />
+                            </>
+                          )}
+                          {hero.specialty === 'cavalry' && (
+                            <polygon points="3,13 11,4 17,6 13,15 7,17" fill={hero.crestColor} stroke="#fef08a" strokeWidth="1" />
+                          )}
+                          {hero.specialty === 'gather' && (
+                            <polygon points="10,2 16,8 10,18 4,8" fill={hero.crestColor} stroke="#fef08a" strokeWidth="1" />
+                          )}
+                          {hero.specialty === 'siege' && (
+                            <polygon points="10,2 14,9 17,15 10,18 3,15 6,9" fill={hero.crestColor} stroke="#fef08a" strokeWidth="1" />
+                          )}
+                        </svg>
+                        <span style={{ font: "700 9.5px 'Barlow Condensed'", lineHeight: 1.05, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '100%' }}>
+                          {shortName}
+                        </span>
+                        <span style={{ fontSize: '8px', color: isLocked ? '#f87171' : hero.crestColor, fontWeight: 700, lineHeight: 1 }}>
+                          {isLocked ? 'MARCH' : buffTag}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {activeHero ? (
+                  <div style={{ fontSize: '9px', color: '#cbd5e1', lineHeight: 1.25 }}>
+                    <strong style={{ color: activeHero.crestColor }}>{activeHero.title}</strong> · ATK +{Math.round(activeHero.attackPct * 100)}% · HP +{Math.round(activeHero.hpPct * 100)}% · Gather +{Math.round(activeHero.gatherPct * 100)}% · Load +{Math.round(activeHero.loadPct * 100)}% · March +{Math.round(activeHero.marchPct * 100)}% · Siege +{Math.round(activeHero.siegeDamagePct * 100)}%
+                  </div>
+                ) : (
+                  <div style={{ fontSize: '9px', color: '#fbbf24' }}>
+                    All Nepalese commanders are currently leading expeditions. Troops may still march unled.
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Troop Level Selector (Lv 1..5) + Quick Fill Presets */}
+            <div style={{ display: 'flex', gap: '3px', alignItems: 'center' }}>
+              {([1, 2, 3, 4, 5] as TroopLevel[]).map((lv) => (
+                <button
+                  key={lv}
+                  type="button"
+                  onClick={() => setSelectedTroopLv(lv)}
+                  style={{
+                    flex: 1,
+                    minHeight: '28px',
+                    borderRadius: '5px',
+                    background: selectedTroopLv === lv ? '#b45309' : 'rgba(30,41,59,0.85)',
+                    border: selectedTroopLv === lv ? '1px solid #fde047' : '1px solid rgba(148,163,184,0.2)',
+                    color: selectedTroopLv === lv ? '#fef08a' : '#cbd5e1',
+                    font: "700 10px 'Barlow Condensed'",
+                    cursor: 'pointer',
+                  }}
+                >
+                  Lv.{lv}
+                </button>
+              ))}
+              <button
+                type="button"
+                onClick={() => applyRecommendedPreset(selectedEntity)}
+                style={{
+                  minHeight: '28px',
+                  padding: '2px 6px',
+                  borderRadius: '5px',
+                  background: 'rgba(16,185,129,0.2)',
+                  border: '1px solid #34d399',
+                  color: '#86efac',
+                  font: "700 10px 'Barlow Condensed'",
+                  cursor: 'pointer',
+                }}
+              >
+                REC
+              </button>
+            </div>
+
+            {/* 3 Nepalese Troop Class Sliders */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', background: 'rgba(15, 23, 42, 0.85)', padding: '6px 8px', borderRadius: '7px', border: '1px solid rgba(56,189,248,0.28)' }}>
+              {(['infantry', 'archer', 'cavalry'] as TroopClassId[]).map((cls) => {
+                const avail = troopInventory[cls]?.[selectedTroopLv] || 0;
+                const val = Math.min(marchCounts[cls] || 0, avail);
+                const label = cls === 'infantry' ? 'Magar Inf' : cls === 'archer' ? 'Limbu Arc' : 'Thakuri Cav';
+                return (
+                  <div key={cls} style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '10.5px' }}>
+                    <span style={{ width: '68px', color: '#e2e8f0', fontWeight: 700 }}>{label}</span>
+                    <input
+                      type="range"
+                      min={0}
+                      max={Math.max(1, avail)}
+                      value={val}
+                      onChange={(e) =>
+                        setMarchCounts((prev) => ({ ...prev, [cls]: Number(e.target.value) || 0 }))
+                      }
+                      style={{ flex: 1, accentColor: cls === 'infantry' ? '#34d399' : cls === 'archer' ? '#38bdf8' : '#f59e0b' }}
+                    />
+                    <span style={{ width: '66px', textAlign: 'right', color: '#fef08a' }}>
+                      {val}/{avail}
+                    </span>
+                  </div>
+                );
+              })}
+
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '9.5px', color: '#94a3b8', paddingTop: '2px', borderTop: '1px solid rgba(255,255,255,0.06)' }}>
+                <span>Power: <strong style={{ color: '#facc15' }}>{selectedBattalionMetrics.totalPower.toLocaleString()}</strong> · Load: <strong style={{ color: '#86efac' }}>{selectedBattalionMetrics.totalLoad.toLocaleString()}</strong></span>
+                <div style={{ display: 'flex', gap: '3px' }}>
+                  {[0.25, 0.5, 1.0].map((r) => (
+                    <button
+                      key={r}
+                      type="button"
+                      onClick={() => applyBattalionRatio(r)}
+                      style={{
+                        padding: '1px 5px',
+                        borderRadius: '4px',
+                        background: '#1e293b',
+                        border: '1px solid rgba(148,163,184,0.3)',
+                        color: '#cbd5e1',
+                        font: "700 9px 'Barlow Condensed'",
+                        cursor: 'pointer',
+                      }}
+                    >
+                      {r === 1 ? 'MAX' : `${r * 100}%`}
+                    </button>
+                  ))}
                 </div>
               </div>
             </div>
 
-            {/* Unit Carousel Right 3D Button */}
-            <button
-              onClick={handleNextUnit}
-              style={{
-                width: '24px',
-                height: '36px',
-                borderRadius: '6px',
-                background: 'linear-gradient(180deg, #334155, #1e293b)',
-                borderTop: '1px solid rgba(255, 255, 255, 0.2)',
-                borderLeft: '1px solid rgba(255, 255, 255, 0.2)',
-                borderRight: '1px solid rgba(255, 255, 255, 0.2)',
-                borderBottom: '3px solid #0f172a',
-                boxShadow: '0 2px 0 #020617',
-                color: '#e0f2fe',
-                fontSize: '13px',
-                cursor: 'pointer',
-                display: 'grid',
-                placeItems: 'center',
-                transition: 'all 0.1s ease',
-              }}
-              title="Next Unit"
-            >
-              ►
-            </button>
+            {/* Action Dispatch Row */}
+            <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+              {selectedEntity.actions.includes('mine') && (
+                <button
+                  onClick={() => {
+                    if (onDispatchNepaleseMarch(selectedEntity, 'mine', selectedBattalionStacks, activeHero?.id)) {
+                      onCloseSelection();
+                    }
+                  }}
+                  style={{
+                    flex: 1,
+                    minHeight: '36px',
+                    padding: '6px 10px',
+                    borderRadius: '7px',
+                    background: 'linear-gradient(180deg, #16a34a 0%, #166534 100%)',
+                    border: '1px solid #4ade80',
+                    color: '#fff',
+                    font: "700 12px 'Barlow Condensed'",
+                    cursor: 'pointer',
+                  }}
+                >
+                  ⛏️ GATHER ({targetDistanceInfo.seconds}s)
+                </button>
+              )}
+
+              {selectedEntity.actions.includes('attack') && (
+                <button
+                  onClick={() => {
+                    if (onDispatchNepaleseMarch(selectedEntity, 'attack', selectedBattalionStacks, activeHero?.id)) {
+                      onCloseSelection();
+                    }
+                  }}
+                  style={{
+                    flex: 1,
+                    minHeight: '36px',
+                    padding: '6px 10px',
+                    borderRadius: '7px',
+                    background: 'linear-gradient(180deg, #dc2626 0%, #991b1b 100%)',
+                    border: '1px solid #f87171',
+                    color: '#fff',
+                    font: "700 12px 'Barlow Condensed'",
+                    cursor: 'pointer',
+                  }}
+                >
+                  {isEnemyCastle ? `🔥 SIEGE (${targetDistanceInfo.seconds}s)` : `⚔️ ATTACK (${targetDistanceInfo.seconds}s)`}
+                </button>
+              )}
+
+              {selectedEntity.actions.includes('rally') && (
+                <button
+                  onClick={() => {
+                    setRallyModalTarget(selectedEntity);
+                    onCloseSelection();
+                  }}
+                  style={{
+                    minHeight: '36px',
+                    padding: '6px 10px',
+                    borderRadius: '7px',
+                    background: 'linear-gradient(180deg, #d97706 0%, #92400e 100%)',
+                    border: '1px solid #fbbf24',
+                    color: '#fff',
+                    font: "700 12px 'Barlow Condensed'",
+                    cursor: 'pointer',
+                  }}
+                >
+                  🚩 RALLY
+                </button>
+              )}
+
+              {selectedEntity.actions.includes('scout') && (
+                <button
+                  onClick={() => {
+                    setScoutModalTarget(selectedEntity);
+                    onCloseSelection();
+                  }}
+                  style={{
+                    minHeight: '36px',
+                    padding: '6px 10px',
+                    borderRadius: '7px',
+                    background: 'linear-gradient(180deg, #0284c7 0%, #0369a1 100%)',
+                    border: '1px solid #38bdf8',
+                    color: '#fff',
+                    font: "700 12px 'Barlow Condensed'",
+                    cursor: 'pointer',
+                  }}
+                >
+                  🦅 SCOUT
+                </button>
+              )}
+
+              {selectedEntity.actions.includes('garrison') && !isStructure && (
+                <button
+                  onClick={() => {
+                    onExecuteAction(selectedEntity, 'garrison');
+                    onCloseSelection();
+                  }}
+                  style={{
+                    flex: 1,
+                    minHeight: '36px',
+                    padding: '6px 10px',
+                    borderRadius: '7px',
+                    background: 'linear-gradient(180deg, #4f46e5 0%, #3730a3 100%)',
+                    border: '1px solid #818cf8',
+                    color: '#fff',
+                    font: "700 12px 'Barlow Condensed'",
+                    cursor: 'pointer',
+                  }}
+                >
+                  🛡️ GARRISON
+                </button>
+              )}
+
+              {selectedEntity.actions.includes('upgrade') && (
+                <button
+                  onClick={() => {
+                    onExecuteAction(selectedEntity, 'upgrade');
+                    onCloseSelection();
+                  }}
+                  style={{
+                    flex: 1,
+                    minHeight: '36px',
+                    padding: '6px 10px',
+                    borderRadius: '7px',
+                    background: 'linear-gradient(180deg, #ca8a04 0%, #854d0e 100%)',
+                    border: '1px solid #facc15',
+                    color: '#fef08a',
+                    font: "700 12px 'Barlow Condensed'",
+                    cursor: 'pointer',
+                  }}
+                >
+                  🔨 UPGRADE
+                </button>
+              )}
+            </div>
           </div>
-
-          {/* 3D Steppers & Presets for active 1x1 unit */}
-          <div style={{ display: 'flex', gap: '3.5px', alignItems: 'center' }}>
-            <button
-              onClick={() => updateActiveUnitCount(-100)}
-              style={{
-                padding: '2px 5px',
-                borderRadius: '5px',
-                background: 'linear-gradient(180deg, #334155, #1e293b)',
-                borderTop: '1px solid rgba(255, 255, 255, 0.15)',
-                borderLeft: '1px solid rgba(255, 255, 255, 0.15)',
-                borderRight: '1px solid rgba(255, 255, 255, 0.15)',
-                borderBottom: '2.5px solid #0f172a',
-                boxShadow: '0 2px 0 #020617',
-                color: '#cbd5e1',
-                font: "700 9.5px 'Barlow Condensed'",
-                cursor: 'pointer',
-              }}
-            >
-              -100
-            </button>
-            <button
-              onClick={() => updateActiveUnitCount(-50)}
-              style={{
-                padding: '2px 5px',
-                borderRadius: '5px',
-                background: 'linear-gradient(180deg, #334155, #1e293b)',
-                borderTop: '1px solid rgba(255, 255, 255, 0.15)',
-                borderLeft: '1px solid rgba(255, 255, 255, 0.15)',
-                borderRight: '1px solid rgba(255, 255, 255, 0.15)',
-                borderBottom: '2.5px solid #0f172a',
-                boxShadow: '0 2px 0 #020617',
-                color: '#cbd5e1',
-                font: "700 9.5px 'Barlow Condensed'",
-                cursor: 'pointer',
-              }}
-            >
-              -50
-            </button>
-            <button
-              onClick={() => updateActiveUnitCount(50)}
-              style={{
-                padding: '2px 5px',
-                borderRadius: '5px',
-                background: 'linear-gradient(180deg, #0284c7, #0369a1)',
-                borderTop: '1px solid #38bdf8',
-                borderLeft: '1px solid #38bdf8',
-                borderRight: '1px solid #38bdf8',
-                borderBottom: '2.5px solid #0c4a6e',
-                boxShadow: '0 2px 0 #082f49',
-                color: '#e0f2fe',
-                font: "700 9.5px 'Barlow Condensed'",
-                cursor: 'pointer',
-              }}
-            >
-              +50
-            </button>
-            <button
-              onClick={() => updateActiveUnitCount(100)}
-              style={{
-                padding: '2px 5px',
-                borderRadius: '5px',
-                background: 'linear-gradient(180deg, #0284c7, #0369a1)',
-                borderTop: '1px solid #38bdf8',
-                borderLeft: '1px solid #38bdf8',
-                borderRight: '1px solid #38bdf8',
-                borderBottom: '2.5px solid #0c4a6e',
-                boxShadow: '0 2px 0 #082f49',
-                color: '#e0f2fe',
-                font: "700 9.5px 'Barlow Condensed'",
-                cursor: 'pointer',
-              }}
-            >
-              +100
-            </button>
-            <div style={{ flex: 1 }} />
-            <button
-              onClick={() => setActiveUnitRatio(0.25)}
-              style={{
-                padding: '2px 5px',
-                borderRadius: '5px',
-                background: 'linear-gradient(180deg, #1e293b, #0f172a)',
-                borderTop: '1px solid rgba(255, 255, 255, 0.15)',
-                borderLeft: '1px solid rgba(255, 255, 255, 0.15)',
-                borderRight: '1px solid rgba(255, 255, 255, 0.15)',
-                borderBottom: '2px solid #020617',
-                boxShadow: '0 1.5px 0 rgba(0,0,0,0.5)',
-                color: '#94a3b8',
-                font: "700 9px 'Barlow Condensed'",
-                cursor: 'pointer',
-              }}
-            >
-              25%
-            </button>
-            <button
-              onClick={() => setActiveUnitRatio(0.5)}
-              style={{
-                padding: '2px 5px',
-                borderRadius: '5px',
-                background: 'linear-gradient(180deg, #1e293b, #0f172a)',
-                borderTop: '1px solid rgba(255, 255, 255, 0.15)',
-                borderLeft: '1px solid rgba(255, 255, 255, 0.15)',
-                borderRight: '1px solid rgba(255, 255, 255, 0.15)',
-                borderBottom: '2px solid #020617',
-                boxShadow: '0 1.5px 0 rgba(0,0,0,0.5)',
-                color: '#94a3b8',
-                font: "700 9px 'Barlow Condensed'",
-                cursor: 'pointer',
-              }}
-            >
-              50%
-            </button>
-            <button
-              onClick={() => setActiveUnitRatio(1.0)}
-              style={{
-                padding: '2px 7px',
-                borderRadius: '5px',
-                background: 'linear-gradient(180deg, #ca8a04, #854d0e)',
-                borderTop: '1px solid #facc15',
-                borderLeft: '1px solid #facc15',
-                borderRight: '1px solid #facc15',
-                borderBottom: '2.5px solid #713f12',
-                boxShadow: '0 2px 0 #422006',
-                color: '#fef08a',
-                font: "700 9.5px 'Barlow Condensed'",
-                cursor: 'pointer',
-              }}
-            >
-              MAX
-            </button>
-          </div>
-
-          {/* 3D Action Buttons Grid */}
-          <div style={{ display: 'flex', gap: '6px', marginTop: '2px', flexWrap: 'wrap' }}>
-            {selectedEntity.actions.includes('attack') && (
-              <button
-                onClick={() => {
-                  onExecuteAction(selectedEntity, 'attack');
-                  onCloseSelection();
-                }}
-                style={{
-                  flex: 1,
-                  minWidth: '120px',
-                  padding: '7px 10px',
-                  borderRadius: '7px',
-                  background: 'linear-gradient(180deg, #dc2626 0%, #991b1b 100%)',
-                  borderTop: '1px solid #f87171',
-                  borderLeft: '1px solid #f87171',
-                  borderRight: '1px solid #f87171',
-                  borderBottom: '3.5px solid #7f1d1d',
-                  boxShadow: '0 3px 0 #450a0a, 0 4px 10px rgba(220, 38, 38, 0.35)',
-                  color: '#fff',
-                  font: "700 12px 'Barlow Condensed'",
-                  cursor: 'pointer',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  gap: '5px',
-                  transition: 'all 0.1s ease',
-                }}
-              >
-                <span style={{ fontSize: '14px' }}>⚔️</span>
-                <span>ATTACK ({targetDistanceInfo.seconds}s)</span>
-              </button>
-            )}
-
-            {selectedEntity.actions.includes('mine') && (
-              <button
-                onClick={() => {
-                  onExecuteAction(selectedEntity, 'mine');
-                  onCloseSelection();
-                }}
-                style={{
-                  flex: 1,
-                  minWidth: '120px',
-                  padding: '7px 10px',
-                  borderRadius: '7px',
-                  background: 'linear-gradient(180deg, #16a34a 0%, #166534 100%)',
-                  borderTop: '1px solid #4ade80',
-                  borderLeft: '1px solid #4ade80',
-                  borderRight: '1px solid #4ade80',
-                  borderBottom: '3.5px solid #14532d',
-                  boxShadow: '0 3px 0 #052e16, 0 4px 10px rgba(22, 163, 74, 0.35)',
-                  color: '#fff',
-                  font: "700 12px 'Barlow Condensed'",
-                  cursor: 'pointer',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  gap: '5px',
-                  transition: 'all 0.1s ease',
-                }}
-              >
-                <span style={{ fontSize: '14px' }}>⛏️</span>
-                <span>MINE ({targetDistanceInfo.seconds}s)</span>
-              </button>
-            )}
-
-            {selectedEntity.actions.includes('rally') && (
-              <button
-                onClick={() => {
-                  setRallyModalTarget(selectedEntity);
-                  onCloseSelection();
-                }}
-                style={{
-                  flex: 1,
-                  padding: '7px 10px',
-                  borderRadius: '7px',
-                  background: 'linear-gradient(180deg, #d97706 0%, #92400e 100%)',
-                  borderTop: '1px solid #fbbf24',
-                  borderLeft: '1px solid #fbbf24',
-                  borderRight: '1px solid #fbbf24',
-                  borderBottom: '3.5px solid #78350f',
-                  boxShadow: '0 3px 0 #451a03, 0 4px 10px rgba(217, 119, 6, 0.35)',
-                  color: '#fff',
-                  font: "700 12px 'Barlow Condensed'",
-                  cursor: 'pointer',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  gap: '5px',
-                  transition: 'all 0.1s ease',
-                }}
-              >
-                <span style={{ fontSize: '14px' }}>🚩</span>
-                <span>RALLY</span>
-              </button>
-            )}
-
-            {selectedEntity.actions.includes('scout') && (
-              <button
-                onClick={() => {
-                  setScoutModalTarget(selectedEntity);
-                  onCloseSelection();
-                }}
-                style={{
-                  padding: '7px 12px',
-                  borderRadius: '7px',
-                  background: 'linear-gradient(180deg, #0284c7 0%, #0369a1 100%)',
-                  borderTop: '1px solid #38bdf8',
-                  borderLeft: '1px solid #38bdf8',
-                  borderRight: '1px solid #38bdf8',
-                  borderBottom: '3.5px solid #0c4a6e',
-                  boxShadow: '0 3px 0 #082f49, 0 4px 10px rgba(2, 132, 199, 0.35)',
-                  color: '#fff',
-                  font: "700 12px 'Barlow Condensed'",
-                  cursor: 'pointer',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '4px',
-                  transition: 'all 0.1s ease',
-                }}
-              >
-                <span style={{ fontSize: '14px' }}>🦅</span>
-                <span>SCOUT</span>
-              </button>
-            )}
-
-            {selectedEntity.actions.includes('garrison') && (
-              <button
-                onClick={() => {
-                  onExecuteAction(selectedEntity, 'garrison');
-                  onCloseSelection();
-                }}
-                style={{
-                  flex: 1,
-                  padding: '7px 12px',
-                  borderRadius: '7px',
-                  background: 'linear-gradient(180deg, #4f46e5 0%, #3730a3 100%)',
-                  borderTop: '1px solid #818cf8',
-                  borderLeft: '1px solid #818cf8',
-                  borderRight: '1px solid #818cf8',
-                  borderBottom: '3.5px solid #1e1b4b',
-                  boxShadow: '0 3px 0 #1e1b4b, 0 4px 10px rgba(79, 70, 229, 0.35)',
-                  color: '#fff',
-                  font: "700 12px 'Barlow Condensed'",
-                  cursor: 'pointer',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  gap: '4px',
-                  transition: 'all 0.1s ease',
-                }}
-              >
-                <span style={{ fontSize: '14px' }}>🛡️</span>
-                <span>GARRISON</span>
-              </button>
-            )}
-
-            {selectedEntity.actions.includes('upgrade') && (
-              <button
-                onClick={() => {
-                  onExecuteAction(selectedEntity, 'upgrade');
-                  onCloseSelection();
-                }}
-                style={{
-                  flex: 1,
-                  padding: '7px 12px',
-                  borderRadius: '7px',
-                  background: 'linear-gradient(180deg, #ca8a04 0%, #854d0e 100%)',
-                  borderTop: '1px solid #facc15',
-                  borderLeft: '1px solid #facc15',
-                  borderRight: '1px solid #facc15',
-                  borderBottom: '3.5px solid #713f12',
-                  boxShadow: '0 3px 0 #422006, 0 4px 10px rgba(202, 138, 4, 0.35)',
-                  color: '#fef08a',
-                  font: "700 12px 'Barlow Condensed'",
-                  cursor: 'pointer',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  gap: '4px',
-                  transition: 'all 0.1s ease',
-                }}
-              >
-                <span style={{ fontSize: '14px' }}>🔨</span>
-                <span>UPGRADE</span>
-              </button>
-            )}
-          </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* ============================================================ */}
       {/* 6. EXPEDITION MARCH PROGRESS FLOATER                         */}
@@ -2993,7 +3369,7 @@ export const MapNavigationUI: React.FC<MapNavigationUIProps> = ({
           </div>
 
           <div style={{ display: 'flex', gap: '4px', padding: '8px 12px', borderBottom: '1px solid rgba(255,255,255,0.06)', overflowX: 'auto' }}>
-            {(['all', 'enemies', 'shrines', 'monsters', 'gold', 'iron', 'stone', 'wood', 'farm'] as const).map((cat) => (
+            {(['all', 'enemies', 'shrines', 'monsters', 'crystal', 'gold', 'iron', 'stone', 'wood', 'farm'] as const).map((cat) => (
               <button
                 key={cat}
                 onClick={() => setRadarCategory(cat)}
@@ -3285,8 +3661,11 @@ export const MapNavigationUI: React.FC<MapNavigationUIProps> = ({
               </button>
             </div>
 
-            <div style={{ fontSize: '13px', color: '#cbd5e1', marginBottom: '14px' }}>
-              Rallying imperial troops against <b>{rallyModalTarget.name}</b>. All alliance members will march in formation from Vanguard Fortress!
+            <div style={{ fontSize: '13px', color: '#cbd5e1', marginBottom: '10px' }}>
+              Rallying imperial troops against <b>{rallyModalTarget.name}</b>.{' '}
+              {rallyModalTarget.type === 'enemy_castle'
+                ? `Battalion led by ${activeHero ? activeHero.name : 'Unled Vanguard'} (${selectedBattalionMetrics.totalCount.toLocaleString()} troops · ${selectedBattalionMetrics.totalPower.toLocaleString()} PWR) will launch a siege march.`
+                : 'All alliance members will march in formation from Vanguard Fortress!'}
             </div>
 
             <div style={{ display: 'flex', gap: '8px', marginBottom: '16px' }}>
@@ -3312,8 +3691,21 @@ export const MapNavigationUI: React.FC<MapNavigationUIProps> = ({
 
             <button
               onClick={() => {
-                onExecuteAction(rallyModalTarget, 'rally');
-                setRallyModalTarget(null);
+                if (rallyModalTarget.type === 'enemy_castle') {
+                  if (
+                    onDispatchNepaleseMarch(
+                      rallyModalTarget,
+                      'rally',
+                      selectedBattalionStacks,
+                      activeHero?.id
+                    )
+                  ) {
+                    setRallyModalTarget(null);
+                  }
+                } else {
+                  onExecuteAction(rallyModalTarget, 'rally');
+                  setRallyModalTarget(null);
+                }
               }}
               style={{
                 width: '100%',
@@ -4282,10 +4674,10 @@ export const MapNavigationUI: React.FC<MapNavigationUIProps> = ({
                 {render3DModelIcon('alliance', 34)}
                 <div>
                   <h2 style={{ margin: 0, font: "800 20px 'Barlow Condensed', sans-serif", color: '#a7f3d0', letterSpacing: '0.04em' }}>
-                    🛡️ [VGD] HIMALAYAN VANGUARD ALLIANCE
+                    🛡️ [{playerAlliance.tag}] {playerAlliance.alias.toUpperCase()}
                   </h2>
-                  <div style={{ fontSize: '11.5px', color: '#86efac' }}>
-                    Territory Control: {allianceTerritoryStats.capturedTotal}/37 Shrines & Congress · Total Power: {allianceTerritoryStats.totalPower.toLocaleString()} ⚡
+                  <div style={{ fontSize: '11.5px', color: '#86efac', fontVariantNumeric: 'tabular-nums' }}>
+                    Shrines: {shrineRuleStatus.totalShrinesHeld}/{shrineRuleStatus.maxShrinesPerAlliance} (C {shrineRuleStatus.heldByTier.shrine_c}/2 · B {shrineRuleStatus.heldByTier.shrine_b}/1 · A {shrineRuleStatus.heldByTier.shrine_a}/1) · Congress: {allianceTerritoryStats.hasCongress ? 'CLAIMED' : shrineRuleStatus.congressUnlocked ? 'UNLOCKED' : 'LOCKED'} · Power: {allianceTerritoryStats.totalPower.toLocaleString()} ⚡
                   </div>
                 </div>
               </div>
@@ -4311,6 +4703,7 @@ export const MapNavigationUI: React.FC<MapNavigationUIProps> = ({
             <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
               {(
                 [
+                  { id: 'profile', label: `🛡️ Alliance Profile (${allianceTerritoryStats.capturedTotal})` },
                   { id: 'overview', label: '👑 Overview & Territory Buffs' },
                   { id: 'members', label: `🏰 Alliance Castles (${allianceMemberCastles.length})` },
                   { id: 'war', label: `⚔️ War Rallies & Targets (${enemyCastles.length})` },
@@ -4321,6 +4714,7 @@ export const MapNavigationUI: React.FC<MapNavigationUIProps> = ({
                   type="button"
                   onClick={() => setAllianceTab(tab.id)}
                   style={{
+                    minHeight: '36px',
                     padding: '6px 14px',
                     borderRadius: '8px',
                     background:
@@ -4343,8 +4737,349 @@ export const MapNavigationUI: React.FC<MapNavigationUIProps> = ({
 
             {/* Tab Content */}
             <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '10px', paddingRight: '4px' }}>
+              {allianceTab === 'profile' && (() => {
+                const heldPlots = RESERVED_PLOTS.filter(
+                  (plot) =>
+                    conqueredPlots?.[plot.id] === 'alliance' ||
+                    shrineGarrisons[plot.id]?.ownerFaction === 'alliance'
+                );
+                const tierPriority: Record<string, number> = {
+                  congress: 0,
+                  shrine_a: 1,
+                  shrine_b: 2,
+                  shrine_c: 3,
+                };
+                heldPlots.sort((a, b) => (tierPriority[a.type] ?? 9) - (tierPriority[b.type] ?? 9));
+
+                return (
+                  <>
+                    {/* Alliance Crest & Identity Card */}
+                    <div
+                      style={{
+                        background: 'linear-gradient(135deg, rgba(6, 78, 59, 0.42), rgba(15, 23, 42, 0.94))',
+                        border: '1px solid rgba(52, 211, 153, 0.45)',
+                        borderRadius: '11px',
+                        padding: '12px 14px',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: '10px',
+                      }}
+                    >
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                          {render3DModelIcon('alliance', 38)}
+                          <div>
+                            <div style={{ font: "800 18px 'Barlow Condensed', sans-serif", color: '#fef08a', letterSpacing: '0.04em' }}>
+                              [{playerAlliance.tag}] {playerAlliance.alias}
+                            </div>
+                            <div style={{ fontSize: '11px', color: '#a7f3d0', fontVariantNumeric: 'tabular-nums' }}>
+                              Combined Power: {allianceTerritoryStats.totalPower.toLocaleString()} ⚡ · {allianceMemberCastles.length} Allied Kingdoms · Continent 1 (3200×3200)
+                            </div>
+                          </div>
+                        </div>
+
+                        <div style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
+                          <div style={{ font: "800 14px 'Barlow Condensed', sans-serif", color: shrineRuleStatus.atShrineCap ? '#fca5a5' : '#34d399' }}>
+                            SHRINES HELD: {shrineRuleStatus.totalShrinesHeld} / {shrineRuleStatus.maxShrinesPerAlliance}
+                          </div>
+                          <div style={{ fontSize: '10.5px', color: shrineRuleStatus.congressUnlocked ? '#fde047' : '#cbd5e1' }}>
+                            Req for Congress: C {shrineRuleStatus.heldByTier.shrine_c}/2 · B {shrineRuleStatus.heldByTier.shrine_b}/1 · A {shrineRuleStatus.heldByTier.shrine_a}/1
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Inline 4-Char Tag + 4-Word Alias Editor */}
+                      <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center', borderTop: '1px solid rgba(255,255,255,0.08)', paddingTop: '8px' }}>
+                        <input
+                          type="text"
+                          maxLength={4}
+                          value={allianceTagDraft}
+                          onChange={(e) => setAllianceTagDraft(e.target.value.replace(/[^a-zA-Z0-9]/g, '').toUpperCase().slice(0, 4))}
+                          placeholder="GORK"
+                          style={{
+                            width: '76px',
+                            minHeight: '34px',
+                            padding: '4px 8px',
+                            borderRadius: '6px',
+                            background: '#020617',
+                            border: '1px solid rgba(56, 189, 248, 0.45)',
+                            color: '#fef08a',
+                            fontWeight: 800,
+                            fontSize: '12px',
+                            textTransform: 'uppercase',
+                          }}
+                        />
+                        <input
+                          type="text"
+                          value={allianceAliasDraft}
+                          onChange={(e) => setAllianceAliasDraft(e.target.value)}
+                          placeholder="Royal Himalayan Mountain Guard"
+                          style={{
+                            flex: 1,
+                            minWidth: '200px',
+                            minHeight: '34px',
+                            padding: '4px 10px',
+                            borderRadius: '6px',
+                            background: '#020617',
+                            border: '1px solid rgba(56, 189, 248, 0.45)',
+                            color: '#f8fafc',
+                            fontSize: '12px',
+                          }}
+                        />
+                        <button
+                          type="button"
+                          onClick={() => onUpdateAllianceIdentity(normalizeAllianceTag(allianceTagDraft), allianceAliasDraft)}
+                          style={{
+                            minHeight: '34px',
+                            padding: '5px 12px',
+                            borderRadius: '7px',
+                            background: 'linear-gradient(180deg, #059669, #065f46)',
+                            border: '1px solid #34d399',
+                            color: '#fff',
+                            font: "800 11.5px 'Barlow Condensed', sans-serif",
+                            cursor: 'pointer',
+                          }}
+                        >
+                          Save Tag & 4-Word Alias
+                        </button>
+                      </div>
+                      {(() => {
+                        const check = validateAllianceAlias(allianceAliasDraft);
+                        return (
+                          <div style={{ fontSize: '10.5px', color: check.valid ? '#86efac' : '#fca5a5' }}>
+                            {check.valid
+                              ? `Displayed Badge: [${normalizeAllianceTag(allianceTagDraft)}] ${check.normalized}`
+                              : check.error}
+                          </div>
+                        );
+                      })()}
+                    </div>
+
+                    {/* Held Shrines & Congress Roster */}
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
+                      <div style={{ font: "800 14.5px 'Barlow Condensed', sans-serif", color: '#fef08a', letterSpacing: '0.04em' }}>
+                        ⛩️ HELD SHRINES & CITADELS BY [{playerAlliance.tag}] {playerAlliance.alias.toUpperCase()} ({heldPlots.length})
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsAllianceOpen(false);
+                          onOpenCommandHub('shrines');
+                        }}
+                        style={{
+                          minHeight: '32px',
+                          padding: '4px 10px',
+                          borderRadius: '7px',
+                          background: 'rgba(2, 132, 199, 0.3)',
+                          border: '1px solid #38bdf8',
+                          color: '#bae6fd',
+                          font: "700 11px 'Barlow Condensed', sans-serif",
+                          cursor: 'pointer',
+                        }}
+                      >
+                        Open Shrines Hub ↗
+                      </button>
+                    </div>
+
+                    {heldPlots.length === 0 ? (
+                      <div style={{ background: 'rgba(15, 23, 42, 0.85)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '10px', padding: '14px', fontSize: '12px', color: '#94a3b8' }}>
+                        [{playerAlliance.tag}] {playerAlliance.alias} does not hold any Crystal Shrines yet. Capture up to 5 Shrines across Continent 1 (at least 2 C Shrines, 1 B Shrine, and 1 A Shrine to unlock The Congress at [1600, 1600]).
+                      </div>
+                    ) : (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                        {heldPlots.map((plot) => {
+                          const garrison = shrineGarrisons[plot.id];
+                          const tierMeta =
+                            plot.type === 'congress'
+                              ? { tag: 'CONGRESS 👑', accent: '#facc15', border: 'rgba(250, 204, 21, 0.55)', bg: 'rgba(113, 63, 18, 0.25)', buff: '+20% Attack / Speed / Yield' }
+                              : plot.type === 'shrine_a'
+                                ? { tag: 'A SHRINE · BLUE CRYSTAL ★★★', accent: '#38bdf8', border: 'rgba(56, 189, 248, 0.55)', bg: 'rgba(12, 74, 110, 0.25)', buff: '+12% Alliance Attack' }
+                                : plot.type === 'shrine_b'
+                                  ? { tag: 'B SHRINE · RED CRYSTAL ★★', accent: '#f87171', border: 'rgba(248, 113, 113, 0.55)', bg: 'rgba(127, 29, 29, 0.22)', buff: '+8% March Speed' }
+                                  : { tag: 'C SHRINE · PURPLE CRYSTAL ★', accent: '#c084fc', border: 'rgba(192, 132, 252, 0.55)', bg: 'rgba(88, 28, 135, 0.22)', buff: '+5% Resource Yield' };
+                          const garrisonStacks = [
+                            ...(garrison?.playerStacks || []),
+                            ...(garrison?.allianceReinforcements || []),
+                          ];
+                          const gMetrics = calculateArmyMetrics(garrisonStacks, balanceConfig, bonuses);
+                          const totalTroops = garrisonStacks.reduce((s, st) => s + st.count, 0);
+
+                          return (
+                            <div
+                              key={plot.id}
+                              style={{
+                                background: tierMeta.bg,
+                                border: `1px solid ${tierMeta.border}`,
+                                borderRadius: '10px',
+                                padding: '10px 12px',
+                                display: 'flex',
+                                justifyContent: 'space-between',
+                                alignItems: 'center',
+                                flexWrap: 'wrap',
+                                gap: '10px',
+                              }}
+                            >
+                              <div style={{ minWidth: '220px', flex: 1 }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '7px', flexWrap: 'wrap' }}>
+                                  <span style={{ font: "800 14.5px 'Barlow Condensed', sans-serif", color: '#f8fafc' }}>
+                                    {plot.name}
+                                  </span>
+                                  <span style={{ font: "800 10.5px 'Barlow Condensed', sans-serif", color: tierMeta.accent }}>
+                                    {tierMeta.tag}
+                                  </span>
+                                  <span style={{ fontSize: '10.5px', color: '#6ee7b7', fontWeight: 700 }}>
+                                    · Held by [{playerAlliance.tag}] {playerAlliance.alias}
+                                  </span>
+                                </div>
+                                <div style={{ fontSize: '11px', color: '#cbd5e1', marginTop: '3px', fontVariantNumeric: 'tabular-nums' }}>
+                                  Coords: [{Math.round(plot.position[0])}, {Math.round(plot.position[2])}] · Buff: {tierMeta.buff}
+                                </div>
+                                <div style={{ fontSize: '10.5px', color: '#94a3b8', marginTop: '2px', fontVariantNumeric: 'tabular-nums' }}>
+                                  Garrison: {totalTroops.toLocaleString()} troops ({gMetrics.totalPower.toLocaleString()} ⚡) · Barrier: {garrison ? `${garrison.barrierHp.toLocaleString()} / ${garrison.maxBarrierHp.toLocaleString()} (${garrison.barrierActive ? 'Shield ON' : 'Shield OFF'})` : 'Ready'}
+                                </div>
+                              </div>
+
+                              <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setIsAllianceOpen(false);
+                                    onPanTo(plot.position[0], plot.position[2]);
+                                    onShowToast?.(`📍 Focused on ${plot.name} [${Math.round(plot.position[0])}, ${Math.round(plot.position[2])}]`);
+                                  }}
+                                  style={{
+                                    minHeight: '34px',
+                                    padding: '5px 10px',
+                                    borderRadius: '7px',
+                                    background: 'rgba(2, 132, 199, 0.35)',
+                                    border: '1px solid #38bdf8',
+                                    color: '#e0f2fe',
+                                    font: "700 11px 'Barlow Condensed', sans-serif",
+                                    cursor: 'pointer',
+                                  }}
+                                >
+                                  Jump 📍
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setIsAllianceOpen(false);
+                                    onOpenCommandHub(plot.type === 'congress' ? 'congress' : 'shrines', plot.id);
+                                  }}
+                                  style={{
+                                    minHeight: '34px',
+                                    padding: '5px 10px',
+                                    borderRadius: '7px',
+                                    background: 'rgba(5, 150, 105, 0.4)',
+                                    border: '1px solid #34d399',
+                                    color: '#a7f3d0',
+                                    font: "700 11px 'Barlow Condensed', sans-serif",
+                                    cursor: 'pointer',
+                                  }}
+                                >
+                                  Manage ⛩️
+                                </button>
+                                {plot.type !== 'congress' && (
+                                  <button
+                                    type="button"
+                                    onClick={() => onRelinquishStructure(plot.id)}
+                                    style={{
+                                      minHeight: '34px',
+                                      padding: '5px 10px',
+                                      borderRadius: '7px',
+                                      background: 'rgba(153, 27, 27, 0.4)',
+                                      border: '1px solid #f87171',
+                                      color: '#fecaca',
+                                      font: "700 11px 'Barlow Condensed', sans-serif",
+                                      cursor: 'pointer',
+                                    }}
+                                  >
+                                    Relinquish 🏳️
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </>
+                );
+              })()}
+
               {allianceTab === 'overview' && (
                 <>
+                  {/* Alliance 4-Char Tag + 4-Word Alias Customizer */}
+                  <div style={{ background: 'rgba(15, 23, 42, 0.92)', border: '1px solid rgba(52, 211, 153, 0.35)', borderRadius: '10px', padding: '10px 12px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                    <div style={{ font: "800 13px 'Barlow Condensed'", color: '#a7f3d0' }}>
+                      ALLIANCE TAG (4 CHARS) & 4-WORD ALIAS
+                    </div>
+                    <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
+                      <input
+                        type="text"
+                        maxLength={4}
+                        value={allianceTagDraft}
+                        onChange={(e) => setAllianceTagDraft(e.target.value.replace(/[^a-zA-Z0-9]/g, '').toUpperCase().slice(0, 4))}
+                        placeholder="GORK"
+                        style={{
+                          width: '82px',
+                          minHeight: '34px',
+                          padding: '4px 8px',
+                          borderRadius: '6px',
+                          background: '#020617',
+                          border: '1px solid rgba(56, 189, 248, 0.45)',
+                          color: '#fef08a',
+                          fontWeight: 800,
+                          fontSize: '12px',
+                          textTransform: 'uppercase',
+                        }}
+                      />
+                      <input
+                        type="text"
+                        value={allianceAliasDraft}
+                        onChange={(e) => setAllianceAliasDraft(e.target.value)}
+                        placeholder="Royal Himalayan Mountain Guard"
+                        style={{
+                          flex: 1,
+                          minWidth: '210px',
+                          minHeight: '34px',
+                          padding: '4px 10px',
+                          borderRadius: '6px',
+                          background: '#020617',
+                          border: '1px solid rgba(56, 189, 248, 0.45)',
+                          color: '#f8fafc',
+                          fontSize: '12px',
+                        }}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => onUpdateAllianceIdentity(normalizeAllianceTag(allianceTagDraft), allianceAliasDraft)}
+                        style={{
+                          minHeight: '34px',
+                          padding: '5px 12px',
+                          borderRadius: '7px',
+                          background: 'linear-gradient(180deg, #059669, #065f46)',
+                          border: '1px solid #34d399',
+                          color: '#fff',
+                          font: "800 11.5px 'Barlow Condensed'",
+                          cursor: 'pointer',
+                        }}
+                      >
+                        Update Tag & Alias
+                      </button>
+                    </div>
+                    {(() => {
+                      const check = validateAllianceAlias(allianceAliasDraft);
+                      return (
+                        <div style={{ fontSize: '10.5px', color: check.valid ? '#86efac' : '#fca5a5' }}>
+                          {check.valid
+                            ? `Active Format: [${normalizeAllianceTag(allianceTagDraft)}] ${check.normalized}`
+                            : check.error}
+                        </div>
+                      );
+                    })()}
+                  </div>
+
                   <div
                     style={{
                       display: 'grid',
@@ -4353,48 +5088,49 @@ export const MapNavigationUI: React.FC<MapNavigationUIProps> = ({
                     }}
                   >
                     <div style={{ background: 'rgba(6, 78, 59, 0.35)', border: '1px solid rgba(52, 211, 153, 0.45)', borderRadius: '10px', padding: '10px 12px' }}>
-                      <div style={{ fontSize: '10px', color: '#6ee7b7', textTransform: 'uppercase' }}>Congress Sovereign</div>
-                      <div style={{ font: "800 18px 'Barlow Condensed'", color: allianceTerritoryStats.hasCongress ? '#fef08a' : '#94a3b8' }}>
-                        {allianceTerritoryStats.hasCongress ? '👑 CLAIMED (+20% ALL)' : '⚔️ UNCLAIMED'}
+                      <div style={{ fontSize: '10px', color: '#6ee7b7', textTransform: 'uppercase' }}>Congress Prerequisite</div>
+                      <div style={{ font: "800 17px 'Barlow Condensed'", color: allianceTerritoryStats.hasCongress ? '#fef08a' : shrineRuleStatus.congressUnlocked ? '#34d399' : '#fbbf24' }}>
+                        {allianceTerritoryStats.hasCongress ? '👑 CLAIMED (+20% ALL)' : shrineRuleStatus.congressUnlocked ? '🔓 UNLOCKED' : '🔒 NEED 2C 1B 1A'}
                       </div>
+                      <div style={{ fontSize: '10px', color: '#cbd5e1' }}>Shrine Cap: {shrineRuleStatus.totalShrinesHeld}/{shrineRuleStatus.maxShrinesPerAlliance}</div>
                     </div>
                     <div style={{ background: 'rgba(30, 41, 59, 0.8)', border: '1px solid rgba(250, 204, 21, 0.35)', borderRadius: '10px', padding: '10px 12px' }}>
                       <div style={{ fontSize: '10px', color: '#fde047', textTransform: 'uppercase' }}>Attack Bonus</div>
                       <div style={{ font: "800 18px 'Barlow Condensed'", color: '#fef08a', fontVariantNumeric: 'tabular-nums' }}>
                         +{allianceTerritoryStats.attackBuff}% Attack
                       </div>
-                      <div style={{ fontSize: '10px', color: '#94a3b8' }}>{allianceTerritoryStats.aCount}/4 Shrine A Held</div>
+                      <div style={{ fontSize: '10px', color: '#94a3b8' }}>{shrineRuleStatus.heldByTier.shrine_a}/1 Req Shrine A</div>
                     </div>
                     <div style={{ background: 'rgba(30, 41, 59, 0.8)', border: '1px solid rgba(56, 189, 248, 0.35)', borderRadius: '10px', padding: '10px 12px' }}>
                       <div style={{ fontSize: '10px', color: '#7dd3fc', textTransform: 'uppercase' }}>March Speed</div>
                       <div style={{ font: "800 18px 'Barlow Condensed'", color: '#bae6fd', fontVariantNumeric: 'tabular-nums' }}>
                         +{allianceTerritoryStats.marchBuff}% Speed
                       </div>
-                      <div style={{ fontSize: '10px', color: '#94a3b8' }}>{allianceTerritoryStats.bCount}/12 Shrine B Held</div>
+                      <div style={{ fontSize: '10px', color: '#94a3b8' }}>{shrineRuleStatus.heldByTier.shrine_b}/1 Req Shrine B</div>
                     </div>
                     <div style={{ background: 'rgba(30, 41, 59, 0.8)', border: '1px solid rgba(134, 239, 172, 0.35)', borderRadius: '10px', padding: '10px 12px' }}>
                       <div style={{ fontSize: '10px', color: '#86efac', textTransform: 'uppercase' }}>Resource Yield</div>
                       <div style={{ font: "800 18px 'Barlow Condensed'", color: '#a7f3d0', fontVariantNumeric: 'tabular-nums' }}>
                         +{allianceTerritoryStats.yieldBuff}% Yield
                       </div>
-                      <div style={{ fontSize: '10px', color: '#94a3b8' }}>{allianceTerritoryStats.cCount}/20 Shrine C Held</div>
+                      <div style={{ fontSize: '10px', color: '#94a3b8' }}>{shrineRuleStatus.heldByTier.shrine_c}/2 Req Shrine C</div>
                     </div>
                   </div>
 
                   <div style={{ background: 'rgba(15, 23, 42, 0.9)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '10px', padding: '12px' }}>
                     <div style={{ font: "800 14px 'Barlow Condensed'", color: '#fef08a', marginBottom: '6px' }}>
-                      🏰 CONQUEST DIRECTIVE — CONTINENT 1
+                      🏰 CONQUEST DIRECTIVE — 5 SHRINE CAP & CONGRESS RULE
                     </div>
                     <div style={{ fontSize: '12px', color: '#cbd5e1', lineHeight: 1.5 }}>
-                      Tap any <b>Shrine (C1–C20, B1–B12, A1–A4)</b>, <b>The Congress</b>, or crimson <b>Enemy Citadel</b> on the 3D map and click <b>ATTACK</b> or <b>RALLY</b> to launch siege arrows and flaming catapult volleys. Conquered Shrines turn emerald-gold and grant continent-wide Alliance buffs!
+                      Each alliance may hold at most <b>5 Shrines</b> simultaneously across Continent 1 (3200×3200). To unlock and claim <b>The Congress [1600, 1600]</b>, your alliance must simultaneously hold at least <b>2 C Shrines, 1 B Shrine, and 1 A Shrine</b>. Use the Shrines Hub or Shrine popup to relinquish a held Shrine if needed.
                     </div>
                     <div style={{ display: 'flex', gap: '8px', marginTop: '10px', flexWrap: 'wrap' }}>
                       <button
                         type="button"
                         onClick={() => {
                           setIsAllianceOpen(false);
-                          onPanTo(800, 800);
-                          onShowToast?.('👑 Focused camera on The Congress [800, 800] — Tap to Attack or Rally!');
+                          onPanTo(1600, 1600);
+                          onShowToast?.('👑 Focused camera on The Congress [1600, 1600]!');
                         }}
                         style={{
                           padding: '7px 14px',
@@ -4409,7 +5145,28 @@ export const MapNavigationUI: React.FC<MapNavigationUIProps> = ({
                           cursor: 'pointer',
                         }}
                       >
-                        👑 Jump to The Congress [800, 800]
+                        👑 Jump to The Congress [1600, 1600]
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsAllianceOpen(false);
+                          onOpenCommandHub('shrines');
+                        }}
+                        style={{
+                          padding: '7px 14px',
+                          borderRadius: '8px',
+                          background: 'linear-gradient(180deg, #0284c7, #0369a1)',
+                          borderTop: '1px solid #7dd3fc',
+                          borderLeft: '1px solid #7dd3fc',
+                          borderRight: '1px solid #7dd3fc',
+                          borderBottom: '3px solid #0c4a6e',
+                          color: '#fff',
+                          font: "800 12px 'Barlow Condensed'",
+                          cursor: 'pointer',
+                        }}
+                      >
+                        ⛩️ Manage Shrines ({shrineRuleStatus.totalShrinesHeld}/5)
                       </button>
                       <button
                         type="button"
@@ -4453,10 +5210,10 @@ export const MapNavigationUI: React.FC<MapNavigationUIProps> = ({
                       <div>
                         <div style={{ font: "800 13.5px 'Barlow Condensed'", color: mc.isMyCastle ? '#fef08a' : '#bae6fd' }}>
                           {mc.isMyCastle ? '👑 ' : '🛡️ '}
-                          {mc.allianceTag} {mc.owner} · {mc.name} (Lv.{mc.level})
+                          [{playerAlliance.tag}] {mc.owner} · {mc.name} (Lv.{mc.level})
                         </div>
                         <div style={{ fontSize: '10.5px', color: '#94a3b8', fontVariantNumeric: 'tabular-nums' }}>
-                          Coords: [X:{Math.round(mc.position[0])}, Y:{Math.round(mc.position[2])}] · Power: {mc.power.toLocaleString()} ⚡
+                          {playerAlliance.alias} · [X:{Math.round(mc.position[0])}, Y:{Math.round(mc.position[2])}] · Power: {mc.power.toLocaleString()} ⚡
                         </div>
                       </div>
                       <div style={{ display: 'flex', gap: '6px' }}>
@@ -4525,7 +5282,7 @@ export const MapNavigationUI: React.FC<MapNavigationUIProps> = ({
                           ☠️ {ec.allianceTag} {ec.owner} · {ec.name} (Lv.{ec.level})
                         </div>
                         <div style={{ fontSize: '10.5px', color: '#fecaca', fontVariantNumeric: 'tabular-nums' }}>
-                          [X:{Math.round(ec.position[0])}, Y:{Math.round(ec.position[2])}] · Power: {ec.power.toLocaleString()} ⚡
+                          {ec.allianceAlias || 'Rival Frontier Horde'} · [X:{Math.round(ec.position[0])}, Y:{Math.round(ec.position[2])}] · Power: {ec.power.toLocaleString()} ⚡
                         </div>
                       </div>
                       <button
@@ -4607,8 +5364,8 @@ export const MapNavigationUI: React.FC<MapNavigationUIProps> = ({
                   <h2 style={{ margin: 0, font: "800 18px 'Barlow Condensed'", color: '#a7f3d0' }}>
                     📲 HIMALAYAN REALMS — ANDROID APP & APK
                   </h2>
-                  <div style={{ fontSize: '11px', color: '#86efac' }}>
-                    Fullscreen Android PWA + Capacitor Native Android Project
+                  <div style={{ fontSize: '11px', color: '#86efac', fontVariantNumeric: 'tabular-nums' }}>
+                    Version v{__APP_VERSION__} · Build #{__APK_VERSION_CODE__} · Auto-Replace Enabled
                   </div>
                 </div>
               </div>
@@ -4619,6 +5376,15 @@ export const MapNavigationUI: React.FC<MapNavigationUIProps> = ({
               >
                 ✕
               </button>
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'rgba(16, 185, 129, 0.12)', border: '1px solid rgba(52, 211, 153, 0.35)', borderRadius: '8px', padding: '8px 12px', fontSize: '11.5px', color: '#d1fae5', fontVariantNumeric: 'tabular-nums' }}>
+              <span>
+                <b>Package ID:</b> <code>com.himalayanrealms.strategy</code>
+              </span>
+              <span style={{ color: '#fde047', fontWeight: 700 }}>
+                v{__APP_VERSION__} (code {__APK_VERSION_CODE__})
+              </span>
             </div>
 
             {isInstallable ? (
@@ -4667,9 +5433,9 @@ export const MapNavigationUI: React.FC<MapNavigationUIProps> = ({
 
             <div style={{ background: 'rgba(15, 23, 42, 0.9)', border: '1px solid rgba(56,189,248,0.3)', borderRadius: '8px', padding: '10px 12px', fontSize: '11.5px', color: '#cbd5e1', lineHeight: 1.5 }}>
               <div style={{ font: "800 13px 'Barlow Condensed'", color: '#7dd3fc', marginBottom: '4px' }}>
-                📦 COMPILE NATIVE .APK (CAPACITOR ANDROID)
+                📦 AUTO-VERSIONED NATIVE .APK BUILD
               </div>
-              This workspace includes the generated <b>android/</b> Gradle project (with your Castle Crest launcher icons) and a GitHub Actions workflow (<code>build-android-apk.yml</code>). Run locally with Android Studio / JDK 21:
+              Every APK build automatically bumps <code>versionCode</code> in <code>apk-version.json</code> &amp; <code>android/app/build.gradle</code> so installing the new APK on mobile cleanly replaces the older version while preserving data.
               <pre style={{ margin: '6px 0 0', padding: '7px 9px', background: '#020617', borderRadius: '6px', fontSize: '10.5px', color: '#fef08a', overflowX: 'auto' }}>
                 npm run android:apk
               </pre>

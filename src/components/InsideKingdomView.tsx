@@ -12,12 +12,13 @@ interface InsideKingdomViewProps {
     stone: number;
     iron: number;
     food: number;
+    crystal: number;
     gold: number;
     gems: number;
   };
   onSpendResources: (cost: { wood: number; stone: number; iron: number; food: number }) => boolean;
   onGrantReward: (
-    type: 'wood' | 'stone' | 'iron' | 'food' | 'gold' | 'gems',
+    type: 'wood' | 'stone' | 'iron' | 'food' | 'crystal' | 'gold' | 'gems',
     amount: number,
     label: string
   ) => void;

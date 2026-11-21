@@ -5,7 +5,12 @@ import {
   CastleSpawnData,
   ReservedPlot,
   WORLD_BOUNDS,
+  NILE_DELTA_FORK_Z,
+  getNileMainX,
+  getNileWestDeltaX,
+  getNileEastDeltaX,
 } from '../game/WorldCoordinates';
+import type { AllianceShrineRuleStatus, PlayerAllianceIdentity } from '../game/NepaleseBalanceConfig';
 
 interface StrategicWorldMapModalProps {
   isOpen: boolean;
@@ -18,10 +23,12 @@ interface StrategicWorldMapModalProps {
   onRelocateCastles: () => void;
   onPanToLocation: (x: number, z: number, label?: string) => void;
   onEnterMyCastle: () => void;
+  playerAlliance?: PlayerAllianceIdentity;
+  shrineRuleStatus?: AllianceShrineRuleStatus;
 }
 
 const MAP_MIN = WORLD_BOUNDS.MIN_X; // 0
-const MAP_MAX = WORLD_BOUNDS.MAX_X; // 1600
+const MAP_MAX = WORLD_BOUNDS.MAX_X; // 3200
 const CANVAS_SIZE = 760;
 
 // Deterministic earthy blotch coordinates for parchment terrain texture
@@ -54,6 +61,8 @@ export const StrategicWorldMapModal: React.FC<StrategicWorldMapModalProps> = ({
   onRelocateCastles,
   onPanToLocation,
   onEnterMyCastle,
+  playerAlliance = { tag: 'GORK', alias: 'Royal Himalayan Mountain Guard' },
+  shrineRuleStatus,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
@@ -121,6 +130,21 @@ export const StrategicWorldMapModal: React.FC<StrategicWorldMapModalProps> = ({
       ctx.restore();
     }
 
+    // Lush emerald highland wash across all 4 outer continent corners (no snow)
+    for (const [sx, sy] of [
+      [0, 0],
+      [S, 0],
+      [0, S],
+      [S, S],
+    ] as const) {
+      const cornerLand = ctx.createRadialGradient(sx, sy, 12, sx, sy, S * 0.36);
+      cornerLand.addColorStop(0, 'rgba(34, 139, 64, 0.34)');
+      cornerLand.addColorStop(0.55, 'rgba(56, 122, 68, 0.16)');
+      cornerLand.addColorStop(1, 'rgba(56, 122, 68, 0)');
+      ctx.fillStyle = cornerLand;
+      ctx.fillRect(0, 0, S, S);
+    }
+
     // 2. Optional "Land" Layer: Continent Sectors, Zone Borders & Elevation Rings
     if (showLand) {
       // Quadrant sector tints
@@ -133,11 +157,11 @@ export const StrategicWorldMapModal: React.FC<StrategicWorldMapModalProps> = ({
       ctx.fillStyle = 'rgba(251, 146, 60, 0.08)'; // SE Basin
       ctx.fillRect(S / 2, S / 2, S / 2, S / 2);
 
-      // Grid lines along the 6x6 lattice bands
+      // Grid lines along the 6x6 lattice bands across 3200x3200
       ctx.strokeStyle = 'rgba(254, 240, 138, 0.28)';
       ctx.lineWidth = 1.2;
       ctx.setLineDash([6, 6]);
-      for (const coord of [220, 452, 684, 916, 1148, 1380]) {
+      for (const coord of [360, 856, 1352, 1848, 2344, 2840]) {
         const p = worldToCanvas(coord, coord);
         ctx.beginPath();
         ctx.moveTo(p.cx, 0);
@@ -150,12 +174,12 @@ export const StrategicWorldMapModal: React.FC<StrategicWorldMapModalProps> = ({
       }
       ctx.setLineDash([]);
 
-      // Concentric Tier Rings (C, B, A)
-      const centerPt = worldToCanvas(800, 800);
+      // Concentric Tier Rings (A, B, C) around [1600, 1600]
+      const centerPt = worldToCanvas(1600, 1600);
       for (const [radWorld, color] of [
-        [180, 'rgba(250, 204, 21, 0.35)'],
-        [390, 'rgba(56, 189, 248, 0.25)'],
-        [620, 'rgba(255, 255, 255, 0.18)'],
+        [340, 'rgba(250, 204, 21, 0.35)'],
+        [740, 'rgba(56, 189, 248, 0.25)'],
+        [1220, 'rgba(255, 255, 255, 0.22)'],
       ] as const) {
         ctx.strokeStyle = color;
         ctx.lineWidth = 1.5;
@@ -164,6 +188,46 @@ export const StrategicWorldMapModal: React.FC<StrategicWorldMapModalProps> = ({
         ctx.stroke();
       }
     }
+
+    // 2b. Winding South-to-North Nile River, Fertile Floodplains & Northern Delta
+    const drawParchmentNileBranch = (
+      xFn: (z: number) => number,
+      zStart: number,
+      zEnd: number,
+      strokeCol: string,
+      width: number
+    ) => {
+      ctx.save();
+      ctx.strokeStyle = strokeCol;
+      ctx.lineWidth = width;
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      ctx.beginPath();
+      const steps = 42;
+      for (let i = 0; i <= steps; i++) {
+        const z = zStart + (zEnd - zStart) * (i / steps);
+        const pt = worldToCanvas(xFn(z), z);
+        if (i === 0) ctx.moveTo(pt.cx, pt.cy);
+        else ctx.lineTo(pt.cx, pt.cy);
+      }
+      ctx.stroke();
+      ctx.restore();
+    };
+
+    // Fertile riverbank green wash
+    drawParchmentNileBranch(getNileMainX, 3200, NILE_DELTA_FORK_Z, 'rgba(34, 139, 64, 0.34)', 22);
+    drawParchmentNileBranch(getNileWestDeltaX, NILE_DELTA_FORK_Z, 0, 'rgba(34, 139, 64, 0.30)', 16);
+    drawParchmentNileBranch(getNileEastDeltaX, NILE_DELTA_FORK_Z, 0, 'rgba(34, 139, 64, 0.30)', 16);
+
+    // Ink shoreline outline
+    drawParchmentNileBranch(getNileMainX, 3200, NILE_DELTA_FORK_Z, 'rgba(12, 74, 110, 0.72)', 10.5);
+    drawParchmentNileBranch(getNileWestDeltaX, NILE_DELTA_FORK_Z, 0, 'rgba(12, 74, 110, 0.68)', 7.5);
+    drawParchmentNileBranch(getNileEastDeltaX, NILE_DELTA_FORK_Z, 0, 'rgba(12, 74, 110, 0.68)', 7.5);
+
+    // Azure Nile water channel
+    drawParchmentNileBranch(getNileMainX, 3200, NILE_DELTA_FORK_Z, '#0ea5e9', 7.2);
+    drawParchmentNileBranch(getNileWestDeltaX, NILE_DELTA_FORK_Z, 0, '#38bdf8', 4.8);
+    drawParchmentNileBranch(getNileEastDeltaX, NILE_DELTA_FORK_Z, 0, '#38bdf8', 4.8);
 
     // 3. Draw Directional Progression Road Links (C -> B -> A -> The Congress)
     const plotById = new Map<string, ReservedPlot>();
@@ -305,17 +369,24 @@ export const StrategicWorldMapModal: React.FC<StrategicWorldMapModalProps> = ({
           cy - boxH / 2 + 18
         );
 
-        // Shield Crest in Center-Bottom of Card
+        // Shield Crest in Center-Bottom of Card (C=Purple, B=Red, A=Blue crystal centers; green ring on conquered)
         if (isConquered) {
-          drawShieldIcon(cx, cy + 6.5, isCongress ? 14 : 11, isCongress ? 16 : 13, '#10b981', '#fef08a', '#facc15');
+          const tierCrystal = isCongress
+            ? '#facc15'
+            : isShrineA
+              ? '#38bdf8'
+              : isShrineB
+                ? '#ef4444'
+                : '#a855f7';
+          drawShieldIcon(cx, cy + 6.5, isCongress ? 14 : 11, isCongress ? 16 : 13, '#10b981', '#064e3b', tierCrystal);
         } else if (isCongress) {
           drawShieldIcon(cx, cy + 7, 14, 16, '#facc15', '#78350f', '#38bdf8');
         } else if (isShrineA) {
-          drawShieldIcon(cx, cy + 6.5, 11, 13, '#f8fafc', '#451a03', '#38bdf8');
+          drawShieldIcon(cx, cy + 6.5, 11, 13, '#f8fafc', '#1e3a8a', '#38bdf8');
         } else if (isShrineB) {
-          drawShieldIcon(cx, cy + 6.5, 10.5, 12.5, '#f1f5f9', '#451a03', '#60a5fa');
+          drawShieldIcon(cx, cy + 6.5, 10.5, 12.5, '#f1f5f9', '#7f1d1d', '#ef4444');
         } else {
-          drawShieldIcon(cx, cy + 6.5, 10, 12, '#e2e8f0', '#451a03');
+          drawShieldIcon(cx, cy + 6.5, 10, 12, '#e2e8f0', '#581c87', '#a855f7');
         }
 
         // Optional Level / Tier Badge
@@ -327,13 +398,27 @@ export const StrategicWorldMapModal: React.FC<StrategicWorldMapModalProps> = ({
               : isShrineB
                 ? 'TIER B'
                 : 'TIER C';
+          const tierStroke = isCongress
+            ? '#facc15'
+            : isShrineA
+              ? '#38bdf8'
+              : isShrineB
+                ? '#ef4444'
+                : '#a855f7';
+          const tierTextCol = isCongress
+            ? '#fef08a'
+            : isShrineA
+              ? '#7dd3fc'
+              : isShrineB
+                ? '#fca5a5'
+                : '#d8b4fe';
           ctx.fillStyle = isCongress ? '#854d0e' : 'rgba(15, 23, 42, 0.9)';
           ctx.fillRect(cx - 18, cy + boxH / 2 - 4, 36, 10);
-          ctx.strokeStyle = isCongress ? '#facc15' : '#38bdf8';
+          ctx.strokeStyle = tierStroke;
           ctx.lineWidth = 0.9;
           ctx.strokeRect(cx - 18, cy + boxH / 2 - 4, 36, 10);
           ctx.font = "800 7px 'Barlow Condensed', sans-serif";
-          ctx.fillStyle = isCongress ? '#fef08a' : '#7dd3fc';
+          ctx.fillStyle = tierTextCol;
           ctx.fillText(tierTag, cx, cy + boxH / 2 + 3.5);
         }
       }
@@ -494,13 +579,15 @@ export const StrategicWorldMapModal: React.FC<StrategicWorldMapModalProps> = ({
         const d = Math.hypot(wx - c.position[0], wz - c.position[2]);
         if (d < 50 && (!best || d < best.dist)) {
           const isEnemy = c.faction === 'enemy';
+          const tagLabel = isEnemy ? c.allianceTag : `[${playerAlliance.tag}]`;
+          const aliasLabel = isEnemy ? (c.allianceAlias || 'Rival Frontier Horde') : playerAlliance.alias;
           best = {
             name: c.name,
             subtitle: c.isMyCastle
-              ? `👑 My Kingdom · ${c.power.toLocaleString()} Power`
+              ? `👑 ${tagLabel} ${aliasLabel} · ${c.power.toLocaleString()} Power`
               : isEnemy
-                ? `⚔️ ${c.allianceTag} Enemy Citadel · ${c.owner}`
-                : `🛡️ ${c.allianceTag} Alliance Kingdom · ${c.owner}`,
+                ? `⚔️ ${tagLabel} ${aliasLabel} · ${c.owner}`
+                : `🛡️ ${tagLabel} ${aliasLabel} · ${c.owner}`,
             x: c.position[0],
             z: c.position[2],
             categoryColor: c.isMyCastle ? '#10b981' : isEnemy ? '#ef4444' : '#60a5fa',
@@ -634,8 +721,8 @@ export const StrategicWorldMapModal: React.FC<StrategicWorldMapModalProps> = ({
             >
               WORLDMAP
             </div>
-            <div style={{ fontSize: '10.5px', color: '#94a3b8' }}>
-              1600×1600 Continent · 1 Congress · 4 Shrine A · 12 Shrine B · 20 Shrine C · {castles.length} Castles
+            <div style={{ fontSize: '10.5px', color: '#94a3b8', fontVariantNumeric: 'tabular-nums' }}>
+              3200×3200 Green Continent · [{playerAlliance.tag}] {playerAlliance.alias} · Shrines {shrineRuleStatus ? `${shrineRuleStatus.totalShrinesHeld}/${shrineRuleStatus.maxShrinesPerAlliance}` : '1/5'} · {castles.length} Castles
             </div>
           </div>
 
@@ -972,7 +1059,7 @@ export const StrategicWorldMapModal: React.FC<StrategicWorldMapModalProps> = ({
               <button
                 type="button"
                 onClick={() => {
-                  onPanToLocation(800, 800, 'The Congress');
+                  onPanToLocation(1600, 1600, 'The Congress');
                   onClose();
                 }}
                 style={{
@@ -990,9 +1077,9 @@ export const StrategicWorldMapModal: React.FC<StrategicWorldMapModalProps> = ({
                   cursor: 'pointer',
                   boxShadow: '0 6px 18px rgba(234, 179, 8, 0.35)',
                 }}
-                title="Focus Camera on The Congress [800, 800]"
+                title="Focus Camera on The Congress [1600, 1600]"
               >
-                CONTINENT 1
+                CONTINENT 1 · [1600, 1600]
               </button>
             </div>
           </div>

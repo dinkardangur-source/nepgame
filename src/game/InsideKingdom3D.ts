@@ -165,27 +165,27 @@ export function createBuildingData(category: MergeBuildingCategory, level: numbe
 }
 
 /**
- * 16 Symmetrical 3D Courtyard Plots surrounding the Central Imperial Pagoda Keep at (800, 10, 796)
+ * 16 Symmetrical 3D Courtyard Plots surrounding the Central Imperial Pagoda Keep at (1600, 10, 1596)
  */
 const COURTYARD_PLOT_COORDS: Array<[number, number, number]> = [
   // Inner Ring (8 plots flanking the Keep)
-  [784, 10.0, 784],
-  [772, 10.0, 784],
-  [816, 10.0, 784],
-  [828, 10.0, 784],
-  [784, 10.0, 798],
-  [772, 10.0, 798],
-  [816, 10.0, 798],
-  [828, 10.0, 798],
+  [1584, 10.0, 1584],
+  [1572, 10.0, 1584],
+  [1616, 10.0, 1584],
+  [1628, 10.0, 1584],
+  [1584, 10.0, 1598],
+  [1572, 10.0, 1598],
+  [1616, 10.0, 1598],
+  [1628, 10.0, 1598],
   // Forecourt Southern Ring (8 plots along the Grand Processional Avenue)
-  [786, 10.0, 812],
-  [772, 10.0, 812],
-  [814, 10.0, 812],
-  [828, 10.0, 812],
-  [786, 10.0, 825],
-  [772, 10.0, 825],
-  [814, 10.0, 825],
-  [828, 10.0, 825],
+  [1586, 10.0, 1612],
+  [1572, 10.0, 1612],
+  [1614, 10.0, 1612],
+  [1628, 10.0, 1612],
+  [1586, 10.0, 1625],
+  [1572, 10.0, 1625],
+  [1614, 10.0, 1625],
+  [1628, 10.0, 1625],
 ];
 
 const INITIAL_SLOT_SEEDS: Array<{ category: MergeBuildingCategory; level: number } | null> = [
@@ -369,7 +369,7 @@ export class InsideKingdom3D {
    * 1. Build the 3D Walled Himalayan Citadel Courtyard (Prominent 4-Sided Wall Border, Gatehouse, Corner Towers, and Surrounding Forest & Bushes except Main Gate)
    */
   private initWalledCourtyardEnvironment() {
-    const center = new THREE.Vector3(800, 10.0, 800);
+    const center = new THREE.Vector3(1600, 10.0, 1600);
 
     // Outer Grass & Forest Floor Meadow Base under the surrounding forest (168m x 146m)
     const meadowMat = new THREE.MeshStandardMaterial({
@@ -381,21 +381,21 @@ export class InsideKingdom3D {
       this.rootGroup,
       new THREE.BoxGeometry(168, 0.36, 146),
       meadowMat,
-      800,
+      1600,
       center.y - 0.25,
-      804,
+      1604,
       false
     );
     meadowSlab.receiveShadow = true;
 
-    // Grand Paved Royal Granite Courtyard Foundation Slab inside the Wall Border (104m x 92m: X=748..852, Z=754..846)
+    // Grand Paved Royal Granite Courtyard Foundation Slab inside the Wall Border (104m x 92m: X=1548..1652, Z=1554..1646)
     const courtyardSlab = this.addMesh(
       this.rootGroup,
       new THREE.BoxGeometry(104, 0.5, 92),
       this.darkStoneMat,
-      800,
+      1600,
       center.y - 0.15,
-      800,
+      1600,
       false
     );
     courtyardSlab.receiveShadow = true;
@@ -406,29 +406,29 @@ export class InsideKingdom3D {
       transparent: true,
       opacity: 0.55,
     });
-    this.addMesh(this.rootGroup, new THREE.BoxGeometry(96, 0.53, 0.8), borderFrameMat, 800, center.y - 0.13, 758, false);
-    this.addMesh(this.rootGroup, new THREE.BoxGeometry(0.8, 0.53, 84), borderFrameMat, 752, center.y - 0.13, 800, false);
-    this.addMesh(this.rootGroup, new THREE.BoxGeometry(0.8, 0.53, 84), borderFrameMat, 848, center.y - 0.13, 800, false);
-    this.addMesh(this.rootGroup, new THREE.BoxGeometry(36, 0.53, 0.8), borderFrameMat, 770, center.y - 0.13, 842, false);
-    this.addMesh(this.rootGroup, new THREE.BoxGeometry(36, 0.53, 0.8), borderFrameMat, 830, center.y - 0.13, 842, false);
+    this.addMesh(this.rootGroup, new THREE.BoxGeometry(96, 0.53, 0.8), borderFrameMat, 1600, center.y - 0.13, 1558, false);
+    this.addMesh(this.rootGroup, new THREE.BoxGeometry(0.8, 0.53, 84), borderFrameMat, 1552, center.y - 0.13, 1600, false);
+    this.addMesh(this.rootGroup, new THREE.BoxGeometry(0.8, 0.53, 84), borderFrameMat, 1648, center.y - 0.13, 1600, false);
+    this.addMesh(this.rootGroup, new THREE.BoxGeometry(36, 0.53, 0.8), borderFrameMat, 1570, center.y - 0.13, 1642, false);
+    this.addMesh(this.rootGroup, new THREE.BoxGeometry(36, 0.53, 0.8), borderFrameMat, 1630, center.y - 0.13, 1642, false);
 
     // Central Golden Processional Avenue (North-South & East-West Crossways + Open Main Gate Road)
     this.addMesh(
       this.rootGroup,
       new THREE.BoxGeometry(12.5, 0.56, 118),
       this.stoneMat,
-      800,
+      1600,
       center.y - 0.12,
-      824,
+      1624,
       false
     );
     this.addMesh(
       this.rootGroup,
       new THREE.BoxGeometry(92, 0.56, 8.5),
       this.stoneMat,
-      800,
+      1600,
       center.y - 0.12,
-      798,
+      1598,
       false
     );
 
@@ -438,144 +438,143 @@ export class InsideKingdom3D {
       transparent: true,
       opacity: 0.76,
     });
-    this.addMesh(this.rootGroup, new THREE.BoxGeometry(0.5, 0.6, 114), leylineMat, 794.5, center.y - 0.1, 824, false);
-    this.addMesh(this.rootGroup, new THREE.BoxGeometry(0.5, 0.6, 114), leylineMat, 805.5, center.y - 0.1, 824, false);
+    this.addMesh(this.rootGroup, new THREE.BoxGeometry(0.5, 0.6, 114), leylineMat, 1594.5, center.y - 0.1, 1624, false);
+    this.addMesh(this.rootGroup, new THREE.BoxGeometry(0.5, 0.6, 114), leylineMat, 1605.5, center.y - 0.1, 1624, false);
 
     // =========================================================================
     // FORTIFIED PERIMETER WALL BORDER ENCLOSING ALL INSIDE BUILDINGS
-    // North: Z=754, South: Z=846, West: X=748, East: X=852
+    // North: Z=1554, South: Z=1646, West: X=1548, East: X=1652
     // =========================================================================
     const wallHeight = 7.6;
     const wallThick = 4.2;
 
-    // 1. North Rampart Wall (Z = 754, X = 748..852 -> 104m wide)
+    // 1. North Rampart Wall (Z = 1554, X = 1548..1652 -> 104m wide)
     this.addMesh(
       this.rootGroup,
       new THREE.BoxGeometry(104, wallHeight, wallThick),
       this.stoneMat,
-      800,
+      1600,
       center.y + wallHeight / 2,
-      754
+      1554
     );
-    // Golden Parapet Border Strip on North Wall
     this.addMesh(
       this.rootGroup,
       new THREE.BoxGeometry(104.4, 0.38, wallThick + 0.4),
       this.goldMat,
-      800,
+      1600,
       center.y + wallHeight + 0.15,
-      754
+      1554
     );
 
-    // 2. West Rampart Wall (X = 748, Z = 754..846 -> 92m deep)
+    // 2. West Rampart Wall (X = 1548, Z = 1554..1646 -> 92m deep)
     this.addMesh(
       this.rootGroup,
       new THREE.BoxGeometry(wallThick, wallHeight, 92),
       this.stoneMat,
-      748,
+      1548,
       center.y + wallHeight / 2,
-      800
+      1600
     );
     this.addMesh(
       this.rootGroup,
       new THREE.BoxGeometry(wallThick + 0.4, 0.38, 92.4),
       this.goldMat,
-      748,
+      1548,
       center.y + wallHeight + 0.15,
-      800
+      1600
     );
 
-    // 3. East Rampart Wall (X = 852, Z = 754..846 -> 92m deep)
+    // 3. East Rampart Wall (X = 1652, Z = 1554..1646 -> 92m deep)
     this.addMesh(
       this.rootGroup,
       new THREE.BoxGeometry(wallThick, wallHeight, 92),
       this.stoneMat,
-      852,
+      1652,
       center.y + wallHeight / 2,
-      800
+      1600
     );
     this.addMesh(
       this.rootGroup,
       new THREE.BoxGeometry(wallThick + 0.4, 0.38, 92.4),
       this.goldMat,
-      852,
+      1652,
       center.y + wallHeight + 0.15,
-      800
+      1600
     );
 
-    // 4. South Rampart Wall Left & Right Flanks (Z = 846, leaving a 20m Main Gate opening at X = 790..810)
+    // 4. South Rampart Wall Left & Right Flanks (Z = 1646, leaving a 20m Main Gate opening at X = 1590..1610)
     this.addMesh(
       this.rootGroup,
       new THREE.BoxGeometry(42, wallHeight, wallThick),
       this.stoneMat,
-      769,
+      1569,
       center.y + wallHeight / 2,
-      846
+      1646
     );
     this.addMesh(
       this.rootGroup,
       new THREE.BoxGeometry(42.4, 0.38, wallThick + 0.4),
       this.goldMat,
-      769,
+      1569,
       center.y + wallHeight + 0.15,
-      846
+      1646
     );
 
     this.addMesh(
       this.rootGroup,
       new THREE.BoxGeometry(42, wallHeight, wallThick),
       this.stoneMat,
-      831,
+      1631,
       center.y + wallHeight / 2,
-      846
+      1646
     );
     this.addMesh(
       this.rootGroup,
       new THREE.BoxGeometry(42.4, 0.38, wallThick + 0.4),
       this.goldMat,
-      831,
+      1631,
       center.y + wallHeight + 0.15,
-      846
+      1646
     );
 
     // Crenellated Battlements & Glowing Wall Braziers around North, South, West, East Walls
-    for (let x = 754; x <= 846; x += 6) {
+    for (let x = 1554; x <= 1646; x += 6) {
       // North Wall Battlements (Outer & Inner)
-      this.addMesh(this.rootGroup, new THREE.BoxGeometry(3.0, 1.4, 1.1), this.stoneMat, x, center.y + wallHeight + 0.85, 752.4);
-      this.addMesh(this.rootGroup, new THREE.BoxGeometry(3.0, 1.1, 0.9), this.stoneMat, x, center.y + wallHeight + 0.7, 755.6);
+      this.addMesh(this.rootGroup, new THREE.BoxGeometry(3.0, 1.4, 1.1), this.stoneMat, x, center.y + wallHeight + 0.85, 1552.4);
+      this.addMesh(this.rootGroup, new THREE.BoxGeometry(3.0, 1.1, 0.9), this.stoneMat, x, center.y + wallHeight + 0.7, 1555.6);
       if (x % 18 === 0) {
-        this.addMesh(this.rootGroup, new THREE.SphereGeometry(0.42, 8, 8), this.lanternMat, x, center.y + wallHeight + 1.9, 754);
+        this.addMesh(this.rootGroup, new THREE.SphereGeometry(0.42, 8, 8), this.lanternMat, x, center.y + wallHeight + 1.9, 1554);
       }
 
-      // South Wall Battlements (skipping Main Gate opening X = 788..812)
-      if (x < 787 || x > 813) {
-        this.addMesh(this.rootGroup, new THREE.BoxGeometry(3.0, 1.4, 1.1), this.stoneMat, x, center.y + wallHeight + 0.85, 847.6);
-        this.addMesh(this.rootGroup, new THREE.BoxGeometry(3.0, 1.1, 0.9), this.stoneMat, x, center.y + wallHeight + 0.7, 844.4);
+      // South Wall Battlements (skipping Main Gate opening X = 1588..1612)
+      if (x < 1587 || x > 1613) {
+        this.addMesh(this.rootGroup, new THREE.BoxGeometry(3.0, 1.4, 1.1), this.stoneMat, x, center.y + wallHeight + 0.85, 1647.6);
+        this.addMesh(this.rootGroup, new THREE.BoxGeometry(3.0, 1.1, 0.9), this.stoneMat, x, center.y + wallHeight + 0.7, 1644.4);
       }
     }
 
-    for (let z = 760; z <= 840; z += 6) {
+    for (let z = 1560; z <= 1640; z += 6) {
       // West Wall Battlements
-      this.addMesh(this.rootGroup, new THREE.BoxGeometry(1.1, 1.4, 3.0), this.stoneMat, 746.4, center.y + wallHeight + 0.85, z);
-      this.addMesh(this.rootGroup, new THREE.BoxGeometry(0.9, 1.1, 3.0), this.stoneMat, 749.6, center.y + wallHeight + 0.7, z);
+      this.addMesh(this.rootGroup, new THREE.BoxGeometry(1.1, 1.4, 3.0), this.stoneMat, 1546.4, center.y + wallHeight + 0.85, z);
+      this.addMesh(this.rootGroup, new THREE.BoxGeometry(0.9, 1.1, 3.0), this.stoneMat, 1549.6, center.y + wallHeight + 0.7, z);
       // East Wall Battlements
-      this.addMesh(this.rootGroup, new THREE.BoxGeometry(1.1, 1.4, 3.0), this.stoneMat, 853.6, center.y + wallHeight + 0.85, z);
-      this.addMesh(this.rootGroup, new THREE.BoxGeometry(0.9, 1.1, 3.0), this.stoneMat, 850.4, center.y + wallHeight + 0.7, z);
+      this.addMesh(this.rootGroup, new THREE.BoxGeometry(1.1, 1.4, 3.0), this.stoneMat, 1653.6, center.y + wallHeight + 0.85, z);
+      this.addMesh(this.rootGroup, new THREE.BoxGeometry(0.9, 1.1, 3.0), this.stoneMat, 1650.4, center.y + wallHeight + 0.7, z);
 
       if (z % 18 === 0) {
-        this.addMesh(this.rootGroup, new THREE.SphereGeometry(0.42, 8, 8), this.lanternMat, 748, center.y + wallHeight + 1.9, z);
-        this.addMesh(this.rootGroup, new THREE.SphereGeometry(0.42, 8, 8), this.lanternMat, 852, center.y + wallHeight + 1.9, z);
+        this.addMesh(this.rootGroup, new THREE.SphereGeometry(0.42, 8, 8), this.lanternMat, 1548, center.y + wallHeight + 1.9, z);
+        this.addMesh(this.rootGroup, new THREE.SphereGeometry(0.42, 8, 8), this.lanternMat, 1652, center.y + wallHeight + 1.9, z);
       }
     }
 
     // Six Perimeter Himalayan Pagoda Bastion Towers (4 Corners + 2 Mid-Wall Side Towers)
     const bastionCoords: Array<[number, number]> = [
-      [748, 754], // North-West Corner
-      [852, 754], // North-East Corner
-      [748, 846], // South-West Corner
-      [852, 846], // South-East Corner
-      [748, 800], // West Mid-Wall Bastion
-      [852, 800], // East Mid-Wall Bastion
+      [1548, 1554],
+      [1652, 1554],
+      [1548, 1646],
+      [1652, 1646],
+      [1548, 1600],
+      [1652, 1600],
     ];
     for (const [cx, cz] of bastionCoords) {
       const cGroup = new THREE.Group();
@@ -589,9 +588,9 @@ export class InsideKingdom3D {
       this.rootGroup.add(cGroup);
     }
 
-    // Southern Imperial Main Gatehouse Archway (Z = 846, X = 800)
+    // Southern Imperial Main Gatehouse Archway (Z = 1646, X = 1600)
     const gateGroup = new THREE.Group();
-    gateGroup.position.set(800, center.y, 846);
+    gateGroup.position.set(1600, center.y, 1646);
     this.addMesh(gateGroup, new THREE.BoxGeometry(6.0, 12.0, 6.2), this.stoneMat, -10.5, 6.0, 0);
     this.addMesh(gateGroup, new THREE.BoxGeometry(6.0, 12.0, 6.2), this.stoneMat, 10.5, 6.0, 0);
     // Overhead Pagoda Bridge Arch
@@ -605,12 +604,12 @@ export class InsideKingdom3D {
     const bRight = this.addMesh(gateGroup, new THREE.PlaneGeometry(2.0, 5.2), this.bannerMat, 9.8, 7.6, 3.3);
     bRight.userData = { isDragonBanner: true, phase: 1.9 };
 
-    // Ceremonial Stone Lantern Pillars lining the open Main Gate Road (Z = 854..877)
-    for (const gz of [855, 866, 877]) {
+    // Ceremonial Stone Lantern Pillars lining the open Main Gate Road (Z = 1654..1677)
+    for (const gz of [1655, 1666, 1677]) {
       for (const gx of [-8.2, 8.2]) {
-        this.addMesh(gateGroup, new THREE.CylinderGeometry(0.45, 0.65, 2.4, 6), this.stoneMat, gx, 1.2, gz - 846);
-        this.addMesh(gateGroup, new THREE.SphereGeometry(0.42, 8, 8), this.lanternMat, gx, 2.65, gz - 846);
-        this.addMesh(gateGroup, new THREE.ConeGeometry(0.95, 0.7, 6), this.goldMat, gx, 3.25, gz - 846);
+        this.addMesh(gateGroup, new THREE.CylinderGeometry(0.45, 0.65, 2.4, 6), this.stoneMat, gx, 1.2, gz - 1646);
+        this.addMesh(gateGroup, new THREE.SphereGeometry(0.42, 8, 8), this.lanternMat, gx, 2.65, gz - 1646);
+        this.addMesh(gateGroup, new THREE.ConeGeometry(0.95, 0.7, 6), this.goldMat, gx, 3.25, gz - 1646);
       }
     }
     this.rootGroup.add(gateGroup);
@@ -707,54 +706,54 @@ export class InsideKingdom3D {
 
     // Helper: returns true if (x, z) falls inside the open Southern Main Gate corridor
     const isMainGateCorridor = (x: number, z: number): boolean => {
-      return z > 838 && x > 782 && x < 818;
+      return z > 1638 && x > 1582 && x < 1618;
     };
 
     // 1. INNER WALL BORDER BUSHES (Tucked neatly along the inside base of North, West, East, and South-Flank walls)
     let seed = 1;
-    // Inner North Wall Bushes (Z = 757.2)
-    for (let x = 755; x <= 845; x += 5.5) {
-      if (Math.abs(x - 800) < 13) continue; // Keep area behind Imperial Keep tidy
-      spawnBushCluster(x, 757.2, 0.72 + (seed % 3) * 0.08, seed++);
+    // Inner North Wall Bushes (Z = 1557.2)
+    for (let x = 1555; x <= 1645; x += 5.5) {
+      if (Math.abs(x - 1600) < 13) continue; // Keep area behind Imperial Keep tidy
+      spawnBushCluster(x, 1557.2, 0.72 + (seed % 3) * 0.08, seed++);
     }
-    // Inner West & East Wall Bushes (X = 751.2 and X = 848.8)
-    for (let z = 761; z <= 839; z += 5.5) {
-      if (Math.abs(z - 798) < 5.5) continue; // Skip East-West avenue
-      spawnBushCluster(751.2, z, 0.72 + (seed % 3) * 0.08, seed++);
-      spawnBushCluster(848.8, z, 0.72 + (seed % 3) * 0.08, seed++);
+    // Inner West & East Wall Bushes (X = 1551.2 and X = 1648.8)
+    for (let z = 1561; z <= 1639; z += 5.5) {
+      if (Math.abs(z - 1598) < 5.5) continue; // Skip East-West avenue
+      spawnBushCluster(1551.2, z, 0.72 + (seed % 3) * 0.08, seed++);
+      spawnBushCluster(1648.8, z, 0.72 + (seed % 3) * 0.08, seed++);
     }
-    // Inner South Wall Bushes (Z = 842.8, skipping Main Gate X = 782..818)
-    for (let x = 755; x <= 845; x += 5.5) {
-      if (isMainGateCorridor(x, 843)) continue;
-      spawnBushCluster(x, 842.8, 0.74, seed++);
+    // Inner South Wall Bushes (Z = 1642.8, skipping Main Gate X = 1582..1618)
+    for (let x = 1555; x <= 1645; x += 5.5) {
+      if (isMainGateCorridor(x, 1643)) continue;
+      spawnBushCluster(x, 1642.8, 0.74, seed++);
     }
 
     // 2. OUTER WALL BORDER BUSHES (Hugging the outside foot of the North, West, East, and South-Flank walls)
-    // Outer North Wall Hedge & Shrubs (Z = 749.5 & Z = 746.5)
-    for (let x = 742; x <= 858; x += 4.5) {
-      spawnBushCluster(x + ((seed % 3) - 1) * 0.6, 749.4, 0.95 + (seed % 4) * 0.12, seed++);
+    // Outer North Wall Hedge & Shrubs (Z = 1549.5 & Z = 1546.5)
+    for (let x = 1542; x <= 1658; x += 4.5) {
+      spawnBushCluster(x + ((seed % 3) - 1) * 0.6, 1549.4, 0.95 + (seed % 4) * 0.12, seed++);
       if (seed % 2 === 0) {
-        spawnBushCluster(x, 745.8, 0.85, seed++);
+        spawnBushCluster(x, 1545.8, 0.85, seed++);
       }
     }
-    // Outer West & East Wall Hedge & Shrubs (X = 743.4 and X = 856.6)
-    for (let z = 748; z <= 852; z += 4.5) {
-      spawnBushCluster(743.4, z + ((seed % 3) - 1) * 0.6, 0.95 + (seed % 4) * 0.12, seed++);
-      spawnBushCluster(856.6, z + ((seed % 3) - 1) * 0.6, 0.95 + (seed % 4) * 0.12, seed++);
+    // Outer West & East Wall Hedge & Shrubs (X = 1543.4 and X = 1656.6)
+    for (let z = 1548; z <= 1652; z += 4.5) {
+      spawnBushCluster(1543.4, z + ((seed % 3) - 1) * 0.6, 0.95 + (seed % 4) * 0.12, seed++);
+      spawnBushCluster(1656.6, z + ((seed % 3) - 1) * 0.6, 0.95 + (seed % 4) * 0.12, seed++);
     }
-    // Outer South Wall Hedge & Shrubs (Z = 850.6, strictly skipping Main Gate X = 782..818!)
-    for (let x = 742; x <= 858; x += 4.5) {
-      if (isMainGateCorridor(x, 851)) continue;
-      spawnBushCluster(x + ((seed % 3) - 1) * 0.5, 850.6, 0.98 + (seed % 3) * 0.12, seed++);
+    // Outer South Wall Hedge & Shrubs (Z = 1650.6, strictly skipping Main Gate X = 1582..1618!)
+    for (let x = 1542; x <= 1658; x += 4.5) {
+      if (isMainGateCorridor(x, 1651)) continue;
+      spawnBushCluster(x + ((seed % 3) - 1) * 0.5, 1650.6, 0.98 + (seed % 3) * 0.12, seed++);
       if (seed % 2 === 0) {
-        spawnBushCluster(x, 854.2, 0.86, seed++);
+        spawnBushCluster(x, 1654.2, 0.86, seed++);
       }
     }
 
     // 3. DENSE 3D SURROUNDING HIMALAYAN FOREST BELT (North, West, East, and South-Flanks — Except Main Gate!)
-    // North Forest Belt (Z = 728..745, X = 726..874)
-    for (let z = 730; z <= 745; z += 6.5) {
-      for (let x = 728; x <= 872; x += 7.0) {
+    // North Forest Belt (Z = 1528..1545, X = 1526..1674)
+    for (let z = 1530; z <= 1545; z += 6.5) {
+      for (let x = 1528; x <= 1672; x += 7.0) {
         const jitterX = ((seed * 37) % 5) - 2.5;
         const jitterZ = ((seed * 19) % 4) - 2.0;
         const scale = 0.92 + ((seed * 13) % 7) * 0.11;
@@ -762,9 +761,9 @@ export class InsideKingdom3D {
       }
     }
 
-    // West Forest Belt (X = 724..741, Z = 748..866)
-    for (let x = 725; x <= 740; x += 6.5) {
-      for (let z = 748; z <= 866; z += 7.0) {
+    // West Forest Belt (X = 1524..1541, Z = 1548..1666)
+    for (let x = 1525; x <= 1540; x += 6.5) {
+      for (let z = 1548; z <= 1666; z += 7.0) {
         const jitterX = ((seed * 29) % 4) - 2.0;
         const jitterZ = ((seed * 41) % 5) - 2.5;
         const scale = 0.95 + ((seed * 17) % 6) * 0.11;
@@ -772,9 +771,9 @@ export class InsideKingdom3D {
       }
     }
 
-    // East Forest Belt (X = 859..875, Z = 748..866)
-    for (let x = 859; x <= 874; x += 6.5) {
-      for (let z = 748; z <= 866; z += 7.0) {
+    // East Forest Belt (X = 1659..1675, Z = 1548..1666)
+    for (let x = 1659; x <= 1674; x += 6.5) {
+      for (let z = 1548; z <= 1666; z += 7.0) {
         const jitterX = ((seed * 31) % 4) - 2.0;
         const jitterZ = ((seed * 23) % 5) - 2.5;
         const scale = 0.95 + ((seed * 19) % 6) * 0.11;
@@ -782,9 +781,9 @@ export class InsideKingdom3D {
       }
     }
 
-    // South-West & South-East Forest Flanks (Z = 853..870, strictly excluding Main Gate X = 782..818!)
-    for (let z = 854; z <= 869; z += 6.5) {
-      for (let x = 732; x <= 868; x += 7.0) {
+    // South-West & South-East Forest Flanks (Z = 1653..1670, strictly excluding Main Gate X = 1582..1618!)
+    for (let z = 1654; z <= 1669; z += 6.5) {
+      for (let x = 1532; x <= 1668; x += 7.0) {
         const tx = x + (((seed * 17) % 4) - 2.0);
         const tz = z + (((seed * 29) % 4) - 2.0);
         if (isMainGateCorridor(tx, tz)) continue;
@@ -797,10 +796,10 @@ export class InsideKingdom3D {
   }
 
   /**
-   * 2. Build the Central Emperor's Imperial Pagoda Keep at (800, 10.0, 769)
+   * 2. Build the Central Emperor's Imperial Pagoda Keep at (1600, 10.0, 1569)
    */
   private initCentralImperialKeep() {
-    this.keepGroup.position.set(800, 10.0, 769);
+    this.keepGroup.position.set(1600, 10.0, 1569);
     this.keepGroup.userData = { insidePlotId: 'keep' };
 
     // Stepped Imperial Marble & Granite Terrace Plinth
@@ -1559,7 +1558,7 @@ export class InsideKingdom3D {
     this.plotLabelSpritesMap.set('keep', keepSprite);
 
     this.onMergeEffect?.(
-      new THREE.Vector3(800, 22, 769),
+      new THREE.Vector3(1600, 22, 1569),
       `🏯 IMPERIAL KEEP UPGRADED TO LV.${this.keepLevel}!`,
       '#fef08a'
     );

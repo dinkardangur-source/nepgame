@@ -3,6 +3,7 @@ export interface Resources {
   stone: number;
   iron: number;
   food: number;
+  crystal?: number;
 }
 
 export interface UnitCounts {
@@ -22,6 +23,7 @@ export interface InteractiveObject {
     | 'farm'
     | 'gold'
     | 'stonecrystal'
+    | 'crystal'
     | 'stone'
     | 'iron'
     | 'bear'
@@ -40,7 +42,7 @@ export interface InteractiveObject {
   health?: number;
   maxHealth?: number;
   yieldAmount?: number;
-  resourceType?: 'wood' | 'stone' | 'iron' | 'food' | 'gold' | 'stonecrystal' | 'farm';
+  resourceType?: 'wood' | 'stone' | 'iron' | 'food' | 'crystal' | 'gold' | 'stonecrystal' | 'farm';
   defenseRating?: string;
   counterUnit?: string;
   description?: string;

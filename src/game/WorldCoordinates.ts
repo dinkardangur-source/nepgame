@@ -8,13 +8,169 @@ import * as THREE from 'three';
 
 export const WORLD_BOUNDS = {
   MIN_X: 0,
-  MAX_X: 1600,
+  MAX_X: 3200,
   MIN_Z: 0,
-  MAX_Z: 1600,
-  CENTER_X: 800,
-  CENTER_Z: 800,
-  PLAYABLE_MARGIN: 60,
+  MAX_Z: 3200,
+  CENTER_X: 1600,
+  CENTER_Z: 1600,
+  PLAYABLE_MARGIN: 20,
 } as const;
+
+// ============================================================================
+// SHARED NILE RIVER & NORTHERN DELTA COURSE (South +Z=3260 -> North -Z=-60)
+// ============================================================================
+export const NILE_DELTA_FORK_Z = 740;
+export const NILE_DELTA_FORK_X = 1655;
+
+// [z, x] control points ascending in Z
+const NILE_MAIN_POINTS: ReadonlyArray<readonly [number, number]> = [
+  [740, 1655],
+  [856, 1668],
+  [1180, 1712],
+  [1600, 1742],
+  [1980, 1718],
+  [2344, 1665],
+  [2590, 1600],
+  [2840, 1505],
+  [3260, 1445],
+];
+
+const NILE_WEST_DELTA_POINTS: ReadonlyArray<readonly [number, number]> = [
+  [-60, 920],
+  [180, 1015],
+  [360, 1135],
+  [610, 1600],
+  [740, 1655],
+];
+
+const NILE_EAST_DELTA_POINTS: ReadonlyArray<readonly [number, number]> = [
+  [-60, 2280],
+  [180, 2180],
+  [360, 2065],
+  [560, 1860],
+  [740, 1655],
+];
+
+function sampleCatmullXAtZ(z: number, pts: ReadonlyArray<readonly [number, number]>): number {
+  const n = pts.length;
+  if (z <= pts[0][0]) return pts[0][1];
+  if (z >= pts[n - 1][0]) return pts[n - 1][1];
+
+  let seg = 0;
+  for (let i = 0; i < n - 1; i++) {
+    if (z >= pts[i][0] && z <= pts[i + 1][0]) {
+      seg = i;
+      break;
+    }
+  }
+
+  const p0 = pts[Math.max(0, seg - 1)][1];
+  const p1 = pts[seg][1];
+  const p2 = pts[seg + 1][1];
+  const p3 = pts[Math.min(n - 1, seg + 2)][1];
+
+  const z1 = pts[seg][0];
+  const z2 = pts[seg + 1][0];
+  const t = (z - z1) / Math.max(1e-5, z2 - z1);
+  const t2 = t * t;
+  const t3 = t2 * t;
+
+  return (
+    0.5 *
+    (2 * p1 +
+      (-p0 + p2) * t +
+      (2 * p0 - 5 * p1 + 4 * p2 - p3) * t2 +
+      (-p0 + 3 * p1 - 3 * p2 + p3) * t3)
+  );
+}
+
+export interface NileChannelPoint {
+  centerX: number;
+  halfWidth: number;
+  branch: 'main' | 'delta_west' | 'delta_east';
+}
+
+export function getNileMainX(z: number): number {
+  return sampleCatmullXAtZ(z, NILE_MAIN_POINTS);
+}
+
+export function getNileWestDeltaX(z: number): number {
+  return sampleCatmullXAtZ(z, NILE_WEST_DELTA_POINTS);
+}
+
+export function getNileEastDeltaX(z: number): number {
+  return sampleCatmullXAtZ(z, NILE_EAST_DELTA_POINTS);
+}
+
+export function getNileChannelsAtZ(z: number): NileChannelPoint[] {
+  if (z >= NILE_DELTA_FORK_Z) {
+    const southTaper = z > 2920 ? Math.max(0.76, 1 - (z - 2920) / 1100) : 1.0;
+    return [{ centerX: getNileMainX(z), halfWidth: 16.5 * southTaper, branch: 'main' }];
+  }
+  const dt = Math.max(0, (NILE_DELTA_FORK_Z - z) / (NILE_DELTA_FORK_Z + 60));
+  const branchHalf = 14.5 - dt * 3.0;
+  return [
+    { centerX: getNileWestDeltaX(z), halfWidth: branchHalf, branch: 'delta_west' },
+    { centerX: getNileEastDeltaX(z), halfWidth: branchHalf, branch: 'delta_east' },
+  ];
+}
+
+export function getDistanceToNile(
+  x: number,
+  z: number
+): { distToCenter: number; distBeyondWater: number; branch: 'main' | 'delta_west' | 'delta_east' } {
+  let bestCenterDist = Infinity;
+  let bestWaterEdgeDist = Infinity;
+  let bestBranch: 'main' | 'delta_west' | 'delta_east' = 'main';
+
+  for (let dz = -20; dz <= 20; dz += 10) {
+    const sz = z + dz;
+    if (sz < -60 || sz > 3260) continue;
+    const channels = getNileChannelsAtZ(sz);
+    for (let i = 0; i < channels.length; i++) {
+      const ch = channels[i];
+      const d = Math.hypot(x - ch.centerX, dz);
+      if (d < bestCenterDist) {
+        bestCenterDist = d;
+        bestWaterEdgeDist = Math.max(0, d - ch.halfWidth);
+        bestBranch = ch.branch;
+      }
+    }
+  }
+  return { distToCenter: bestCenterDist, distBeyondWater: bestWaterEdgeDist, branch: bestBranch };
+}
+
+export interface NileBridgeSpec {
+  x: number;
+  z: number;
+  orientation: 'ew_road' | 'ns_road';
+}
+
+export const NILE_HIGHWAY_BRIDGES: ReadonlyArray<NileBridgeSpec> = [
+  { x: getNileMainX(2840), z: 2840, orientation: 'ew_road' },
+  { x: 1600, z: 2590, orientation: 'ns_road' },
+  { x: getNileMainX(2344), z: 2344, orientation: 'ew_road' },
+  { x: getNileMainX(1600), z: 1600, orientation: 'ew_road' },
+  { x: getNileMainX(856), z: 856, orientation: 'ew_road' },
+  { x: 1600, z: 610, orientation: 'ns_road' },
+  { x: getNileWestDeltaX(360), z: 360, orientation: 'ew_road' },
+  { x: getNileEastDeltaX(360), z: 360, orientation: 'ew_road' },
+];
+
+export interface PlayerAllianceIdentity {
+  tag: string; // Strictly 4 uppercase chars, e.g. "GORK"
+  alias: string; // Strictly 4 words, e.g. "Royal Himalayan Mountain Guard"
+}
+
+export const DEFAULT_PLAYER_ALLIANCE: PlayerAllianceIdentity = {
+  tag: 'GORK',
+  alias: 'Royal Himalayan Mountain Guard',
+};
+
+export const RIVAL_ALLIANCE_DEFS: Record<'CRIM' | 'SHDW', PlayerAllianceIdentity> = {
+  CRIM: { tag: 'CRIM', alias: 'Crimson Iron Peak Horde' },
+  SHDW: { tag: 'SHDW', alias: 'Shadow Highland Crest Raiders' },
+};
 
 export type EntityAction = 'attack' | 'rally' | 'scout' | 'mine' | 'garrison' | 'upgrade' | 'inspect';
 
@@ -30,8 +186,15 @@ export interface WorldEntity {
   health?: number;
   maxHealth?: number;
   yieldAmount?: number;
-  resourceType?: 'wood' | 'stone' | 'iron' | 'food' | 'gold';
+  maxYieldAmount?: number;
+  resourceType?: 'wood' | 'stone' | 'iron' | 'food' | 'crystal' | 'gold';
   power?: number;
+  attackDamage?: number;
+  defense?: number;
+  suggestedReward?: number;
+  requiredTroopCapacity?: number;
+  difficulty?: number;
+  respawnAt?: number;
   tier?: number;
   description: string;
   actions: EntityAction[];
@@ -54,6 +217,7 @@ export interface ReservedPlot {
   starCount?: number;
   owner?: string;
   allianceTag?: string;
+  allianceAlias?: string;
   status: 'reserved' | 'built';
   description: string;
 }
@@ -70,6 +234,7 @@ export interface CastleSpawnData {
   name: string;
   owner: string;
   allianceTag: string;
+  allianceAlias?: string;
   isMyCastle: boolean;
   faction?: 'my' | 'alliance' | 'enemy';
   level: number;
@@ -81,213 +246,221 @@ export interface CastleSpawnData {
 
 
 /**
- * 2x6 Troop Unit Formation Slot Definition
+ * Nepalese Medieval Troop Roster Definition (Infantry, Archer, Cavalry - Lv 1 to Lv 5)
  */
 export interface TroopUnit {
   id: string;
+  classId: 'infantry' | 'archer' | 'cavalry';
   name: string;
   shortName: string;
-  category: 'infantry' | 'archer' | 'cavalry' | 'siege' | 'scout' | 'hero';
-  tier: number;
+  category: 'infantry' | 'archer' | 'cavalry';
+  tier: 1 | 2 | 3 | 4 | 5;
   icon: string;
   selectedCount: number;
   maxCount: number;
   powerPerUnit: number;
+  hp: number;
+  attack: number;
+  load: number;
+  gatheringSpeed: number;
   speed: number;
   description: string;
 }
 
 /**
- * Initial 2x6 (12 unit slots) Vanguard Tactical Formation Roster
+ * Nepalese Medieval Troop Roster: Magar Warriors, Limbu Archers & Thakuri Cavalry (Lv 1-5)
  */
 export const INITIAL_TROOP_ROSTER: TroopUnit[] = [
-  // --- ROW 1: Frontline Assault & Ranged (6 units) ---
   {
-    id: 'unit_infantry_1',
-    name: 'Gurkha Footmen',
-    shortName: 'Footmen',
+    id: 'magar_lv1',
+    classId: 'infantry',
+    name: 'Magar Warriors Lv.1',
+    shortName: 'Magar L1',
     category: 'infantry',
     tier: 1,
     icon: '🗡️',
-    selectedCount: 450,
-    maxCount: 1500,
-    powerPerUnit: 12,
-    speed: 15,
-    description: 'Disciplined hill warriors armed with forged shortswords and wooden shields.',
+    selectedCount: 500,
+    maxCount: 950,
+    powerPerUnit: 10,
+    hp: 120,
+    attack: 12,
+    load: 20,
+    gatheringSpeed: 1.0,
+    speed: 1.0,
+    description: 'Khukuri, shield & traditional armor. Strong frontline effective against Cavalry.',
   },
   {
-    id: 'unit_infantry_2',
-    name: 'Khukuri Blademen',
-    shortName: 'Khukuri',
+    id: 'magar_lv3',
+    classId: 'infantry',
+    name: 'Magar Warriors Lv.3',
+    shortName: 'Magar L3',
     category: 'infantry',
-    tier: 2,
+    tier: 3,
+    icon: '🛡️',
+    selectedCount: 1500,
+    maxCount: 1850,
+    powerPerUnit: 22,
+    hp: 190,
+    attack: 21,
+    load: 30,
+    gatheringSpeed: 1.5,
+    speed: 1.2,
+    description: 'Veteran Khukuri frontline battalion forged for B Shrines & Lv 3-5 monsters.',
+  },
+  {
+    id: 'magar_lv4',
+    classId: 'infantry',
+    name: 'Magar Warriors Lv.4',
+    shortName: 'Magar L4',
+    category: 'infantry',
+    tier: 4,
     icon: '⚔️',
-    selectedCount: 300,
-    maxCount: 1000,
-    powerPerUnit: 24,
-    speed: 16,
-    description: 'Fearless shock troopers wielding razor-honed curved Nepalese khukuris.',
+    selectedCount: 2500,
+    maxCount: 5800,
+    powerPerUnit: 32,
+    hp: 240,
+    attack: 28,
+    load: 36,
+    gatheringSpeed: 1.8,
+    speed: 1.3,
+    description: 'Elite Royal Magar vanguard required for A Shrines & The Alliance Congress.',
   },
   {
-    id: 'unit_archer_1',
-    name: 'Royal Longbowmen',
-    shortName: 'Longbow',
+    id: 'limbu_lv1',
+    classId: 'archer',
+    name: 'Limbu Archers Lv.1',
+    shortName: 'Limbu L1',
     category: 'archer',
-    tier: 2,
+    tier: 1,
     icon: '🏹',
-    selectedCount: 250,
-    maxCount: 800,
-    powerPerUnit: 20,
-    speed: 14,
-    description: 'Pinpoint archers delivering bamboo-shaft volleys from fortified elevations.',
+    selectedCount: 300,
+    maxCount: 600,
+    powerPerUnit: 12,
+    hp: 80,
+    attack: 18,
+    load: 15,
+    gatheringSpeed: 1.0,
+    speed: 1.1,
+    description: 'Traditional bow, arrows & quiver. High long-range damage against Infantry.',
   },
   {
-    id: 'unit_archer_2',
-    name: 'Himalayan Crossbows',
-    shortName: 'Crossbow',
+    id: 'limbu_lv3',
+    classId: 'archer',
+    name: 'Limbu Archers Lv.3',
+    shortName: 'Limbu L3',
     category: 'archer',
     tier: 3,
     icon: '🎯',
-    selectedCount: 180,
-    maxCount: 600,
-    powerPerUnit: 35,
-    speed: 13,
-    description: 'Heavy steel crossbowmen firing armor-penetrating bolts into thick hide.',
+    selectedCount: 1000,
+    maxCount: 1200,
+    powerPerUnit: 27,
+    hp: 125,
+    attack: 32,
+    load: 23,
+    gatheringSpeed: 1.5,
+    speed: 1.3,
+    description: 'Hilltop sharpshooters breaking enemy shields across valleys & B Shrines.',
   },
   {
-    id: 'unit_cavalry_1',
-    name: 'Highland Yak Lancers',
-    shortName: 'Yak Lancer',
-    category: 'cavalry',
-    tier: 3,
-    icon: '🐂',
-    selectedCount: 140,
-    maxCount: 500,
-    powerPerUnit: 48,
-    speed: 18,
-    description: 'Hardy mountain beast cavalry trampling enemy ranks across steep ridges.',
-  },
-  {
-    id: 'unit_cavalry_2',
-    name: 'Iron War Elephant',
-    shortName: 'War Elephant',
-    category: 'cavalry',
+    id: 'limbu_lv4',
+    classId: 'archer',
+    name: 'Limbu Archers Lv.4',
+    shortName: 'Limbu L4',
+    category: 'archer',
     tier: 4,
-    icon: '🐘',
-    selectedCount: 40,
-    maxCount: 120,
-    powerPerUnit: 160,
-    speed: 11,
-    description: 'Massive armored war elephant carrying an archer howdah and iron tusk spikes.',
+    icon: '🔱',
+    selectedCount: 1500,
+    maxCount: 3400,
+    powerPerUnit: 39,
+    hp: 155,
+    attack: 42,
+    load: 28,
+    gatheringSpeed: 1.8,
+    speed: 1.4,
+    description: 'Royal Kanchenjunga archers anchoring A Shrine & Congress volleys.',
   },
-
-  // --- ROW 2: Recon, Mystic, Siege & Royal Vanguard (6 units) ---
   {
-    id: 'unit_scout_1',
-    name: 'Mountain Falcon Scouts',
-    shortName: 'Falconer',
-    category: 'scout',
+    id: 'thakuri_lv1',
+    classId: 'cavalry',
+    name: 'Thakuri Cavalry Lv.1',
+    shortName: 'Thakuri L1',
+    category: 'cavalry',
     tier: 1,
-    icon: '🦅',
-    selectedCount: 80,
-    maxCount: 300,
-    powerPerUnit: 8,
-    speed: 26,
-    description: 'Swift aerial recon scouts relaying target intel and hidden mineral veins.',
+    icon: '🐎',
+    selectedCount: 200,
+    maxCount: 420,
+    powerPerUnit: 15,
+    hp: 150,
+    attack: 22,
+    load: 30,
+    gatheringSpeed: 0.8,
+    speed: 1.8,
+    description: 'Horse-mounted warriors with rapid marching speed & high load. Effective vs Archers.',
   },
   {
-    id: 'unit_support_1',
-    name: 'Tantric Monastery Monks',
-    shortName: 'Monks',
-    category: 'hero',
+    id: 'thakuri_lv3',
+    classId: 'cavalry',
+    name: 'Thakuri Cavalry Lv.3',
+    shortName: 'Thakuri L3',
+    category: 'cavalry',
     tier: 3,
-    icon: '📿',
-    selectedCount: 100,
-    maxCount: 400,
-    powerPerUnit: 42,
-    speed: 14,
-    description: 'Enlightened martial monks channeling protective mantras and battlefield haste.',
+    icon: '🏇',
+    selectedCount: 500,
+    maxCount: 680,
+    powerPerUnit: 34,
+    hp: 240,
+    attack: 40,
+    load: 48,
+    gatheringSpeed: 1.2,
+    speed: 2.2,
+    description: 'Armored mountain chargers raiding resource convoys & reinforcing B Shrines.',
   },
   {
-    id: 'unit_siege_1',
-    name: 'Iron Battering Ram',
-    shortName: 'Ram',
-    category: 'siege',
-    tier: 2,
-    icon: '🪵',
-    selectedCount: 25,
-    maxCount: 80,
-    powerPerUnit: 75,
-    speed: 9,
-    description: 'Iron-capped timber siege ram built to breach monster dens and stone ramparts.',
-  },
-  {
-    id: 'unit_siege_2',
-    name: 'Bronze Catapult',
-    shortName: 'Catapult',
-    category: 'siege',
-    tier: 3,
-    icon: '☄️',
-    selectedCount: 20,
-    maxCount: 60,
-    powerPerUnit: 110,
-    speed: 8,
-    description: 'Tension artillery hurling fiery boulder projectiles across extreme distances.',
-  },
-  {
-    id: 'unit_siege_3',
-    name: 'Dragon Fire Trebuchet',
-    shortName: 'Trebuchet',
-    category: 'siege',
+    id: 'thakuri_lv4',
+    classId: 'cavalry',
+    name: 'Thakuri Cavalry Lv.4',
+    shortName: 'Thakuri L4',
+    category: 'cavalry',
     tier: 4,
-    icon: '🔥',
-    selectedCount: 12,
-    maxCount: 40,
-    powerPerUnit: 220,
-    speed: 7,
-    description: 'Counterweight siege war machine flinging alchemical brimstone casks.',
-  },
-  {
-    id: 'unit_hero_1',
-    name: 'Royal Guard Champion',
-    shortName: 'Champion',
-    category: 'hero',
-    tier: 5,
     icon: '👑',
-    selectedCount: 1,
-    maxCount: 5,
-    powerPerUnit: 1200,
-    speed: 16,
-    description: 'Peerless imperial warlord leading the vanguard with morale-boosting war cries.',
+    selectedCount: 1000,
+    maxCount: 2300,
+    powerPerUnit: 49,
+    hp: 300,
+    attack: 53,
+    load: 60,
+    gatheringSpeed: 1.5,
+    speed: 2.4,
+    description: 'Royal Mustang shock riders charging into A Shrines & Congress flanks.',
   },
 ];
 
 /**
- * Surveyed Continent 1 Shrine & Congress Network on 1600 x 1600 Continent:
- * - 1 Central "The Congress" at [800, 10.0, 800]
+ * Surveyed Continent 1 Shrine & Congress Network on 3200 x 3200 Continent:
+ * - 1 Central "The Congress" at [1600, 10.0, 1600]
  * - 4 Shrine A sites (A1–A4) surrounding The Congress
  * - 12 Shrine B sites (B1–B12) forming the mid-tier defensive ring
- * - 20 Shrine C sites (C1–C20) forming the outer 6x6 perimeter lattice
+ * - 20 Shrine C sites (C1–C20) forming the outer 6x6 perimeter lattice across snow corners
  */
-const GRID_COORDS = [220, 452, 684, 916, 1148, 1380] as const;
+const GRID_COORDS = [360, 856, 1352, 1848, 2344, 2840] as const;
 
 export const RESERVED_PLOTS: ReservedPlot[] = [
   // =========================================================================
-  // 1. CENTRAL THE CONGRESS (Center [800, 10.0, 800])
+  // 1. CENTRAL THE CONGRESS (Center [1600, 10.0, 1600])
   // =========================================================================
   {
     id: 'plot-congress-center',
     name: 'The Congress',
     code: 'C',
     type: 'congress',
-    position: [800, 10.0, 800],
+    position: [1600, 10.0, 1600],
     size: [48, 48],
     radius: 26,
     tier: 3,
     starCount: 3,
     status: 'built',
     description:
-      'The Congress — Supreme Continental Citadel at the heart of Continent 1, fed by the 4 Inner A-Shrines (A1–A4) and crowned with arcane crystal & gold spires.',
+      'The Congress — Supreme Continental Citadel at the heart of Continent 1 [1600, 1600], requiring 2 C Shrines, 1 B Shrine & 1 A Shrine held before unlocking garrison command.',
   },
 
   // =========================================================================
@@ -882,63 +1055,124 @@ const ENEMY_COMMANDERS = [
   { name: 'Shattered Crown Spire', owner: 'Emperor Malakor', tag: '[CRIM]', level: 21, power: 224000 },
 ];
 
+export function isCastleCoordValid(
+  x: number,
+  z: number,
+  existingPositions: Array<[number, number, number]>,
+  minCastleDist = 92
+): boolean {
+  if (x < 160 || x > 3040 || z < 160 || z > 3040) return false;
+  const cx = WORLD_BOUNDS.CENTER_X;
+  const cz = WORLD_BOUNDS.CENTER_Z;
+
+  // Keep away from central The Congress
+  if (Math.hypot(x - cx, z - cz) < 108) return false;
+
+  // Keep castles on dry banks clear of the Nile River & Northern Delta
+  if (getDistanceToNile(x, z).distBeyondWater < 36) return false;
+
+  // Keep away from all 36 Shrines & The Congress
+  for (const plot of RESERVED_PLOTS) {
+    if (Math.hypot(x - plot.position[0], z - plot.position[2]) < plot.radius + 46) {
+      return false;
+    }
+  }
+
+  // Keep away from existing Castles
+  for (const pos of existingPositions) {
+    if (Math.hypot(x - pos[0], z - pos[2]) < minCastleDist) {
+      return false;
+    }
+  }
+  return true;
+}
+
+export function pickValidCastleCoordinate(
+  existingPositions: Array<[number, number, number]>,
+  options?: {
+    minDistFromCenter?: number;
+    maxDistFromCenter?: number;
+    minCastleDist?: number;
+    oldPos?: [number, number, number];
+    minJumpFromOld?: number;
+    getHeightAt?: (x: number, z: number) => number;
+  }
+): [number, number, number] {
+  const cx = WORLD_BOUNDS.CENTER_X;
+  const cz = WORLD_BOUNDS.CENTER_Z;
+  const minDistFromCenter = options?.minDistFromCenter ?? 340;
+  const maxDistFromCenter = options?.maxDistFromCenter ?? 1420;
+  const minCastleDist = options?.minCastleDist ?? 92;
+  const oldPos = options?.oldPos;
+  const minJumpFromOld = options?.minJumpFromOld ?? 320;
+  const getHeightAt = options?.getHeightAt;
+
+  for (let attempt = 0; attempt < 360; attempt++) {
+    const angle = Math.random() * Math.PI * 2;
+    const dist = minDistFromCenter + Math.random() * (maxDistFromCenter - minDistFromCenter);
+    const rx = Math.round(cx + Math.cos(angle) * dist);
+    const rz = Math.round(cz + Math.sin(angle) * dist);
+
+    if (oldPos && Math.hypot(rx - oldPos[0], rz - oldPos[2]) < minJumpFromOld) continue;
+    if (isCastleCoordValid(rx, rz, existingPositions, minCastleDist)) {
+      const ry = getHeightAt ? getHeightAt(rx, rz) : 10.0;
+      return [rx, ry, rz];
+    }
+  }
+
+  // Deterministic ring scan fallback across quadrants if random samples collided
+  for (let step = 0; step < 36; step++) {
+    const angle = (step / 36) * Math.PI * 2 + existingPositions.length * 0.41;
+    const dist = 560 + (step % 4) * 210;
+    const fx = Math.max(180, Math.min(3020, Math.round(cx + Math.cos(angle) * dist)));
+    const fz = Math.max(180, Math.min(3020, Math.round(cz + Math.sin(angle) * dist)));
+    if (oldPos && Math.hypot(fx - oldPos[0], fz - oldPos[2]) < minJumpFromOld * 0.5) continue;
+    if (isCastleCoordValid(fx, fz, existingPositions, 72)) {
+      const fy = getHeightAt ? getHeightAt(fx, fz) : 10.0;
+      return [fx, fy, fz];
+    }
+  }
+
+  const fallbackAngle = (existingPositions.length + 1) * 0.78;
+  const fx = Math.round(cx + Math.cos(fallbackAngle) * 640);
+  const fz = Math.round(cz + Math.sin(fallbackAngle) * 640);
+  const fy = getHeightAt ? getHeightAt(fx, fz) : 10.0;
+  return [fx, fy, fz];
+}
+
 /**
- * Generates randomized, non-overlapping World Map coordinates across the 1600 x 1600 continent for:
+ * Generates randomized, non-overlapping World Map coordinates across the 3200 x 3200 continent for:
  * - User's "My Castle" (1 castle)
  * - 10 Alliance Member Castles
  * - 6 Rival Enemy Castles
- * Ensures castles never overlap The Congress, any Shrine A/B/C, or each other.
+ * Ensures castles never overlap The Congress, any Shrine A/B/C, Nile River, or each other.
  */
-export function generateRandomCastles(getHeightAt?: (x: number, z: number) => number): CastleSpawnData[] {
+export function generateRandomCastles(
+  getHeightAt?: (x: number, z: number) => number,
+  playerAlliance: PlayerAllianceIdentity = DEFAULT_PLAYER_ALLIANCE
+): CastleSpawnData[] {
   const placed: CastleSpawnData[] = [];
+  const bracketTag = `[${playerAlliance.tag}]`;
 
-  const isPositionValid = (x: number, z: number, minCastleDist = 72): boolean => {
-    // Keep away from central The Congress
-    if (Math.hypot(x - 800, z - 800) < 88) return false;
-
-    // Keep away from all 36 Shrines & The Congress
-    for (const plot of RESERVED_PLOTS) {
-      if (Math.hypot(x - plot.position[0], z - plot.position[2]) < plot.radius + 38) {
-        return false;
+  const pickRandomCoord = (minDistFromCenter: number, maxDistFromCenter: number): [number, number, number] =>
+    pickValidCastleCoordinate(
+      placed.map((c) => c.position),
+      {
+        minDistFromCenter,
+        maxDistFromCenter,
+        minCastleDist: 92,
+        getHeightAt,
       }
-    }
+    );
 
-    // Keep away from already placed Castles
-    for (const c of placed) {
-      if (Math.hypot(x - c.position[0], z - c.position[2]) < minCastleDist) {
-        return false;
-      }
-    }
-    return true;
-  };
-
-  const pickRandomCoord = (minDistFromCenter: number, maxDistFromCenter: number): [number, number, number] => {
-    for (let attempt = 0; attempt < 300; attempt++) {
-      const angle = Math.random() * Math.PI * 2;
-      const dist = minDistFromCenter + Math.random() * (maxDistFromCenter - minDistFromCenter);
-      const rx = Math.round(800 + Math.cos(angle) * dist);
-      const rz = Math.round(800 + Math.sin(angle) * dist);
-
-      if (rx < 120 || rx > 1480 || rz < 120 || rz > 1480) continue;
-      if (isPositionValid(rx, rz)) {
-        const ry = getHeightAt ? getHeightAt(rx, rz) : 10.0;
-        return [rx, ry, rz];
-      }
-    }
-    const fallbackAngle = placed.length * 0.62;
-    const fx = Math.round(800 + Math.cos(fallbackAngle) * 340);
-    const fz = Math.round(800 + Math.sin(fallbackAngle) * 340);
-    const fy = getHeightAt ? getHeightAt(fx, fz) : 10.0;
-    return [fx, fy, fz];
-  };
-
-  // 1. Spawn User's "My Castle" at a random strategic location (180m - 460m from center)
-  const myPos = pickRandomCoord(180, 460);
+  // 1. Spawn User's "My Castle" at a random strategic location (280m - 920m from center)
+  const myPos = pickRandomCoord(280, 920);
   placed.push({
     id: 'my-castle',
     name: 'My Castle (Lord Dangol)',
     owner: 'Lord Dangol (You)',
-    allianceTag: '[CRYSTAL]',
+    allianceTag: bracketTag,
+    allianceAlias: playerAlliance.alias,
     isMyCastle: true,
     faction: 'my',
     level: 20,
@@ -946,42 +1180,46 @@ export function generateRandomCastles(getHeightAt?: (x: number, z: number) => nu
     position: myPos,
     radius: 15.0,
     description:
-      'Your Royal Command Castle! All vanguard battalions, mining parties, and alliance rallies deploy from your castle gates. Click to enter your 3D Walled Inside Kingdom!',
+      `Your Royal Command Castle (${bracketTag} ${playerAlliance.alias})! All vanguard battalions, mining parties, and alliance rallies deploy from your castle gates. Click to enter your 3D Walled Inside Kingdom!`,
   });
 
-  // 2. Spawn 10 Alliance Member Castles across the 1600x1600 continent (210m - 620m from center)
+  // 2. Spawn 10 Alliance Member Castles across the 3200x3200 continent (320m - 1280m from center)
   ALLIANCE_COMMANDERS.forEach((cmd, idx) => {
-    const pos = pickRandomCoord(210, 620);
+    const pos = pickRandomCoord(320, 1280);
     placed.push({
       id: `alliance-castle-${idx + 1}`,
       name: cmd.name,
       owner: cmd.owner,
-      allianceTag: '[CRYSTAL]',
+      allianceTag: bracketTag,
+      allianceAlias: playerAlliance.alias,
       isMyCastle: false,
       faction: 'alliance',
       level: cmd.level,
       power: cmd.power,
       position: pos,
       radius: 12.5,
-      description: `Allied Crystal Vanguard Castle commanded by ${cmd.owner} ([CRYSTAL] Alliance · ${cmd.power.toLocaleString()} Power). Reinforces adjacent Shrines and The Congress.`,
+      description: `Allied Vanguard Castle commanded by ${cmd.owner} (${bracketTag} ${playerAlliance.alias} · ${cmd.power.toLocaleString()} Power). Reinforces adjacent Shrines and The Congress.`,
     });
   });
 
-  // 3. Spawn 6 Rival Enemy Castles across contested quadrants (250m - 680m from center)
+  // 3. Spawn 6 Rival Enemy Castles across contested quadrants & snow corners (420m - 1420m from center)
   ENEMY_COMMANDERS.forEach((cmd, idx) => {
-    const pos = pickRandomCoord(250, 680);
+    const pos = pickRandomCoord(420, 1420);
+    const rawTag = cmd.tag.replace(/[[\]]/g, '') as 'CRIM' | 'SHDW';
+    const rivalAlias = RIVAL_ALLIANCE_DEFS[rawTag]?.alias || 'Crimson Iron Peak Horde';
     placed.push({
       id: `enemy-castle-${idx + 1}`,
       name: cmd.name,
       owner: cmd.owner,
       allianceTag: cmd.tag,
+      allianceAlias: rivalAlias,
       isMyCastle: false,
       faction: 'enemy',
       level: cmd.level,
       power: cmd.power,
       position: pos,
       radius: 13.0,
-      description: `Hostile ${cmd.tag} War Citadel commanded by ${cmd.owner} (${cmd.power.toLocaleString()} Power). Assault or launch an Alliance Rally to plunder Treasury Gold & Gems!`,
+      description: `Hostile ${cmd.tag} ${rivalAlias} War Citadel commanded by ${cmd.owner} (${cmd.power.toLocaleString()} Power). Assault or launch an Alliance Rally to plunder Treasury Gold & Gems!`,
     });
   });
 
@@ -990,209 +1228,140 @@ export function generateRandomCastles(getHeightAt?: (x: number, z: number) => nu
 
 
 /**
- * 16+ Monsters across all 4 Quadrants (Lv 3 to 20)
+ * Curated + Deterministically Auto-Populated Monsters (Lv 1..10) across the 3200x3200 Continent
  */
-export const WORLD_MONSTERS: WorldEntity[] = [
-  // Quadrant I: Northwest Glaciers
+const BASE_WORLD_MONSTERS: WorldEntity[] = [
+  // Level 1 (2,000 HP | 100 ATK | 50 DEF | 500 Reward)
   {
-    id: 'm_frost_yeti',
-    name: 'Ancient Frost Yeti King',
-    category: 'monster',
-    type: 'monster',
-    subtype: 'boss',
-    level: 18,
-    position: [300, 22.0, 1360],
-    radius: 6.5,
-    health: 1200,
-    maxHealth: 1200,
-    power: 24000,
-    description: 'Legendary apex predator of the high Himalayan glaciers. Wields icy glacial boulders.',
-    actions: ['attack', 'rally', 'scout'],
-  },
-  {
-    id: 'm_glacial_wyrm',
-    name: 'Glacial Ice Wyrm',
-    category: 'monster',
-    type: 'monster',
-    subtype: 'drake',
-    level: 16,
-    position: [540, 20.0, 1300],
-    radius: 5.8,
-    health: 950,
-    maxHealth: 950,
-    power: 19500,
-    description: 'Frozen serpent that burrows through packed glacial shelves and breathes freezing blizzards.',
-    actions: ['attack', 'rally', 'scout'],
-  },
-  {
-    id: 'm_snow_leopard',
-    name: 'Himalayan Snow Leopard',
-    category: 'monster',
-    type: 'monster',
-    subtype: 'beast',
-    level: 5,
-    position: [480, 16.0, 1180],
-    radius: 3.8,
-    health: 240,
-    maxHealth: 240,
-    power: 3100,
-    description: 'Elusive mountain feline stalking prey along high-altitude glacial moraines.',
-    actions: ['attack', 'scout'],
-  },
-  {
-    id: 'm_stone_colossus',
-    name: 'Corrupted Stone Colossus',
-    category: 'monster',
-    type: 'monster',
-    subtype: 'golem',
-    level: 14,
-    position: [760, 24.0, 1420],
-    radius: 6.0,
-    health: 820,
-    maxHealth: 820,
-    power: 16500,
-    description: 'Ancient animated monastic guardian reawakened by dark elemental rift energy.',
-    actions: ['attack', 'rally', 'scout'],
-  },
-
-  // Quadrant II: Northeast Ironcrest
-  {
-    id: 'm_rock_drake',
-    name: 'Iron Ridge Rock Drake',
-    category: 'monster',
-    type: 'monster',
-    subtype: 'drake',
-    level: 12,
-    position: [1340, 18.5, 1240],
-    radius: 5.5,
-    health: 680,
-    maxHealth: 680,
-    power: 12400,
-    description: 'Armored wyrm burrowing through heavy iron veins. Scales deflect ordinary arrows.',
-    actions: ['attack', 'rally', 'scout'],
-  },
-  {
-    id: 'm_crimson_wyvern',
-    name: 'Crimson Sky Wyvern',
-    category: 'monster',
-    type: 'monster',
-    subtype: 'boss',
-    level: 20,
-    position: [1440, 26.0, 1440],
-    radius: 6.5,
-    health: 1500,
-    maxHealth: 1500,
-    power: 31000,
-    description: 'Supreme dragon monarch roosting on the eastern volcanic peak. Requires alliance rally.',
-    actions: ['rally', 'attack', 'scout'],
-  },
-  {
-    id: 'm_iron_golem',
-    name: 'Iron Ore Sentinel',
-    category: 'monster',
-    type: 'monster',
-    subtype: 'golem',
-    level: 11,
-    position: [1100, 16.0, 1340],
-    radius: 4.8,
-    health: 620,
-    maxHealth: 620,
-    power: 10500,
-    description: 'Heavy forge automaton assembled from crushed magnetic slag.',
-    actions: ['attack', 'scout'],
-  },
-  {
-    id: 'm_mountain_banshee',
-    name: 'Gorge Banshee Spectre',
+    id: 'm_goblin_camp',
+    name: 'Forest Marauder Pack',
     category: 'monster',
     type: 'monster',
     subtype: 'humanoid',
-    level: 7,
-    position: [980, 13.0, 1110],
-    radius: 4.0,
-    health: 340,
-    maxHealth: 340,
-    power: 4900,
-    description: 'Ghostly apparition wailing across high mountain passes to confuse vanguard scouts.',
+    level: 1,
+    position: [1795, 9.5, 1180],
+    radius: 3.5,
+    health: 2000,
+    maxHealth: 2000,
+    attackDamage: 100,
+    defense: 50,
+    suggestedReward: 500,
+    power: 1500,
+    description: 'Lv.1 Forest Raiders stalking outer timber clearings. Ideal for Lv.1 Magar & Limbu squads.',
+    actions: ['attack', 'scout'],
+  },
+  {
+    id: 'm_valley_jackal',
+    name: 'Hilltop Timber Prowler',
+    category: 'monster',
+    type: 'monster',
+    subtype: 'beast',
+    level: 1,
+    position: [1280, 9.5, 1320],
+    radius: 3.5,
+    health: 2000,
+    maxHealth: 2000,
+    attackDamage: 100,
+    defense: 50,
+    suggestedReward: 500,
+    power: 1500,
+    description: 'Lv.1 Highland predator lurking around valley farmland trails.',
     actions: ['attack', 'scout'],
   },
 
-  // Quadrant III: Southwest Whispering Pines & Valleys
+  // Level 2 (4,000 HP | 180 ATK | 100 DEF | 1,000 Reward)
   {
-    id: 'm_river_serpent',
-    name: 'Karnali Basin Drake',
+    id: 'm_wild_boar_king',
+    name: 'Razorback Forest Boar',
     category: 'monster',
     type: 'monster',
-    subtype: 'aquatic',
-    level: 10,
-    position: [420, 8.8, 640],
-    radius: 5.0,
-    health: 520,
-    maxHealth: 520,
-    power: 8600,
-    description: 'Serpentine green drake slithering through the lush emerald valley basins.',
-    actions: ['attack', 'scout', 'rally'],
+    subtype: 'beast',
+    level: 2,
+    position: [980, 9.0, 1080],
+    radius: 3.8,
+    health: 4000,
+    maxHealth: 4000,
+    attackDamage: 180,
+    defense: 100,
+    suggestedReward: 1000,
+    power: 2800,
+    description: 'Lv.2 Tusked beast roaming dense bamboo & cedar woodlands.',
+    actions: ['attack', 'scout'],
+  },
+  {
+    id: 'm_ruin_sentry',
+    name: 'Abandoned Outpost Sentry',
+    category: 'monster',
+    type: 'monster',
+    subtype: 'humanoid',
+    level: 2,
+    position: [2040, 10.5, 1380],
+    radius: 3.9,
+    health: 4000,
+    maxHealth: 4000,
+    attackDamage: 180,
+    defense: 100,
+    suggestedReward: 1000,
+    power: 2800,
+    description: 'Lv.2 Guard stationed in shattered frontier watchtower ruins.',
+    actions: ['attack', 'scout'],
+  },
+
+  // Level 3 (7,000 HP | 280 ATK | 180 DEF | 1,800 Reward)
+  {
+    id: 'm_snow_leopard',
+    name: 'Himalayan Highland Stalker',
+    category: 'monster',
+    type: 'monster',
+    subtype: 'beast',
+    level: 3,
+    position: [820, 16.0, 2320],
+    radius: 4.1,
+    health: 7000,
+    maxHealth: 7000,
+    attackDamage: 280,
+    defense: 180,
+    suggestedReward: 1800,
+    power: 4900,
+    description: 'Lv.3 Agile mountain predator haunting misty emerald-ridge ledges.',
+    actions: ['attack', 'scout'],
   },
   {
     id: 'm_bandit_warlord',
-    name: 'Mountain Bandit Outpost',
+    name: 'Gorge Cave Brigand',
     category: 'monster',
     type: 'monster',
     subtype: 'humanoid',
-    level: 6,
-    position: [580, 8.5, 460],
-    radius: 4.5,
-    health: 310,
-    maxHealth: 310,
-    power: 4200,
-    description: 'Rogue marauders preying on trade caravans passing through western gorges.',
+    level: 3,
+    position: [1220, 8.8, 1040],
+    radius: 4.2,
+    health: 7000,
+    maxHealth: 7000,
+    attackDamage: 280,
+    defense: 180,
+    suggestedReward: 1800,
+    power: 4900,
+    description: 'Lv.3 Cave raider hoarding iron ingots and highland silver.',
     actions: ['attack', 'scout'],
-  },
-  {
-    id: 'm_wild_boar_king',
-    name: 'Razorback Boar Patriarch',
-    category: 'monster',
-    type: 'monster',
-    subtype: 'beast',
-    level: 4,
-    position: [280, 9.0, 380],
-    radius: 3.6,
-    health: 220,
-    maxHealth: 220,
-    power: 2600,
-    description: 'Giant aggressive tusked boar leading herds across lowland scrub forests.',
-    actions: ['attack', 'scout'],
-  },
-  {
-    id: 'm_cave_troll',
-    name: 'Himalayan Moss Troll',
-    category: 'monster',
-    type: 'monster',
-    subtype: 'golem',
-    level: 13,
-    position: [340, 14.0, 240],
-    radius: 5.4,
-    health: 740,
-    maxHealth: 740,
-    power: 14200,
-    description: 'Lumbering moss-encrusted troll brandishing an uprooted pine trunk.',
-    actions: ['attack', 'rally', 'scout'],
   },
 
-  // Quadrant IV: Southeast Golden Basin & Deep Forests
+  // Level 4 (12,000 HP | 420 ATK | 280 DEF | 2,800 Reward)
   {
-    id: 'm_treant_ancient',
-    name: 'Forest Treant Ancient',
+    id: 'm_mountain_banshee',
+    name: 'Abandoned Castle Wraith',
     category: 'monster',
     type: 'monster',
-    subtype: 'treant',
-    level: 9,
-    position: [1240, 12.0, 520],
-    radius: 5.0,
-    health: 460,
-    maxHealth: 460,
-    power: 7200,
-    description: 'Sentient pine titan defending old-growth sacred mandala timber.',
+    subtype: 'humanoid',
+    level: 4,
+    position: [1980, 13.0, 2040],
+    radius: 4.4,
+    health: 12000,
+    maxHealth: 12000,
+    attackDamage: 420,
+    defense: 280,
+    suggestedReward: 2800,
+    power: 8200,
+    description: 'Lv.4 Spectral guardian defending an abandoned Malla hilltop keep.',
     actions: ['attack', 'scout'],
   },
   {
@@ -1201,52 +1370,236 @@ export const WORLD_MONSTERS: WorldEntity[] = [
     category: 'monster',
     type: 'monster',
     subtype: 'beast',
-    level: 8,
-    position: [1080, 11.0, 360],
-    radius: 4.2,
-    health: 380,
-    maxHealth: 380,
-    power: 5800,
-    description: 'Lethal predator leading deepwood packs. Swift and vicious in forest ambush.',
+    level: 4,
+    position: [2090, 11.0, 960],
+    radius: 4.4,
+    health: 12000,
+    maxHealth: 12000,
+    attackDamage: 420,
+    defense: 280,
+    suggestedReward: 2800,
+    power: 8200,
+    description: 'Lv.4 Deep-forest alpha ambushing resource caravans.',
     actions: ['attack', 'scout'],
   },
+
+  // Level 5 (20,000 HP | 650 ATK | 450 DEF | 4,500 Reward)
   {
-    id: 'm_horned_chimera',
-    name: 'Himalayan Horned Chimera',
+    id: 'm_treant_ancient',
+    name: 'Sacred Forest Treant',
     category: 'monster',
     type: 'monster',
-    subtype: 'beast',
-    level: 15,
-    position: [1380, 15.0, 290],
-    radius: 5.6,
-    health: 860,
-    maxHealth: 860,
-    power: 17800,
-    description: 'Terrifying fusion of snow leopard, horned ram, and dragon serpent.',
+    subtype: 'treant',
+    level: 5,
+    position: [2420, 12.0, 1220],
+    radius: 4.8,
+    health: 20000,
+    maxHealth: 20000,
+    attackDamage: 650,
+    defense: 450,
+    suggestedReward: 4500,
+    power: 13500,
+    description: 'Lv.5 Ancient timber guardian defending rich Lv.5-6 hardwood groves.',
     actions: ['attack', 'rally', 'scout'],
   },
   {
-    id: 'm_goblin_camp',
-    name: 'Highland Goblin War Camp',
+    id: 'm_river_serpent',
+    name: 'Karnali Cave Serpent',
     category: 'monster',
     type: 'monster',
-    subtype: 'humanoid',
-    level: 3,
-    position: [920, 9.5, 290],
-    radius: 3.5,
-    health: 160,
-    maxHealth: 160,
-    power: 1800,
-    description: 'Scavenger tribe hoarding stolen agricultural grain and iron tools.',
-    actions: ['attack', 'scout'],
+    subtype: 'aquatic',
+    level: 5,
+    position: [920, 8.8, 1290],
+    radius: 4.8,
+    health: 20000,
+    maxHealth: 20000,
+    attackDamage: 650,
+    defense: 450,
+    suggestedReward: 4500,
+    power: 13500,
+    description: 'Lv.5 Cavern water drake guarding river delta resource flats.',
+    actions: ['attack', 'rally', 'scout'],
+  },
+
+  // Level 6 (32,000 HP | 900 ATK | 650 DEF | 7,000 Reward)
+  {
+    id: 'm_iron_golem',
+    name: 'Iron Ridge Cave Golem',
+    category: 'monster',
+    type: 'monster',
+    subtype: 'golem',
+    level: 6,
+    position: [2160, 16.0, 2460],
+    radius: 5.0,
+    health: 32000,
+    maxHealth: 32000,
+    attackDamage: 900,
+    defense: 650,
+    suggestedReward: 7000,
+    power: 21000,
+    description: 'Lv.6 Armored ore sentinel defending high-grade mountain iron seams.',
+    actions: ['attack', 'rally', 'scout'],
+  },
+  {
+    id: 'm_quarry_fiend',
+    name: 'Granite Crag Fiend',
+    category: 'monster',
+    type: 'monster',
+    subtype: 'golem',
+    level: 6,
+    position: [2510, 15.0, 1510],
+    radius: 5.0,
+    health: 32000,
+    maxHealth: 32000,
+    attackDamage: 900,
+    defense: 650,
+    suggestedReward: 7000,
+    power: 21000,
+    description: 'Lv.6 Stone titan patrolling abandoned mountain quarry tunnels.',
+    actions: ['attack', 'rally', 'scout'],
+  },
+
+  // Level 7 (50,000 HP | 1,300 ATK | 900 DEF | 10,000 Reward)
+  {
+    id: 'm_rock_drake',
+    name: 'Ironcrest Mountain Drake',
+    category: 'monster',
+    type: 'monster',
+    subtype: 'drake',
+    level: 7,
+    position: [2640, 18.5, 2580],
+    radius: 5.4,
+    health: 50000,
+    maxHealth: 50000,
+    attackDamage: 1300,
+    defense: 900,
+    suggestedReward: 10000,
+    power: 32000,
+    description: 'Lv.7 Winged mountain drake nesting above southeast highland crystal veins.',
+    actions: ['attack', 'rally', 'scout'],
+  },
+  {
+    id: 'm_cave_troll',
+    name: 'Himalayan Cavern Troll',
+    category: 'monster',
+    type: 'monster',
+    subtype: 'golem',
+    level: 7,
+    position: [240, 16.0, 240],
+    radius: 5.4,
+    health: 50000,
+    maxHealth: 50000,
+    attackDamage: 1300,
+    defense: 900,
+    suggestedReward: 10000,
+    power: 32000,
+    description: 'Lv.7 Monstrous northwest frontier cavern brute wielding stone pillars.',
+    actions: ['attack', 'rally', 'scout'],
+  },
+
+  // Level 8 (75,000 HP | 1,800 ATK | 1,300 DEF | 15,000 Reward)
+  {
+    id: 'm_stone_colossus',
+    name: 'Abandoned Citadel Colossus',
+    category: 'monster',
+    type: 'monster',
+    subtype: 'golem',
+    level: 8,
+    position: [1580, 22.0, 2940],
+    radius: 5.8,
+    health: 75000,
+    maxHealth: 75000,
+    attackDamage: 1800,
+    defense: 1300,
+    suggestedReward: 15000,
+    power: 48000,
+    description: 'Lv.8 Ancient stone guardian sealed inside an abandoned southern highland fortress.',
+    actions: ['attack', 'rally', 'scout'],
+  },
+  {
+    id: 'm_horned_chimera',
+    name: 'Highland Horned Chimera',
+    category: 'monster',
+    type: 'monster',
+    subtype: 'beast',
+    level: 8,
+    position: [2960, 17.0, 250],
+    radius: 5.7,
+    health: 75000,
+    maxHealth: 75000,
+    attackDamage: 1800,
+    defense: 1300,
+    suggestedReward: 15000,
+    power: 48000,
+    description: 'Lv.8 Tri-horned mountain beast stalking northeast emerald frontier ridges.',
+    actions: ['attack', 'rally', 'scout'],
+  },
+
+  // Level 9 (110,000 HP | 2,500 ATK | 1,800 DEF | 22,000 Reward)
+  {
+    id: 'm_glacial_wyrm',
+    name: 'Emerald Peak Storm Wyrm',
+    category: 'monster',
+    type: 'monster',
+    subtype: 'drake',
+    level: 9,
+    position: [1120, 20.0, 2760],
+    radius: 6.1,
+    health: 110000,
+    maxHealth: 110000,
+    attackDamage: 2500,
+    defense: 1800,
+    suggestedReward: 22000,
+    power: 72000,
+    description: 'Lv.9 Highland wyrm guarding southern frontier Crystal spires.',
+    actions: ['attack', 'rally', 'scout'],
+  },
+
+  // Level 10 (160,000 HP | 3,500 ATK | 2,500 DEF | 35,000 Reward)
+  {
+    id: 'm_frost_yeti',
+    name: 'Ancient Highland Yeti Sovereign',
+    category: 'monster',
+    type: 'monster',
+    subtype: 'boss',
+    level: 10,
+    position: [240, 20.0, 2960],
+    radius: 6.6,
+    health: 160000,
+    maxHealth: 160000,
+    attackDamage: 3500,
+    defense: 2500,
+    suggestedReward: 35000,
+    power: 110000,
+    description: 'Lv.10 Apex highland sovereign in the southwest corner. Yields rare crystal spoils.',
+    actions: ['rally', 'attack', 'scout'],
+  },
+  {
+    id: 'm_crimson_wyvern',
+    name: 'Crimson Himalayan Wyvern',
+    category: 'monster',
+    type: 'monster',
+    subtype: 'boss',
+    level: 10,
+    position: [2960, 21.0, 2960],
+    radius: 6.6,
+    health: 160000,
+    maxHealth: 160000,
+    attackDamage: 3500,
+    defense: 2500,
+    suggestedReward: 35000,
+    power: 110000,
+    description: 'Lv.10 Supreme dragon monarch roosting over southeast highland Crystal & Iron peaks.',
+    actions: ['rally', 'attack', 'scout'],
   },
 ];
 
 /**
- * 32+ Resource Deposits across 4 Quadrants & 5 Resource Tiers (1600 x 1600 Continent)
+ * Curated Resource Nodes across Levels 1 to 10 (Food, Wood, Stone, Iron & Crystal)
+ * Capacities exact per Level 1-10 Resource Balance Table across the full 3200x3200 green continent.
  */
-export const WORLD_RESOURCES: WorldEntity[] = [
-  // --- WOOD & TIMBER GROVES (8 nodes) ---
+const BASE_WORLD_RESOURCES: WorldEntity[] = [
+  // --- WOOD & TIMBER GROVES (Levels 1..10, Capacity 5,000..150,000) ---
   {
     id: 'res_wood_1',
     name: 'Valley Deodar Grove',
@@ -1254,11 +1607,14 @@ export const WORLD_RESOURCES: WorldEntity[] = [
     type: 'resource',
     subtype: 'wood',
     level: 1,
-    position: [850, 10.0, 840],
-    radius: 3.5,
-    yieldAmount: 400,
+    position: [1670, 10.0, 1665],
+    radius: 3.6,
+    yieldAmount: 5000,
+    maxYieldAmount: 5000,
+    requiredTroopCapacity: 100,
+    difficulty: 1.0,
     resourceType: 'wood',
-    description: 'Fragrant Himalayan cedar wood essential for town framing and palisades.',
+    description: 'Lv.1 Cedar timber grove (5,000 Wood). Accessible to starter Magar & Limbu forces.',
     actions: ['mine', 'scout'],
   },
   {
@@ -1268,11 +1624,14 @@ export const WORLD_RESOURCES: WorldEntity[] = [
     type: 'resource',
     subtype: 'wood',
     level: 2,
-    position: [980, 11.0, 860],
+    position: [1880, 11.0, 1680],
     radius: 4.0,
-    yieldAmount: 800,
+    yieldAmount: 8000,
+    maxYieldAmount: 8000,
+    requiredTroopCapacity: 250,
+    difficulty: 1.05,
     resourceType: 'wood',
-    description: 'Dense mountain pine yielding sturdy timber for watchtowers and barracks.',
+    description: 'Lv.2 Mountain pine logging camp (8,000 Wood).',
     actions: ['mine', 'scout'],
   },
   {
@@ -1281,12 +1640,15 @@ export const WORLD_RESOURCES: WorldEntity[] = [
     category: 'resource',
     type: 'resource',
     subtype: 'wood',
-    level: 3,
-    position: [1200, 13.0, 980],
-    radius: 4.5,
-    yieldAmount: 1400,
+    level: 4,
+    position: [2040, 13.0, 1940],
+    radius: 4.4,
+    yieldAmount: 18000,
+    maxYieldAmount: 18000,
+    requiredTroopCapacity: 900,
+    difficulty: 1.15,
     resourceType: 'wood',
-    description: 'Tough highland hardwood carved for temple beams and siege machinery.',
+    description: 'Lv.4 Highland hardwood stand (18,000 Wood).',
     actions: ['mine', 'scout'],
   },
   {
@@ -1295,12 +1657,15 @@ export const WORLD_RESOURCES: WorldEntity[] = [
     category: 'resource',
     type: 'resource',
     subtype: 'wood',
-    level: 4,
-    position: [1340, 15.0, 1040],
-    radius: 5.0,
-    yieldAmount: 2200,
+    level: 6,
+    position: [2420, 15.0, 2010],
+    radius: 4.8,
+    yieldAmount: 35000,
+    maxYieldAmount: 35000,
+    requiredTroopCapacity: 2400,
+    difficulty: 1.3,
     resourceType: 'wood',
-    description: 'Ancient golden-grained timber prized for royal palaces and great gates.',
+    description: 'Lv.6 Ancient golden-grained timber reserve (35,000 Wood).',
     actions: ['mine', 'scout'],
   },
   {
@@ -1309,12 +1674,15 @@ export const WORLD_RESOURCES: WorldEntity[] = [
     category: 'resource',
     type: 'resource',
     subtype: 'wood',
-    level: 5,
-    position: [1430, 16.0, 1280],
-    radius: 5.5,
-    yieldAmount: 3600,
+    level: 8,
+    position: [2620, 16.0, 2480],
+    radius: 5.3,
+    yieldAmount: 70000,
+    maxYieldAmount: 70000,
+    requiredTroopCapacity: 5500,
+    difficulty: 1.5,
     resourceType: 'wood',
-    description: 'Rare enchanted spiritual timber blessed by high mountain monks.',
+    description: 'Lv.8 Monastic sacred timber heartland (70,000 Wood).',
     actions: ['mine', 'scout'],
   },
   {
@@ -1323,44 +1691,36 @@ export const WORLD_RESOURCES: WorldEntity[] = [
     category: 'resource',
     type: 'resource',
     subtype: 'wood',
-    level: 2,
-    position: [580, 14.0, 1020],
-    radius: 4.0,
-    yieldAmount: 850,
+    level: 3,
+    position: [1220, 14.0, 1940],
+    radius: 4.1,
+    yieldAmount: 12000,
+    maxYieldAmount: 12000,
+    requiredTroopCapacity: 500,
+    difficulty: 1.1,
     resourceType: 'wood',
-    description: 'Wind-resistant cedar standing along northern ridges.',
+    description: 'Lv.3 Wind-resistant ridge cedar (12,000 Wood).',
     actions: ['mine', 'scout'],
   },
   {
     id: 'res_wood_7',
-    name: 'Whispering Bamboo Basin',
+    name: 'Imperial Himalayan Sal Basin',
     category: 'resource',
     type: 'resource',
     subtype: 'wood',
-    level: 3,
-    position: [480, 10.0, 560],
-    radius: 4.2,
-    yieldAmount: 1300,
+    level: 10,
+    position: [2960, 15.0, 620],
+    radius: 5.6,
+    yieldAmount: 150000,
+    maxYieldAmount: 150000,
+    requiredTroopCapacity: 12000,
+    difficulty: 1.85,
     resourceType: 'wood',
-    description: 'Flexible bamboo stalks ideal for royal longbows and scaffolding.',
-    actions: ['mine', 'scout'],
-  },
-  {
-    id: 'res_wood_8',
-    name: 'Southern Oak Ridge',
-    category: 'resource',
-    type: 'resource',
-    subtype: 'wood',
-    level: 1,
-    position: [920, 9.5, 490],
-    radius: 3.6,
-    yieldAmount: 450,
-    resourceType: 'wood',
-    description: 'Common hill oak logs suitable for firewood and rampart stakes.',
+    description: 'Lv.10 Grand royal Sal timber sanctuary (150,000 Wood). Requires Lv.4-5 Thakuri haulers.',
     actions: ['mine', 'scout'],
   },
 
-  // --- FARMS & CROPS (8 nodes) ---
+  // --- FOOD & TERRACED FARMS (Levels 1..10, Capacity 5,000..150,000) ---
   {
     id: 'res_farm_1',
     name: 'Valley Barley Plots',
@@ -1368,25 +1728,31 @@ export const WORLD_RESOURCES: WorldEntity[] = [
     type: 'resource',
     subtype: 'farm',
     level: 1,
-    position: [760, 10.0, 870],
-    radius: 3.5,
-    yieldAmount: 400,
+    position: [1525, 10.0, 1690],
+    radius: 3.6,
+    yieldAmount: 5000,
+    maxYieldAmount: 5000,
+    requiredTroopCapacity: 100,
+    difficulty: 1.0,
     resourceType: 'food',
-    description: 'High-altitude barley and buckwheat sustaining the royal garrison.',
+    description: 'Lv.1 Valley barley terraces (5,000 Food). +15% Food harvest bonus.',
     actions: ['mine', 'scout'],
   },
   {
     id: 'res_farm_2',
-    name: 'Terraced Rice Paddis',
+    name: 'Terraced Rice Paddies',
     category: 'resource',
     type: 'resource',
     subtype: 'farm',
     level: 2,
-    position: [660, 10.0, 960],
+    position: [1310, 10.0, 1890],
     radius: 4.0,
-    yieldAmount: 800,
+    yieldAmount: 8000,
+    maxYieldAmount: 8000,
+    requiredTroopCapacity: 250,
+    difficulty: 1.05,
     resourceType: 'food',
-    description: 'Cascading hillside paddies nourished by fresh glacial meltwater.',
+    description: 'Lv.2 Cascading meltwater rice paddies (8,000 Food).',
     actions: ['mine', 'scout'],
   },
   {
@@ -1396,25 +1762,31 @@ export const WORLD_RESOURCES: WorldEntity[] = [
     type: 'resource',
     subtype: 'farm',
     level: 3,
-    position: [520, 12.0, 980],
-    radius: 4.5,
-    yieldAmount: 1400,
+    position: [1120, 12.0, 1920],
+    radius: 4.3,
+    yieldAmount: 12000,
+    maxYieldAmount: 12000,
+    requiredTroopCapacity: 500,
+    difficulty: 1.1,
     resourceType: 'food',
-    description: 'Nutritious golden millet feeding heavy cavalry and siege workforces.',
+    description: 'Lv.3 Golden millet grain terraces (12,000 Food).',
     actions: ['mine', 'scout'],
   },
   {
     id: 'res_farm_4',
-    name: 'Royal Apple Orchards',
+    name: 'Mustang Apple Orchards',
     category: 'resource',
     type: 'resource',
     subtype: 'farm',
-    level: 4,
-    position: [380, 14.0, 880],
+    level: 5,
+    position: [720, 14.0, 1680],
     radius: 4.8,
-    yieldAmount: 2200,
+    yieldAmount: 25000,
+    maxYieldAmount: 25000,
+    requiredTroopCapacity: 1500,
+    difficulty: 1.22,
     resourceType: 'food',
-    description: 'Crisp Mustang mountain apples supplying the imperial palace.',
+    description: 'Lv.5 Royal highland orchard estates (25,000 Food).',
     actions: ['mine', 'scout'],
   },
   {
@@ -1423,12 +1795,15 @@ export const WORLD_RESOURCES: WorldEntity[] = [
     category: 'resource',
     type: 'resource',
     subtype: 'farm',
-    level: 5,
-    position: [260, 11.0, 620],
+    level: 7,
+    position: [560, 11.0, 1160],
     radius: 5.2,
-    yieldAmount: 3600,
+    yieldAmount: 50000,
+    maxYieldAmount: 50000,
+    requiredTroopCapacity: 3600,
+    difficulty: 1.4,
     resourceType: 'food',
-    description: 'Blessed fertile river basin nourishing multiple alliance battalions.',
+    description: 'Lv.7 Alluvial river delta granaries (50,000 Food).',
     actions: ['mine', 'scout'],
   },
   {
@@ -1437,44 +1812,36 @@ export const WORLD_RESOURCES: WorldEntity[] = [
     category: 'resource',
     type: 'resource',
     subtype: 'farm',
-    level: 2,
-    position: [840, 9.5, 340],
-    radius: 4.0,
-    yieldAmount: 780,
+    level: 9,
+    position: [1620, 9.5, 580],
+    radius: 5.4,
+    yieldAmount: 100000,
+    maxYieldAmount: 100000,
+    requiredTroopCapacity: 8000,
+    difficulty: 1.65,
     resourceType: 'food',
-    description: 'Golden blooming mustard fields yielding cooking oil and provisions.',
+    description: 'Lv.9 Grand mustard & grain plains (100,000 Food).',
     actions: ['mine', 'scout'],
   },
   {
     id: 'res_farm_7',
-    name: 'Eastern Corn Terraces',
+    name: 'Kathmandu Valley Royal Granary',
     category: 'resource',
     type: 'resource',
     subtype: 'farm',
-    level: 3,
-    position: [1100, 10.5, 580],
-    radius: 4.4,
-    yieldAmount: 1350,
+    level: 10,
+    position: [2040, 10.5, 1180],
+    radius: 5.6,
+    yieldAmount: 150000,
+    maxYieldAmount: 150000,
+    requiredTroopCapacity: 12000,
+    difficulty: 1.85,
     resourceType: 'food',
-    description: 'High-yield mountain maize fueling long-distance troop marches.',
-    actions: ['mine', 'scout'],
-  },
-  {
-    id: 'res_farm_8',
-    name: 'Southwest Herbal Sanctuary',
-    category: 'resource',
-    type: 'resource',
-    subtype: 'farm',
-    level: 1,
-    position: [640, 9.8, 380],
-    radius: 3.6,
-    yieldAmount: 420,
-    resourceType: 'food',
-    description: 'Medicinal herbs harvested for battlefield healing potions.',
+    description: 'Lv.10 Supreme terraced harvest basin (150,000 Food).',
     actions: ['mine', 'scout'],
   },
 
-  // --- STONE & CRYSTAL QUARRIES (8 nodes) ---
+  // --- STONE QUARRIES (Levels 1..10, Capacity 3,000..100,000) ---
   {
     id: 'res_stone_1',
     name: 'Slate Outcrop',
@@ -1482,11 +1849,14 @@ export const WORLD_RESOURCES: WorldEntity[] = [
     type: 'resource',
     subtype: 'stone',
     level: 1,
-    position: [870, 10.0, 770],
+    position: [1690, 10.0, 1545],
     radius: 3.6,
-    yieldAmount: 380,
+    yieldAmount: 3000,
+    maxYieldAmount: 3000,
+    requiredTroopCapacity: 100,
+    difficulty: 1.0,
     resourceType: 'stone',
-    description: 'Exposed mountain slate ideal for simple roof shingles and wall pavers.',
+    description: 'Lv.1 Mountain slate shelf (3,000 Stone).',
     actions: ['mine', 'scout'],
   },
   {
@@ -1496,11 +1866,14 @@ export const WORLD_RESOURCES: WorldEntity[] = [
     type: 'resource',
     subtype: 'stone',
     level: 2,
-    position: [1020, 12.0, 760],
+    position: [1940, 12.0, 1535],
     radius: 4.0,
-    yieldAmount: 780,
+    yieldAmount: 5000,
+    maxYieldAmount: 5000,
+    requiredTroopCapacity: 250,
+    difficulty: 1.05,
     resourceType: 'stone',
-    description: 'Dense granite rock blocks extracted for keep ramparts and watchtowers.',
+    description: 'Lv.2 Cut granite quarry blocks (5,000 Stone).',
     actions: ['mine', 'scout'],
   },
   {
@@ -1509,12 +1882,15 @@ export const WORLD_RESOURCES: WorldEntity[] = [
     category: 'resource',
     type: 'resource',
     subtype: 'stone',
-    level: 3,
-    position: [1240, 16.0, 880],
+    level: 4,
+    position: [2420, 16.0, 1640],
     radius: 4.5,
-    yieldAmount: 1350,
+    yieldAmount: 12000,
+    maxYieldAmount: 12000,
+    requiredTroopCapacity: 900,
+    difficulty: 1.15,
     resourceType: 'stone',
-    description: 'Veined crystalline marble used for temple sanctuaries and royal monuments.',
+    description: 'Lv.4 Temple-grade marble quarry (12,000 Stone).',
     actions: ['mine', 'scout'],
   },
   {
@@ -1523,100 +1899,70 @@ export const WORLD_RESOURCES: WorldEntity[] = [
     category: 'resource',
     type: 'resource',
     subtype: 'stone',
-    level: 4,
-    position: [1430, 19.0, 960],
-    radius: 4.8,
-    yieldAmount: 2200,
+    level: 6,
+    position: [2880, 19.0, 1980],
+    radius: 4.9,
+    yieldAmount: 23000,
+    maxYieldAmount: 23000,
+    requiredTroopCapacity: 2400,
+    difficulty: 1.3,
     resourceType: 'stone',
-    description: 'Glass-smooth volcanic obsidian forming razor-sharp fortress spikes.',
+    description: 'Lv.6 Volcanic basalt monoliths (23,000 Stone).',
     actions: ['mine', 'scout'],
   },
   {
     id: 'res_stone_5',
-    name: 'Starfall Crystal Spire',
+    name: 'Highland Quartz Crag',
     category: 'resource',
     type: 'resource',
     subtype: 'stone',
-    level: 5,
-    position: [720, 20.0, 1340],
+    level: 8,
+    position: [580, 21.0, 2620],
     radius: 5.2,
-    yieldAmount: 3500,
+    yieldAmount: 45000,
+    maxYieldAmount: 45000,
+    requiredTroopCapacity: 5500,
+    difficulty: 1.5,
     resourceType: 'stone',
-    description: 'Pulsing arcane crystal formation holding concentrated elemental earth power.',
+    description: 'Lv.8 Deep highland bedrock quarry (45,000 Stone).',
     actions: ['mine', 'scout'],
   },
   {
     id: 'res_stone_6',
-    name: 'High Glacier Quartz Crag',
-    category: 'resource',
-    type: 'resource',
-    subtype: 'stone',
-    level: 4,
-    position: [400, 21.0, 1240],
-    radius: 4.6,
-    yieldAmount: 2100,
-    resourceType: 'stone',
-    description: 'Frost-cracked quartz veins embedded in glacial bedrock.',
-    actions: ['mine', 'scout'],
-  },
-  {
-    id: 'res_stone_7',
     name: 'South Basalt Quarry',
     category: 'resource',
     type: 'resource',
     subtype: 'stone',
-    level: 2,
-    position: [740, 10.0, 490],
-    radius: 4.0,
-    yieldAmount: 820,
+    level: 3,
+    position: [1520, 10.0, 1120],
+    radius: 4.1,
+    yieldAmount: 8000,
+    maxYieldAmount: 8000,
+    requiredTroopCapacity: 500,
+    difficulty: 1.1,
     resourceType: 'stone',
-    description: 'Heavy volcanic basalt blocks used for fortress rampart foundations.',
+    description: 'Lv.3 Fortress masonry basalt pit (8,000 Stone).',
     actions: ['mine', 'scout'],
   },
   {
-    id: 'res_stone_8',
-    name: 'Southeast Limestone Gorge',
+    id: 'res_stone_7',
+    name: 'Annapurna Imperial Quarry',
     category: 'resource',
     type: 'resource',
     subtype: 'stone',
-    level: 3,
-    position: [1280, 13.0, 650],
-    radius: 4.4,
-    yieldAmount: 1380,
+    level: 10,
+    position: [2540, 14.0, 1240],
+    radius: 5.6,
+    yieldAmount: 100000,
+    maxYieldAmount: 100000,
+    requiredTroopCapacity: 12000,
+    difficulty: 1.85,
     resourceType: 'stone',
-    description: 'Porous limestone mortar stone for masonry bonding.',
+    description: 'Lv.10 Colossal citadel quarry (100,000 Stone).',
     actions: ['mine', 'scout'],
   },
 
-  // --- IRON, COPPER & GOLD MINES (10 nodes) ---
-  {
-    id: 'res_gold_1',
-    name: 'Vanguard Aurum Vein',
-    category: 'resource',
-    type: 'resource',
-    subtype: 'gold',
-    level: 1,
-    position: [840, 10.0, 720],
-    radius: 3.8,
-    yieldAmount: 650,
-    resourceType: 'gold',
-    description: 'Lustrous aurum deposit located near the central valley. Plentiful royal bullion.',
-    actions: ['mine', 'scout'],
-  },
-  {
-    id: 'res_gold_2',
-    name: 'Crestline Gold Outcrop',
-    category: 'resource',
-    type: 'resource',
-    subtype: 'gold',
-    level: 2,
-    position: [760, 10.0, 620],
-    radius: 4.0,
-    yieldAmount: 1100,
-    resourceType: 'gold',
-    description: 'Rich golden ore outcropping along the southern road to replenish imperial coinage.',
-    actions: ['mine', 'scout'],
-  },
+  // --- IRON MINES (Levels 1..10, Capacity 1,000..50,000) ---
   {
     id: 'res_iron_1',
     name: 'Shallow Iron Vein',
@@ -1624,112 +1970,434 @@ export const WORLD_RESOURCES: WorldEntity[] = [
     type: 'resource',
     subtype: 'iron',
     level: 1,
-    position: [730, 10.0, 750],
+    position: [1505, 10.0, 1515],
     radius: 3.6,
-    yieldAmount: 350,
+    yieldAmount: 1000,
+    maxYieldAmount: 1000,
+    requiredTroopCapacity: 100,
+    difficulty: 1.0,
     resourceType: 'iron',
-    description: 'Surface deposits of iron ore suitable for forging basic spears and nails.',
+    description: 'Lv.1 Surface bog-iron deposit (1,000 Iron).',
     actions: ['mine', 'scout'],
   },
   {
     id: 'res_iron_2',
-    name: 'Deep Copper Lode',
+    name: 'Deep Copper-Iron Lode',
     category: 'resource',
     type: 'resource',
     subtype: 'iron',
-    level: 2,
-    position: [980, 11.5, 720],
-    radius: 4.0,
-    yieldAmount: 720,
+    level: 3,
+    position: [1890, 11.5, 1510],
+    radius: 4.1,
+    yieldAmount: 3500,
+    maxYieldAmount: 3500,
+    requiredTroopCapacity: 500,
+    difficulty: 1.1,
     resourceType: 'iron',
-    description: 'Rich reddish copper vein powering metallurgy and brass armaments.',
+    description: 'Lv.3 Smelting iron-copper vein (3,500 Iron).',
     actions: ['mine', 'scout'],
   },
   {
     id: 'res_iron_3',
-    name: 'Royal Iron Mine',
-    category: 'resource',
-    type: 'resource',
-    subtype: 'iron',
-    level: 3,
-    position: [1280, 17.0, 1160],
-    radius: 4.5,
-    yieldAmount: 1250,
-    resourceType: 'iron',
-    description: 'Established underground shaft yielding high-grade war iron for khukuris.',
-    actions: ['mine', 'scout'],
-  },
-  {
-    id: 'res_iron_4',
-    name: 'Highland Gold Crevasse',
-    category: 'resource',
-    type: 'resource',
-    subtype: 'gold',
-    level: 4,
-    position: [1340, 18.0, 1340],
-    radius: 4.8,
-    yieldAmount: 2400,
-    resourceType: 'gold',
-    description: 'Glittering aurum veins extracted from high crevices for the imperial treasury.',
-    actions: ['mine', 'scout'],
-  },
-  {
-    id: 'res_iron_5',
-    name: 'Mithril Core Chamber',
+    name: 'Royal Khukuri Iron Mine',
     category: 'resource',
     type: 'resource',
     subtype: 'iron',
     level: 5,
-    position: [1480, 20.0, 1200],
-    radius: 5.2,
-    yieldAmount: 3300,
+    position: [2440, 17.0, 2060],
+    radius: 4.7,
+    yieldAmount: 7500,
+    maxYieldAmount: 7500,
+    requiredTroopCapacity: 1500,
+    difficulty: 1.22,
     resourceType: 'iron',
-    description: 'Legendary luminescent silver-blue ore lighter than silk and stronger than steel.',
+    description: 'Lv.5 Weapon-grade steel-iron mine (7,500 Iron).',
+    actions: ['mine', 'scout'],
+  },
+  {
+    id: 'res_iron_4',
+    name: 'Highland Magnetite Seam',
+    category: 'resource',
+    type: 'resource',
+    subtype: 'iron',
+    level: 7,
+    position: [620, 19.0, 2080],
+    radius: 5.0,
+    yieldAmount: 15000,
+    maxYieldAmount: 15000,
+    requiredTroopCapacity: 3600,
+    difficulty: 1.4,
+    resourceType: 'iron',
+    description: 'Lv.7 High-density magnetite ore pit (15,000 Iron).',
+    actions: ['mine', 'scout'],
+  },
+  {
+    id: 'res_iron_5',
+    name: 'Mithril-Iron Core Chamber',
+    category: 'resource',
+    type: 'resource',
+    subtype: 'iron',
+    level: 9,
+    position: [2940, 20.0, 2540],
+    radius: 5.4,
+    yieldAmount: 30000,
+    maxYieldAmount: 30000,
+    requiredTroopCapacity: 8000,
+    difficulty: 1.65,
+    resourceType: 'iron',
+    description: 'Lv.9 Deep frontier forge core chamber (30,000 Iron).',
     actions: ['mine', 'scout'],
   },
   {
     id: 'res_iron_6',
-    name: 'Glacial Iron Seam',
+    name: 'Sagarmatha Meteoric Iron Vault',
     category: 'resource',
     type: 'resource',
     subtype: 'iron',
-    level: 3,
-    position: [360, 19.0, 1120],
-    radius: 4.2,
-    yieldAmount: 1200,
+    level: 10,
+    position: [260, 18.0, 560],
+    radius: 5.6,
+    yieldAmount: 50000,
+    maxYieldAmount: 50000,
+    requiredTroopCapacity: 12000,
+    difficulty: 1.85,
     resourceType: 'iron',
-    description: 'Sub-zero magnetite seams buried under mountain frost.',
+    description: 'Lv.10 Legendary meteoric iron vein in northwest green frontier (50,000 Iron).',
     actions: ['mine', 'scout'],
   },
+
+  // --- CRYSTAL DEPOSITS (Levels 1..10, Capacity 200..10,000) ---
   {
-    id: 'res_iron_7',
-    name: 'Southern Gold Placer',
+    id: 'res_crystal_1',
+    name: 'Valley Quartz Crystal Node',
     category: 'resource',
     type: 'resource',
-    subtype: 'gold',
-    level: 3,
-    position: [1020, 10.0, 410],
-    radius: 4.2,
-    yieldAmount: 1600,
-    resourceType: 'gold',
-    description: 'Rich alluvial gold dust deposits washed down from eastern ranges.',
-    actions: ['mine', 'scout'],
-  },
-  {
-    id: 'res_iron_8',
-    name: 'West Gorge Pyrite Mine',
-    category: 'resource',
-    type: 'resource',
-    subtype: 'iron',
-    level: 2,
-    position: [490, 9.5, 410],
+    subtype: 'crystal',
+    level: 1,
+    position: [1660, 10.0, 1485],
     radius: 3.8,
-    yieldAmount: 680,
-    resourceType: 'iron',
-    description: 'Sulfurous iron ore mined for military smithing and arrows.',
+    yieldAmount: 200,
+    maxYieldAmount: 200,
+    requiredTroopCapacity: 100,
+    difficulty: 1.0,
+    resourceType: 'crystal',
+    description: 'Lv.1 Arcane blue crystal cluster (200 Crystal) near the central valley.',
+    actions: ['mine', 'scout'],
+  },
+  {
+    id: 'res_crystal_2',
+    name: 'Crestline Crystal Outcrop',
+    category: 'resource',
+    type: 'resource',
+    subtype: 'crystal',
+    level: 2,
+    position: [1550, 10.0, 1280],
+    radius: 4.0,
+    yieldAmount: 400,
+    maxYieldAmount: 400,
+    requiredTroopCapacity: 250,
+    difficulty: 1.05,
+    resourceType: 'crystal',
+    description: 'Lv.2 Glowing sapphire crystal seam (400 Crystal).',
+    actions: ['mine', 'scout'],
+  },
+  {
+    id: 'res_crystal_3',
+    name: 'Southern Crystal Leyline',
+    category: 'resource',
+    type: 'resource',
+    subtype: 'crystal',
+    level: 4,
+    position: [1980, 10.0, 690],
+    radius: 4.4,
+    yieldAmount: 1000,
+    maxYieldAmount: 1000,
+    requiredTroopCapacity: 900,
+    difficulty: 1.15,
+    resourceType: 'crystal',
+    description: 'Lv.4 Resonant leyline crystal spire (1,000 Crystal).',
+    actions: ['mine', 'scout'],
+  },
+  {
+    id: 'res_crystal_4',
+    name: 'Starfall Crystal Spire',
+    category: 'resource',
+    type: 'resource',
+    subtype: 'crystal',
+    level: 6,
+    position: [1505, 20.0, 2560],
+    radius: 4.9,
+    yieldAmount: 2000,
+    maxYieldAmount: 2000,
+    requiredTroopCapacity: 2400,
+    difficulty: 1.3,
+    resourceType: 'crystal',
+    description: 'Lv.6 Concentric starfall crystal pillar (2,000 Crystal).',
+    actions: ['mine', 'scout'],
+  },
+  {
+    id: 'res_crystal_5',
+    name: 'Highland Emerald Crystal Crevasse',
+    category: 'resource',
+    type: 'resource',
+    subtype: 'crystal',
+    level: 8,
+    position: [2940, 19.0, 240],
+    radius: 5.2,
+    yieldAmount: 4500,
+    maxYieldAmount: 4500,
+    requiredTroopCapacity: 5500,
+    difficulty: 1.5,
+    resourceType: 'crystal',
+    description: 'Lv.8 High-altitude northeast frontier crystal cavern (4,500 Crystal).',
+    actions: ['mine', 'scout'],
+  },
+  {
+    id: 'res_crystal_6',
+    name: 'Sovereign Himalaya Crystal Sanctuary',
+    category: 'resource',
+    type: 'resource',
+    subtype: 'crystal',
+    level: 10,
+    position: [220, 21.0, 2940],
+    radius: 5.7,
+    yieldAmount: 10000,
+    maxYieldAmount: 10000,
+    requiredTroopCapacity: 12000,
+    difficulty: 1.85,
+    resourceType: 'crystal',
+    description: 'Lv.10 Supreme crystal nexus in southwest emerald corner (10,000 Crystal).',
     actions: ['mine', 'scout'],
   },
 ];
+
+// ============================================================================
+// DETERMINISTIC REGIONAL AUTO-SPAWNER FOR 3200x3200 GREEN CONTINENT
+// ============================================================================
+const AUTO_MONSTER_STATS_BY_LEVEL: ReadonlyArray<{
+  hp: number;
+  atk: number;
+  def: number;
+  reward: number;
+  power: number;
+}> = [
+  { hp: 2000, atk: 100, def: 50, reward: 500, power: 1500 },
+  { hp: 4000, atk: 180, def: 100, reward: 1000, power: 2800 },
+  { hp: 7000, atk: 280, def: 180, reward: 1800, power: 4900 },
+  { hp: 12000, atk: 420, def: 280, reward: 2800, power: 8200 },
+  { hp: 20000, atk: 650, def: 450, reward: 4500, power: 13500 },
+  { hp: 32000, atk: 900, def: 650, reward: 7000, power: 21000 },
+  { hp: 50000, atk: 1300, def: 900, reward: 10000, power: 32000 },
+  { hp: 75000, atk: 1800, def: 1300, reward: 15000, power: 48000 },
+  { hp: 110000, atk: 2500, def: 1800, reward: 22000, power: 72000 },
+  { hp: 160000, atk: 3500, def: 2500, reward: 35000, power: 110000 },
+];
+
+const AUTO_FOOD_WOOD_CAP = [5000, 8000, 12000, 18000, 25000, 35000, 50000, 70000, 100000, 150000] as const;
+const AUTO_STONE_CAP = [3000, 5000, 8000, 12000, 17000, 23000, 32000, 45000, 65000, 100000] as const;
+const AUTO_IRON_CAP = [1000, 2000, 3500, 5000, 7500, 10000, 15000, 22000, 30000, 50000] as const;
+const AUTO_CRYSTAL_CAP = [200, 400, 700, 1000, 1500, 2000, 3000, 4500, 6500, 10000] as const;
+const AUTO_REQ_CAP = [100, 250, 500, 900, 1500, 2400, 3600, 5500, 8000, 12000] as const;
+const AUTO_DIFF = [1.0, 1.05, 1.1, 1.15, 1.22, 1.3, 1.4, 1.5, 1.65, 1.85] as const;
+
+function createAutoRng(initialSeed: number): () => number {
+  let state = initialSeed >>> 0;
+  return () => {
+    state = (state * 1664525 + 1013904223) >>> 0;
+    return state / 4294967296;
+  };
+}
+
+function isAutoCoordClear(x: number, z: number, occupied: Array<{ x: number; z: number }>, minNodeGap = 78): boolean {
+  if (x < 70 || x > WORLD_BOUNDS.MAX_X - 70 || z < 70 || z > WORLD_BOUNDS.MAX_Z - 70) return false;
+  // Keep clear of central Inside Kingdom & Congress citadel
+  if (Math.hypot(x - WORLD_BOUNDS.CENTER_X, z - WORLD_BOUNDS.CENTER_Z) < 175) return false;
+  // Keep clear of central highway crossways
+  if (Math.abs(x - WORLD_BOUNDS.CENTER_X) < 28 || Math.abs(z - WORLD_BOUNDS.CENTER_Z) < 28) return false;
+  // Keep clear of the Nile River & Northern Delta channels
+  if (getDistanceToNile(x, z).distBeyondWater < 32) return false;
+  for (const plot of RESERVED_PLOTS) {
+    if (Math.hypot(x - plot.position[0], z - plot.position[2]) < plot.radius + 50) return false;
+  }
+  for (const o of occupied) {
+    if (Math.hypot(x - o.x, z - o.z) < minNodeGap) return false;
+  }
+  return true;
+}
+
+function pickRegionalLevel(distFromCenter: number, rng: () => number): number {
+  if (distFromCenter < 720) {
+    const band = [1, 2, 2, 3, 3, 4];
+    return band[Math.floor(rng() * band.length)];
+  }
+  if (distFromCenter < 1260) {
+    const band = [4, 5, 5, 6, 6, 7];
+    return band[Math.floor(rng() * band.length)];
+  }
+  const frontierBand = [7, 8, 8, 9, 9, 10];
+  return frontierBand[Math.floor(rng() * frontierBand.length)];
+}
+
+export function generateAutoWorldMonsters(existing: WorldEntity[], count = 44): WorldEntity[] {
+  const rng = createAutoRng(20260809);
+  const occupied = existing.map((e) => ({ x: e.position[0], z: e.position[2] }));
+  const generated: WorldEntity[] = [];
+
+  const innerTemplates: Array<{ name: string; subtype: 'humanoid' | 'beast' | 'treant' | 'aquatic' }> = [
+    { name: 'Valley Bandit Scout', subtype: 'humanoid' },
+    { name: 'Rhododendron Wolf Pack', subtype: 'beast' },
+    { name: 'Grove Bramble Treant', subtype: 'treant' },
+    { name: 'Riverbank Lurker', subtype: 'aquatic' },
+  ];
+  const midTemplates: Array<{ name: string; subtype: 'beast' | 'treant' | 'golem' | 'humanoid' }> = [
+    { name: 'Highland Cave Raider', subtype: 'humanoid' },
+    { name: 'Crag Timber Guardian', subtype: 'treant' },
+    { name: 'Granite Ridge Sentinel', subtype: 'golem' },
+    { name: 'Mist Stalker Sabretooth', subtype: 'beast' },
+  ];
+  const highlandTemplates: Array<{ name: string; subtype: 'golem' | 'drake' | 'beast' }> = [
+    { name: 'Emerald-Peak Stone Golem', subtype: 'golem' },
+    { name: 'Highland Crest Storm Drake', subtype: 'drake' },
+    { name: 'Ridgewood Dire Chimera', subtype: 'beast' },
+    { name: 'Ancient Crag Titan', subtype: 'golem' },
+  ];
+
+  // Anchor points spread across all 4 quadrants + all 4 outer green corners
+  const cornerAnchors: Array<[number, number]> = [
+    [140, 140], [3060, 140], [140, 3060], [3060, 3060],
+    [480, 190], [2720, 190], [480, 3010], [2720, 3010],
+    [190, 520], [3010, 520], [190, 2680], [3010, 2680],
+  ];
+
+  let attempts = 0;
+  while (generated.length < count && attempts < 1400) {
+    attempts++;
+    let rx: number;
+    let rz: number;
+    if (generated.length < cornerAnchors.length && attempts < cornerAnchors.length * 16) {
+      const [ax, az] = cornerAnchors[generated.length];
+      rx = Math.round(ax + (rng() - 0.5) * 260);
+      rz = Math.round(az + (rng() - 0.5) * 260);
+    } else {
+      rx = Math.round(85 + rng() * (WORLD_BOUNDS.MAX_X - 170));
+      rz = Math.round(85 + rng() * (WORLD_BOUNDS.MAX_Z - 170));
+    }
+    if (!isAutoCoordClear(rx, rz, occupied, 84)) continue;
+
+    const dist = Math.hypot(rx - WORLD_BOUNDS.CENTER_X, rz - WORLD_BOUNDS.CENTER_Z);
+    const level = pickRegionalLevel(dist, rng);
+    const stats = AUTO_MONSTER_STATS_BY_LEVEL[level - 1];
+    const pool = level <= 4 ? innerTemplates : level <= 7 ? midTemplates : highlandTemplates;
+    const tpl = pool[generated.length % pool.length];
+    const estY = 9.5 + (dist / 1600) * 8.5;
+
+    occupied.push({ x: rx, z: rz });
+    generated.push({
+      id: `m_auto_${generated.length + 1}`,
+      name: tpl.name,
+      category: 'monster',
+      type: 'monster',
+      subtype: tpl.subtype,
+      level,
+      position: [rx, Number(estY.toFixed(1)), rz],
+      radius: Number((3.5 + level * 0.28).toFixed(1)),
+      health: stats.hp,
+      maxHealth: stats.hp,
+      attackDamage: stats.atk,
+      defense: stats.def,
+      suggestedReward: stats.reward,
+      power: stats.power,
+      description: `Lv.${level} Himalayan wild ${tpl.name} (${stats.hp.toLocaleString()} HP · ${stats.reward.toLocaleString()} Loot).`,
+      actions: level >= 5 ? ['attack', 'rally', 'scout'] : ['attack', 'scout'],
+    });
+  }
+
+  return generated;
+}
+
+export function generateAutoWorldResources(existing: WorldEntity[], occupiedExternal: WorldEntity[], count = 56): WorldEntity[] {
+  const rng = createAutoRng(99173211);
+  const occupied = [...existing, ...occupiedExternal].map((e) => ({ x: e.position[0], z: e.position[2] }));
+  const generated: WorldEntity[] = [];
+
+  const kindRotation: Array<{
+    subtype: 'wood' | 'farm' | 'stone' | 'iron' | 'crystal';
+    resourceType: 'wood' | 'food' | 'stone' | 'iron' | 'crystal';
+    names: [string, string, string];
+  }> = [
+    { subtype: 'wood', resourceType: 'wood', names: ['Valley Pine Stand', 'Highland Fir Forest', 'Frontier Sacred Cedar'] },
+    { subtype: 'farm', resourceType: 'food', names: ['Terraced Barley Field', 'Meltwater Millet Terrace', 'Highland Buckwheat Plot'] },
+    { subtype: 'stone', resourceType: 'stone', names: ['Shale Quarry Bench', 'Alpine Granite Crag', 'Highland Basalt Outcrop'] },
+    { subtype: 'iron', resourceType: 'iron', names: ['Valley Iron Seam', 'Mountain Magnetite Vein', 'Deep Frontier Iron Lode'] },
+    { subtype: 'crystal', resourceType: 'crystal', names: ['Leyline Quartz Node', 'Sapphire Ridge Spire', 'Sovereign Emerald Crystal Vein'] },
+  ];
+
+  // Seed outer green corners and frontier belts richly
+  const cornerAnchors: Array<[number, number]> = [
+    [130, 130], [3070, 130], [130, 3070], [3070, 3070],
+    [540, 160], [2660, 160], [540, 3040], [2660, 3040],
+    [160, 660], [3040, 660], [160, 2540], [3040, 2540],
+    [980, 190], [2220, 190], [980, 3010], [2220, 3010],
+  ];
+
+  let attempts = 0;
+  while (generated.length < count && attempts < 1800) {
+    attempts++;
+    let rx: number;
+    let rz: number;
+    if (generated.length < cornerAnchors.length && attempts < cornerAnchors.length * 16) {
+      const [ax, az] = cornerAnchors[generated.length];
+      rx = Math.round(ax + (rng() - 0.5) * 240);
+      rz = Math.round(az + (rng() - 0.5) * 240);
+    } else {
+      rx = Math.round(85 + rng() * (WORLD_BOUNDS.MAX_X - 170));
+      rz = Math.round(85 + rng() * (WORLD_BOUNDS.MAX_Z - 170));
+    }
+    if (!isAutoCoordClear(rx, rz, occupied, 76)) continue;
+
+    const dist = Math.hypot(rx - WORLD_BOUNDS.CENTER_X, rz - WORLD_BOUNDS.CENTER_Z);
+    const level = pickRegionalLevel(dist, rng);
+    const idx = level - 1;
+    const spec = kindRotation[generated.length % kindRotation.length];
+    const cap =
+      spec.resourceType === 'food' || spec.resourceType === 'wood'
+        ? AUTO_FOOD_WOOD_CAP[idx]
+        : spec.resourceType === 'stone'
+          ? AUTO_STONE_CAP[idx]
+          : spec.resourceType === 'iron'
+            ? AUTO_IRON_CAP[idx]
+            : AUTO_CRYSTAL_CAP[idx];
+    const nameIdx = level <= 4 ? 0 : level <= 7 ? 1 : 2;
+    const estY = 9.8 + (dist / 1600) * 10.8;
+
+    occupied.push({ x: rx, z: rz });
+    generated.push({
+      id: `res_auto_${spec.subtype}_${generated.length + 1}`,
+      name: spec.names[nameIdx],
+      category: 'resource',
+      type: 'resource',
+      subtype: spec.subtype,
+      level,
+      position: [rx, Number(estY.toFixed(1)), rz],
+      radius: Number((3.6 + level * 0.2).toFixed(1)),
+      yieldAmount: cap,
+      maxYieldAmount: cap,
+      requiredTroopCapacity: AUTO_REQ_CAP[idx],
+      difficulty: AUTO_DIFF[idx],
+      resourceType: spec.resourceType,
+      description: `Lv.${level} ${spec.names[nameIdx]} (${cap.toLocaleString()} ${spec.resourceType.toUpperCase()}). Auto-surveyed continental deposit.`,
+      actions: ['mine', 'scout'],
+    });
+  }
+
+  return generated;
+}
+
+const AUTO_MONSTERS = generateAutoWorldMonsters(BASE_WORLD_MONSTERS, 44);
+export const WORLD_MONSTERS: WorldEntity[] = [...BASE_WORLD_MONSTERS, ...AUTO_MONSTERS];
+
+const AUTO_RESOURCES = generateAutoWorldResources(BASE_WORLD_RESOURCES, WORLD_MONSTERS, 56);
+export const WORLD_RESOURCES: WorldEntity[] = [...BASE_WORLD_RESOURCES, ...AUTO_RESOURCES];
 
 /**
  * Coordinate utility helper class
@@ -1746,7 +2414,7 @@ export class WorldCoordinates {
   }
 
   /**
-   * Convert world coordinates [0..1600] to canvas minimap 2D position [0..width, 0..height].
+   * Convert world coordinates [0..3200] to canvas minimap 2D position [0..width, 0..height].
    */
   static worldToMinimap(
     wx: number,

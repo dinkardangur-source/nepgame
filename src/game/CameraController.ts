@@ -29,15 +29,15 @@ export class CameraController {
   private domElement: HTMLElement;
   private terrainGenerator: TerrainGenerator;
 
-  // Camera Target in World Coordinates (Focused on My Castle / Center of 1600x1600 Continent)
-  public target = new THREE.Vector3(800, 10, 768);
-  private desiredTarget = new THREE.Vector3(800, 10, 768);
-  private homeCoords = { x: 800, z: 768 };
+  // Camera Target in World Coordinates (Focused on My Castle / Center of 3200x3200 Continent)
+  public target = new THREE.Vector3(1600, 10, 1568);
+  private desiredTarget = new THREE.Vector3(1600, 10, 1568);
+  private homeCoords = { x: 1600, z: 1568 };
 
-  // Zoom management (Scale factor: 0.048x [Zoom Out 100 full 1600x1600 realm] to 3.2x deep tactical corner zoom)
+  // Zoom management (Scale factor: 0.023x [Zoom Out 100 full 3200x3200 realm] to 3.2x deep tactical corner zoom)
   public zoom = 0.5016;
   private desiredZoom = 0.5016;
-  public minZoom = 0.048;
+  public minZoom = 0.023;
   public maxZoom = 3.2;
 
   // Screen-Focused Viewing Angles:
@@ -101,7 +101,7 @@ export class CameraController {
     }
 
     const aspect = (this.domElement.clientWidth || 16) / (this.domElement.clientHeight || 9);
-    this.camera = new THREE.PerspectiveCamera(35, aspect, 1.5, 8500);
+    this.camera = new THREE.PerspectiveCamera(35, aspect, 1.5, 24000);
     this.domElement.style.touchAction = 'none';
     this.domElement.style.userSelect = 'none';
     (this.domElement.style as unknown as Record<string, string>).webkitUserSelect = 'none';
@@ -112,13 +112,13 @@ export class CameraController {
 
   /**
    * Keeps the camera target framed inside map corners dynamically according to zoom level:
-   * - When zoomed in (zoom >= 0.45), allows deep inspection down to 48m from the border.
-   * - As zoom pulls out toward Zoom 100 (minZoom = 0.048), pulls margins smoothly inward
-   *   so the viewport stays centered over playable land & mountain borders without exposing void.
+   * - When zoomed in (zoom >= 0.36), allows deep inspection down to 20m from all 4 green corners.
+   * - As zoom pulls out toward Zoom 100 (minZoom = 0.023), pulls margins smoothly inward
+   *   so the viewport stays centered over playable green land & outer valleys without exposing void.
    */
   private clampDesiredTargetToMap() {
     const tOut = THREE.MathUtils.clamp((0.36 - this.desiredZoom) / Math.max(0.01, 0.36 - this.minZoom), 0, 1);
-    const dynamicMargin = THREE.MathUtils.lerp(48, 700, tOut * tOut);
+    const dynamicMargin = THREE.MathUtils.lerp(20, 1380, tOut * tOut);
     const clamped = WorldCoordinates.clampToMap(this.desiredTarget.x, this.desiredTarget.z, dynamicMargin);
     this.desiredTarget.x = clamped.x;
     this.desiredTarget.z = clamped.z;
@@ -159,20 +159,20 @@ export class CameraController {
    * Focus inside the 3D Walled Imperial Citadel Kingdom courtyard (frames full wall border + surrounding forest)
    */
   public focusInsideKingdom() {
-    this.desiredTarget.set(800, 10.0, 802);
+    this.desiredTarget.set(1600, 10.0, 1602);
     this.desiredZoom = 0.5016;
     this.desiredYaw = 0.0;
     this.desiredPitch = 0.78;
   }
 
   /**
-   * Zoom Out 100 (Full 100% strategic realm overview across the 1600x1600 continent)
+   * Zoom Out 100 (Full 100% strategic realm overview across the 3200x3200 continent)
    */
   public zoomOutTo100() {
-    this.desiredTarget.set(800, this.terrainGenerator.getHeightAt(800, 800), 800);
+    this.desiredTarget.set(1600, this.terrainGenerator.getHeightAt(1600, 1600), 1600);
     this.desiredZoom = this.minZoom;
     this.desiredYaw = 0.0;
-    this.desiredPitch = 0.92;
+    this.desiredPitch = 0.98;
   }
 
   /**

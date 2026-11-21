@@ -87,7 +87,7 @@ define(['./workbox-afac4cd2'], (function (workbox) { 'use strict';
     "revision": "baee7932c47b483452047731c7d9d990"
   }, {
     "url": "index.html",
-    "revision": "7926bec5bfcf03e7d218d4b2ed1499c5"
+    "revision": "85fa5950568dff5fb0965d992b5013a1"
   }, {
     "url": "favicon-32x32.png",
     "revision": "df67d26c20dc0d4f19da8ed3e04f0ddb"
@@ -98,16 +98,34 @@ define(['./workbox-afac4cd2'], (function (workbox) { 'use strict';
     "url": "assets/workbox-window.prod.es5-Bd17z0YL.js",
     "revision": null
   }, {
-    "url": "assets/index-BciiITja.js",
+    "url": "assets/three-vendor-wzbMkuP-.js",
+    "revision": null
+  }, {
+    "url": "assets/index-BYAdFROy.js",
     "revision": null
   }, {
     "url": "assets/index-BRYu6DSd.css",
     "revision": null
   }, {
+    "url": "assets/StrategicWorldMapModal-BJyy6aSv.js",
+    "revision": null
+  }, {
+    "url": "assets/InsideKingdomView-BnUVq7gx.js",
+    "revision": null
+  }, {
+    "url": "assets/CommandHubDrawer-D5eEvy-W.js",
+    "revision": null
+  }, {
     "url": "assets/aistudio/screenshot_1_2be6e62f.png",
     "revision": null
   }, {
+    "url": "assets/aistudio/image_75c67cf1.png",
+    "revision": null
+  }, {
     "url": "assets/aistudio/image_3cae993f.png",
+    "revision": null
+  }, {
+    "url": "assets/aistudio/Floating_Crystal_Shrine_0794aa82.png",
     "revision": null
   }, {
     "url": "assets/aistudio/Crystal_Alliance_Citadel_Strategy_Map_673bdea9.png",

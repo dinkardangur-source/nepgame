@@ -1,6 +1,6 @@
 {
   "name": "himalayan-realms",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Isometric Strategy Prototype set in Himalayan kingdoms",
   "type": "module",
   "scripts": {
@@ -8,8 +8,9 @@
     "start": "node server.ts",
     "build": "vite build",
     "lint": "tsc --noEmit",
-    "android:sync": "npm run build && npx cap sync android",
-    "android:apk": "npm run build && npx cap sync android && cd android && chmod +x gradlew && ./gradlew assembleDebug && cd .. && mkdir -p android-apk && cp android/app/build/outputs/apk/debug/app-debug.apk android-apk/Himalayan-Realms-debug.apk"
+    "version:bump": "node scripts/bump-apk-version.mjs",
+    "android:sync": "node scripts/bump-apk-version.mjs --sync && npm run build && npx cap sync android",
+    "android:apk": "node scripts/bump-apk-version.mjs && npm run build && npx cap sync android && cd android && chmod +x gradlew && ./gradlew assembleDebug && cd .. && mkdir -p android-apk && cp android/app/build/outputs/apk/debug/app-debug.apk android-apk/Himalayan-Realms-debug.apk"
   },
   "dependencies": {
     "@capacitor/android": "^8.6.2",

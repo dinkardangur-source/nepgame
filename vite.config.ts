@@ -1,6 +1,23 @@
+import fs from 'fs';
+import path from 'path';
 import { defineConfig, type Plugin } from 'vite';
 import react from '@vitejs/plugin-react';
 import { VitePWA } from 'vite-plugin-pwa';
+
+function readApkVersionMeta(): { versionCode: number; versionName: string } {
+  try {
+    const raw = fs.readFileSync(path.resolve(process.cwd(), 'apk-version.json'), 'utf8');
+    const parsed = JSON.parse(raw);
+    if (typeof parsed.versionCode === 'number' && typeof parsed.versionName === 'string') {
+      return parsed;
+    }
+  } catch {
+    // Fallback defaults
+  }
+  return { versionCode: 2, versionName: '1.0.1' };
+}
+
+const apkMeta = readApkVersionMeta();
 
 function disableHmrWebSocketPlugin(): Plugin {
   let isHmrDisabled = false;
@@ -29,6 +46,10 @@ function disableHmrWebSocketPlugin(): Plugin {
 }
 
 export default defineConfig({
+  define: {
+    __APP_VERSION__: JSON.stringify(apkMeta.versionName),
+    __APK_VERSION_CODE__: JSON.stringify(apkMeta.versionCode),
+  },
   plugins: [
     disableHmrWebSocketPlugin(),
     react(),
@@ -116,5 +137,15 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     emptyOutDir: true,
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (id.includes('node_modules/three')) {
+            return 'three-vendor';
+          }
+          return undefined;
+        },
+      },
+    },
   },
 });
