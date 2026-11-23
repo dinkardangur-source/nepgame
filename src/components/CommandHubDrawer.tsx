@@ -7,6 +7,10 @@ import {
   EquipmentItem,
   GameBalanceConfig,
   HospitalQueueItem,
+  InfantryGearSlot,
+  InfantryGearState,
+  MAGAR_PROGRESSION_SPECS,
+  MAX_INFANTRY_GEAR_RANK,
   NEPALESE_HEROES,
   PlayerAllianceIdentity,
   PlayerResources,
@@ -20,7 +24,10 @@ import {
   TroopLevel,
   TroopStack,
   calculateArmyMetrics,
+  createInitialInfantryGear,
   getHeroById,
+  getInfantryGearUpgradeCost,
+  getInfantryTierMultipliers,
   getRecommendedMonsterBand,
   normalizeAllianceTag,
   validateAllianceAlias,
@@ -30,6 +37,9 @@ import {
   WORLD_MONSTERS,
   WORLD_RESOURCES,
 } from '../game/WorldCoordinates';
+import { MonsterPortrait } from './MonsterPortrait';
+import { HeroPortrait } from './HeroPortrait';
+import { MagarChartSprite } from './MagarChartSprite';
 
 export type CommandHubTab =
   | 'resources'
@@ -116,6 +126,8 @@ interface CommandHubDrawerProps {
   onUpdateAllianceIdentity: (tag: string, alias: string) => boolean;
   shrineRuleStatus: AllianceShrineRuleStatus;
   onRelinquishStructure: (structureId: string) => void;
+  infantryGear?: InfantryGearState;
+  onUpgradeInfantryGear?: (level: TroopLevel, slot: InfantryGearSlot) => void;
   onShowToast?: (msg: string) => void;
 }
 
@@ -200,12 +212,15 @@ export const CommandHubDrawer: React.FC<CommandHubDrawerProps> = ({
   onUpdateAllianceIdentity,
   shrineRuleStatus,
   onRelinquishStructure,
+  infantryGear,
+  onUpgradeInfantryGear,
   onShowToast,
 }) => {
   const [resFilter, setResFilter] = useState<'all' | ResourceKind>('all');
   const [trainClass, setTrainClass] = useState<TroopClassId>('infantry');
   const [trainLevel, setTrainLevel] = useState<TroopLevel>(1);
   const [trainQty, setTrainQty] = useState<number>(100);
+  const [selectedMagarTier, setSelectedMagarTier] = useState<TroopLevel>(3);
   const [shrineTierTab, setShrineTierTab] = useState<'shrine_c' | 'shrine_b' | 'shrine_a'>('shrine_c');
   const [deployQtyByClass, setDeployQtyByClass] = useState<Record<TroopClassId, number>>({
     infantry: 250,
@@ -218,14 +233,19 @@ export const CommandHubDrawer: React.FC<CommandHubDrawerProps> = ({
   const [tagDraft, setTagDraft] = useState<string>(playerAlliance.tag);
   const [aliasDraft, setAliasDraft] = useState<string>(playerAlliance.alias);
 
+  const activeInfantryGear = useMemo(
+    () => infantryGear || createInitialInfantryGear(),
+    [infantryGear]
+  );
+
   useEffect(() => {
     setTagDraft(playerAlliance.tag);
     setAliasDraft(playerAlliance.alias);
   }, [playerAlliance.tag, playerAlliance.alias]);
 
   const standingArmyMetrics = useMemo(
-    () => calculateArmyMetrics(inventoryToStacks(troopInventory), balanceConfig, bonuses),
-    [troopInventory, balanceConfig, bonuses]
+    () => calculateArmyMetrics(inventoryToStacks(troopInventory), balanceConfig, bonuses, null, activeInfantryGear),
+    [troopInventory, balanceConfig, bonuses, activeInfantryGear]
   );
 
   const totalWoundedCount = useMemo(() => {
@@ -929,20 +949,31 @@ export const CommandHubDrawer: React.FC<CommandHubDrawerProps> = ({
                   const respSec = live?.respawnAt ? Math.max(0, (live.respawnAt - nowMs) / 1000) : 0;
 
                   return (
-                    <div key={mon.id} style={{ ...panelBg, padding: '9px 10px', display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                        <span style={{ font: "700 12.5px 'Barlow Condensed', sans-serif", color: '#fca5a5' }}>
-                          {mon.name} (Lv.{mon.level})
-                        </span>
-                        <span style={{ fontSize: '10px', color: isDefeated ? '#fbbf24' : '#34d399', fontWeight: 700 }}>
-                          {isDefeated ? `Respawn ${formatDurationSec(respSec)}` : 'ALIVE'}
-                        </span>
-                      </div>
-                      <div style={{ fontSize: '11px', color: '#e2e8f0', fontVariantNumeric: 'tabular-nums' }}>
-                        HP: {curHp.toLocaleString()} / {maxHp.toLocaleString()} · ATK {mCfg.attack.toLocaleString()} · DEF {mCfg.defense.toLocaleString()}
-                      </div>
-                      <div style={{ fontSize: '10px', color: '#94a3b8', fontVariantNumeric: 'tabular-nums' }}>
-                        Reward Base: {mCfg.suggestedReward.toLocaleString()} + XP {mCfg.xpReward} · [{Math.round(mon.position[0])}, {Math.round(mon.position[2])}]
+                    <div key={mon.id} style={{ ...panelBg, padding: '9px 10px', display: 'flex', flexDirection: 'column', gap: '5px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <MonsterPortrait
+                          subtype={mon.subtype}
+                          level={mon.level}
+                          name={mon.name}
+                          size={40}
+                          rounded={8}
+                        />
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '6px' }}>
+                            <span style={{ font: "700 12.5px 'Barlow Condensed', sans-serif", color: '#fca5a5', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                              {mon.name} (Lv.{mon.level})
+                            </span>
+                            <span style={{ fontSize: '10px', color: isDefeated ? '#fbbf24' : '#34d399', fontWeight: 700, flexShrink: 0 }}>
+                              {isDefeated ? `Respawn ${formatDurationSec(respSec)}` : 'ALIVE'}
+                            </span>
+                          </div>
+                          <div style={{ fontSize: '10.5px', color: '#e2e8f0', fontVariantNumeric: 'tabular-nums' }}>
+                            HP: {curHp.toLocaleString()} / {maxHp.toLocaleString()} · ATK {mCfg.attack.toLocaleString()} · DEF {mCfg.defense.toLocaleString()}
+                          </div>
+                          <div style={{ fontSize: '10px', color: '#94a3b8', fontVariantNumeric: 'tabular-nums' }}>
+                            Reward Base: {mCfg.suggestedReward.toLocaleString()} + XP {mCfg.xpReward} · [{Math.round(mon.position[0])}, {Math.round(mon.position[2])}]
+                          </div>
+                        </div>
                       </div>
                       <button
                         type="button"
@@ -1036,14 +1067,71 @@ export const CommandHubDrawer: React.FC<CommandHubDrawerProps> = ({
                     2,
                     Math.ceil((row.trainSecondsPerUnit * trainQty) / Math.max(1, balanceConfig.simulationTimeScale / 4))
                   );
+                  const magarSpec = trainClass === 'infantry' ? MAGAR_PROGRESSION_SPECS[trainLevel] : null;
+                  const magarRanks = trainClass === 'infantry' ? activeInfantryGear[trainLevel] : null;
+                  const magarMults = trainClass === 'infantry' ? getInfantryTierMultipliers(trainLevel, activeInfantryGear) : null;
 
                   return (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', fontSize: '11.5px', fontVariantNumeric: 'tabular-nums' }}>
+                      {magarSpec && magarRanks && magarMults && (
+                        <div
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '10px',
+                            padding: '8px',
+                            borderRadius: '7px',
+                            background: 'rgba(2, 6, 23, 0.58)',
+                            border: `1px solid ${magarSpec.rarityColor}44`,
+                          }}
+                        >
+                          <div style={{ width: '64px', flexShrink: 0 }}>
+                            <MagarChartSprite
+                              level={trainLevel}
+                              part="warrior"
+                              alt={`Magar Lv.${trainLevel} ${magarSpec.tierName}`}
+                              height={76}
+                              accentColor={magarSpec.rarityColor}
+                            />
+                          </div>
+                          <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                            <div style={{ font: "800 13px 'Barlow Condensed', sans-serif", color: magarSpec.rarityColor }}>
+                              Lv.{trainLevel} {magarSpec.tierName.toUpperCase()} · GEAR FORGE +{magarRanks.weapon + magarRanks.shield + magarRanks.armor}/{MAX_INFANTRY_GEAR_RANK * 3}
+                            </div>
+                            <div style={{ fontSize: '10.5px', color: '#cbd5e1' }}>
+                              {magarSpec.weaponName} · {magarSpec.shieldName} · {magarSpec.armorName}
+                            </div>
+                            <div style={{ fontSize: '10.5px', color: '#86efac' }}>
+                              Forged Bonus: +{Math.round((magarMults.atkMult - 1) * 100)}% ATK · +{Math.round(magarMults.shieldMitigationPct * 100)}% DEF · +{Math.round((magarMults.hpMult - 1) * 100)}% HP
+                            </div>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSelectedMagarTier(trainLevel);
+                              onSelectTab('troops');
+                            }}
+                            style={{
+                              minHeight: '38px',
+                              padding: '5px 10px',
+                              borderRadius: '6px',
+                              background: 'rgba(217, 119, 6, 0.28)',
+                              border: '1px solid rgba(251, 191, 36, 0.65)',
+                              color: '#fef08a',
+                              font: "700 11px 'Barlow Condensed', sans-serif",
+                              cursor: 'pointer',
+                              flexShrink: 0,
+                            }}
+                          >
+                            Forge Gear →
+                          </button>
+                        </div>
+                      )}
                       <div style={{ color: '#94a3b8' }}>
                         {cfg.roleSummary}
                       </div>
                       <div style={{ color: '#e2e8f0' }}>
-                        Stats/Unit: Power {row.power} · HP {row.hp} · ATK {row.attack} · Load {row.load} · Gather {row.gatheringSpeed}/m · March {row.marchingSpeed} t/m
+                        Stats/Unit: Power {magarMults ? Math.round(row.power * magarMults.powerMult) : row.power} · HP {magarMults ? Math.round(row.hp * magarMults.hpMult) : row.hp} · ATK {magarMults ? Math.round(row.attack * magarMults.atkMult) : row.attack} · Load {row.load} · Gather {row.gatheringSpeed}/m · March {row.marchingSpeed} t/m
                       </div>
                       <div style={{ display: 'flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap' }}>
                         <input
@@ -1261,7 +1349,7 @@ export const CommandHubDrawer: React.FC<CommandHubDrawerProps> = ({
                     Select any available Hero in the Battalion Dispatch panel when targeting a Node, Monster, or Enemy Castle
                   </span>
                 </div>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: '8px' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(230px, 1fr))', gap: '8px' }}>
                   {NEPALESE_HEROES.map((hero) => {
                     const activeMission = activeMarches.find((m) => m.heroId === hero.id);
                     return (
@@ -1273,43 +1361,297 @@ export const CommandHubDrawer: React.FC<CommandHubDrawerProps> = ({
                           borderRadius: '7px',
                           padding: '8px 10px',
                           display: 'flex',
-                          flexDirection: 'column',
-                          gap: '4px',
+                          gap: '10px',
+                          alignItems: 'flex-start',
                         }}
                       >
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '6px' }}>
-                          <span style={{ font: "800 13px 'Barlow Condensed', sans-serif", color: hero.crestColor }}>
-                            {hero.name}
-                          </span>
-                          <span
-                            style={{
-                              fontSize: '9.5px',
-                              fontWeight: 700,
-                              padding: '1px 6px',
-                              borderRadius: '4px',
-                              background: activeMission ? 'rgba(180, 83, 9, 0.45)' : 'rgba(6, 95, 70, 0.5)',
-                              color: activeMission ? '#fde68a' : '#6ee7b7',
-                            }}
-                          >
-                            {activeMission ? 'ON MARCH' : 'READY'}
-                          </span>
-                        </div>
-                        <div style={{ fontSize: '10px', color: '#cbd5e1' }}>{hero.title}</div>
-                        <div style={{ fontSize: '10px', color: '#fde047', fontVariantNumeric: 'tabular-nums' }}>
-                          +{Math.round(hero.classAttackPct * 100)}% {hero.classBonusClass.toUpperCase()} ATK · +{Math.round(hero.attackPct * 100)}% ATK · +{Math.round(hero.hpPct * 100)}% HP
-                        </div>
-                        <div style={{ fontSize: '10px', color: '#86efac', fontVariantNumeric: 'tabular-nums' }}>
-                          +{Math.round(hero.gatherPct * 100)}% Gather · +{Math.round(hero.loadPct * 100)}% Load · +{Math.round(hero.marchPct * 100)}% March · +{Math.round(hero.siegeDamagePct * 100)}% Siege
-                        </div>
-                        {activeMission && (
-                          <div style={{ fontSize: '9.5px', color: '#fbbf24' }}>
-                            Leading march → {activeMission.targetName} ({activeMission.status})
+                        <HeroPortrait hero={hero} size={52} rounded={8} isLocked={Boolean(activeMission)} />
+                        <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: '3px' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '6px' }}>
+                            <span style={{ font: "800 13.5px 'Barlow Condensed', sans-serif", color: hero.crestColor, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                              {hero.name}
+                            </span>
+                            <span
+                              style={{
+                                fontSize: '9.5px',
+                                fontWeight: 700,
+                                color: activeMission ? '#fde68a' : '#6ee7b7',
+                                flexShrink: 0,
+                              }}
+                            >
+                              {activeMission ? 'ON MARCH' : 'READY'}
+                            </span>
                           </div>
-                        )}
+                          <div style={{ fontSize: '10px', color: '#cbd5e1' }}>{hero.title}</div>
+                          <div style={{ fontSize: '10px', color: '#fde047', fontVariantNumeric: 'tabular-nums' }}>
+                            +{Math.round(hero.classAttackPct * 100)}% {hero.classBonusClass.toUpperCase()} ATK · +{Math.round(hero.attackPct * 100)}% ATK · +{Math.round(hero.hpPct * 100)}% HP
+                          </div>
+                          <div style={{ fontSize: '10px', color: '#86efac', fontVariantNumeric: 'tabular-nums' }}>
+                            +{Math.round(hero.gatherPct * 100)}% Gather · +{Math.round(hero.loadPct * 100)}% Load · +{Math.round(hero.marchPct * 100)}% March · +{Math.round(hero.siegeDamagePct * 100)}% Siege
+                          </div>
+                          {activeMission && (
+                            <div style={{ fontSize: '9.5px', color: '#fbbf24' }}>
+                              Leading march → {activeMission.targetName} ({activeMission.status})
+                            </div>
+                          )}
+                        </div>
                       </div>
                     );
                   })}
                 </div>
+              </div>
+
+              {/* Magar Warrior Lv.1-5 Progression & Weapon/Shield/Armor Armory Forge */}
+              <div style={{ ...panelBg, padding: '12px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '6px' }}>
+                  <div>
+                    <div style={{ font: "800 15px 'Barlow Condensed', sans-serif", color: '#fef08a' }}>
+                      MAGAR WARRIOR PROGRESSION (LV.1–LV.5) · WEAPON, SHIELD & ARMOR FORGE
+                    </div>
+                    <div style={{ fontSize: '11px', color: '#94a3b8' }}>
+                      Select a Magar Infantry tier to inspect its chart progression and forge Khukuri, Wooden Shield, and Armor upgrades (+ATK, +DEF Mitigation, +HP) reflected in combat and 3D marching battalions.
+                    </div>
+                  </div>
+                  <div style={{ fontSize: '11px', color: '#fde047', fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>
+                    Stock: Wood {Math.floor(resources.wood).toLocaleString()} · Iron {Math.floor(resources.iron).toLocaleString()} · Gold {Math.floor(resources.gold).toLocaleString()} · Crystal {Math.floor(resources.crystal).toLocaleString()}
+                  </div>
+                </div>
+
+                {/* 5-Column Tier Selector with Cropped Warriors */}
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, minmax(110px, 1fr))', gap: '8px', overflowX: 'auto' }}>
+                  {TROOP_LEVELS.map((lv) => {
+                    const spec = MAGAR_PROGRESSION_SPECS[lv];
+                    const ranks = activeInfantryGear[lv];
+                    const mults = getInfantryTierMultipliers(lv, activeInfantryGear);
+                    const totalRank = ranks.weapon + ranks.shield + ranks.armor;
+                    const maxTotalRank = MAX_INFANTRY_GEAR_RANK * 3;
+                    const owned = troopInventory.infantry?.[lv] || 0;
+                    const isSelected = selectedMagarTier === lv;
+
+                    return (
+                      <button
+                        key={lv}
+                        type="button"
+                        onClick={() => setSelectedMagarTier(lv)}
+                        style={{
+                          padding: '7px',
+                          borderRadius: '8px',
+                          background: isSelected ? 'rgba(180, 83, 9, 0.24)' : 'rgba(2, 6, 23, 0.62)',
+                          border: isSelected ? `1.5px solid ${spec.rarityColor}` : '1px solid rgba(148, 163, 184, 0.22)',
+                          boxShadow: isSelected ? `0 0 12px ${spec.rarityColor}33` : 'none',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          gap: '5px',
+                          alignItems: 'center',
+                          cursor: 'pointer',
+                          textAlign: 'center',
+                        }}
+                      >
+                        <div style={{ display: 'flex', justifyContent: 'space-between', width: '100%', alignItems: 'center' }}>
+                          <span style={{ font: "800 12px 'Barlow Condensed', sans-serif", color: spec.rarityColor }}>
+                            Lv.{lv} {spec.tierName}
+                          </span>
+                          <span style={{ fontSize: '10px', color: '#fde047', fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>
+                            {totalRank}/{maxTotalRank}
+                          </span>
+                        </div>
+                        <MagarChartSprite
+                          level={lv}
+                          part="warrior"
+                          alt={`Lv.${lv} ${spec.tierName}`}
+                          height={112}
+                          accentColor={spec.rarityColor}
+                        />
+                        <div style={{ fontSize: '10px', color: '#e2e8f0', fontVariantNumeric: 'tabular-nums' }}>
+                          Owned: <strong>{owned.toLocaleString()}</strong>
+                        </div>
+                        <div style={{ fontSize: '9.5px', color: '#86efac', fontVariantNumeric: 'tabular-nums' }}>
+                          +{Math.round((mults.atkMult - 1) * 100)}% ATK · +{Math.round(mults.shieldMitigationPct * 100)}% DEF · +{Math.round((mults.hpMult - 1) * 100)}% HP
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {/* Selected Tier Armory Forge Panel */}
+                {(() => {
+                  const spec = MAGAR_PROGRESSION_SPECS[selectedMagarTier];
+                  const ranks = activeInfantryGear[selectedMagarTier];
+                  const mults = getInfantryTierMultipliers(selectedMagarTier, activeInfantryGear);
+                  const baseRow = balanceConfig.troops.infantry.levels[selectedMagarTier];
+                  const forgedAtk = Number((baseRow.attack * mults.atkMult).toFixed(1));
+                  const forgedHp = Math.round(baseRow.hp * mults.hpMult);
+                  const forgedPower = Math.round(baseRow.power * mults.powerMult);
+
+                  const slots: Array<{
+                    slot: InfantryGearSlot;
+                    part: 'weapon' | 'shield' | 'armor';
+                    label: string;
+                    itemName: string;
+                    statSummary: string;
+                    rank: number;
+                  }> = [
+                    {
+                      slot: 'weapon',
+                      part: 'weapon',
+                      label: 'INFANTRY WEAPON',
+                      itemName: spec.weaponName,
+                      statSummary: '+6% Attack per forge rank (max +18%)',
+                      rank: ranks.weapon,
+                    },
+                    {
+                      slot: 'shield',
+                      part: 'shield',
+                      label: 'DEFENSE SHIELD',
+                      itemName: spec.shieldName,
+                      statSummary: '+5% Damage Mitigation & +3% HP per rank',
+                      rank: ranks.shield,
+                    },
+                    {
+                      slot: 'armor',
+                      part: 'armor',
+                      label: 'BODY ARMOR',
+                      itemName: spec.armorName,
+                      statSummary: '+6% Unit HP & Armor Plating per rank',
+                      rank: ranks.armor,
+                    },
+                  ];
+
+                  return (
+                    <div
+                      style={{
+                        background: 'rgba(2, 6, 23, 0.56)',
+                        border: `1px solid ${spec.rarityColor}44`,
+                        borderRadius: '8px',
+                        padding: '10px',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: '9px',
+                      }}
+                    >
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
+                        <div>
+                          <div style={{ font: "800 14px 'Barlow Condensed', sans-serif", color: spec.rarityColor }}>
+                            LV.{selectedMagarTier} {spec.tierName.toUpperCase()} ARMORY · {spec.loreNote}
+                          </div>
+                        </div>
+                        <div style={{ fontSize: '11.5px', color: '#fef08a', fontVariantNumeric: 'tabular-nums' }}>
+                          Effective Unit: Power {forgedPower} · HP {forgedHp} · ATK {forgedAtk} · Shield DEF +{Math.round(mults.shieldMitigationPct * 100)}%
+                        </div>
+                      </div>
+
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '8px' }}>
+                        {slots.map((s) => {
+                          const cost = getInfantryGearUpgradeCost(selectedMagarTier, s.slot, s.rank);
+                          const canAfford =
+                            !cost ||
+                            (resources.wood >= cost.wood &&
+                              resources.iron >= cost.iron &&
+                              resources.gold >= cost.gold &&
+                              resources.crystal >= cost.crystal);
+
+                          return (
+                            <div
+                              key={s.slot}
+                              style={{
+                                background: 'rgba(15, 23, 42, 0.72)',
+                                border: '1px solid rgba(148, 163, 184, 0.22)',
+                                borderRadius: '7px',
+                                padding: '8px',
+                                display: 'flex',
+                                flexDirection: 'column',
+                                gap: '6px',
+                              }}
+                            >
+                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                <span style={{ font: "700 10.5px 'Barlow Condensed', sans-serif", color: '#94a3b8', letterSpacing: '0.04em' }}>
+                                  {s.label}
+                                </span>
+                                <span style={{ fontSize: '10.5px', fontWeight: 700, color: s.rank >= MAX_INFANTRY_GEAR_RANK ? '#facc15' : '#38bdf8', fontVariantNumeric: 'tabular-nums' }}>
+                                  Rank +{s.rank}/{MAX_INFANTRY_GEAR_RANK}
+                                </span>
+                              </div>
+
+                              <MagarChartSprite
+                                level={selectedMagarTier}
+                                part={s.part}
+                                alt={s.itemName}
+                                height={74}
+                                accentColor={spec.rarityColor}
+                              />
+
+                              <div style={{ font: "800 12.5px 'Barlow Condensed', sans-serif", color: '#f8fafc' }}>
+                                {s.itemName}
+                              </div>
+                              <div style={{ fontSize: '10px', color: '#86efac' }}>
+                                {s.statSummary}
+                              </div>
+
+                              {/* Rank pips */}
+                              <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
+                                {[1, 2, 3].map((pip) => (
+                                  <div
+                                    key={pip}
+                                    style={{
+                                      flex: 1,
+                                      height: '5px',
+                                      borderRadius: '2px',
+                                      background: s.rank >= pip ? spec.rarityColor : 'rgba(148, 163, 184, 0.2)',
+                                    }}
+                                  />
+                                ))}
+                              </div>
+
+                              {cost ? (
+                                <>
+                                  <div style={{ fontSize: '10px', color: '#cbd5e1', fontVariantNumeric: 'tabular-nums' }}>
+                                    Cost: {cost.wood.toLocaleString()} Wood · {cost.iron.toLocaleString()} Iron · {cost.gold.toLocaleString()} Gold
+                                    {cost.crystal > 0 ? ` · ${cost.crystal.toLocaleString()} Crystal` : ''}
+                                  </div>
+                                  <button
+                                    type="button"
+                                    disabled={!canAfford}
+                                    onClick={() => onUpgradeInfantryGear?.(selectedMagarTier, s.slot)}
+                                    style={{
+                                      minHeight: '40px',
+                                      borderRadius: '6px',
+                                      background: canAfford
+                                        ? 'linear-gradient(180deg, #d97706, #b45309)'
+                                        : 'rgba(30, 41, 59, 0.7)',
+                                      border: canAfford ? '1px solid #fde047' : '1px solid rgba(148, 163, 184, 0.2)',
+                                      color: canAfford ? '#fef08a' : '#64748b',
+                                      font: "800 12px 'Barlow Condensed', sans-serif",
+                                      letterSpacing: '0.04em',
+                                      cursor: canAfford ? 'pointer' : 'not-allowed',
+                                    }}
+                                  >
+                                    {canAfford ? `FORGE UPGRADE +${s.rank + 1}` : 'NEED RESOURCES'}
+                                  </button>
+                                </>
+                              ) : (
+                                <div
+                                  style={{
+                                    minHeight: '40px',
+                                    display: 'grid',
+                                    placeItems: 'center',
+                                    borderRadius: '6px',
+                                    background: 'rgba(234, 179, 8, 0.14)',
+                                    border: '1px solid rgba(250, 204, 21, 0.45)',
+                                    color: '#facc15',
+                                    font: "800 12px 'Barlow Condensed', sans-serif",
+                                    letterSpacing: '0.05em',
+                                  }}
+                                >
+                                  MASTERWORK MAXED (+3)
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  );
+                })()}
               </div>
 
               {CLASS_ORDER.map((cls) => {
@@ -1333,6 +1675,7 @@ export const CommandHubDrawer: React.FC<CommandHubDrawerProps> = ({
                             <th style={{ padding: '4px 6px', color: '#facc15' }}>Power</th>
                             <th style={{ padding: '4px 6px', color: '#34d399' }}>HP</th>
                             <th style={{ padding: '4px 6px', color: '#f87171' }}>Attack</th>
+                            {cls === 'infantry' && <th style={{ padding: '4px 6px', color: '#38bdf8' }}>Gear / DEF</th>}
                             <th style={{ padding: '4px 6px', color: '#fde68a' }}>Load</th>
                             <th style={{ padding: '4px 6px', color: '#38bdf8' }}>Gather Speed /min</th>
                             <th style={{ padding: '4px 6px', color: '#c084fc' }}>March Speed t/min</th>
@@ -1345,12 +1688,23 @@ export const CommandHubDrawer: React.FC<CommandHubDrawerProps> = ({
                             const r = tCfg.levels[lv];
                             const owned = troopInventory[cls]?.[lv] || 0;
                             const [mMin, mMax] = getRecommendedMonsterBand(lv);
+                            const gMult = cls === 'infantry' ? getInfantryTierMultipliers(lv, activeInfantryGear) : null;
+                            const effPower = gMult ? Math.round(r.power * gMult.powerMult) : r.power;
+                            const effHp = gMult ? Math.round(r.hp * gMult.hpMult) : r.hp;
+                            const effAtk = gMult ? Number((r.attack * gMult.atkMult).toFixed(1)) : r.attack;
                             return (
                               <tr key={lv} style={{ borderBottom: '1px solid rgba(255,255,255,0.06)', textAlign: 'right' }}>
-                                <td style={{ textAlign: 'left', padding: '4px 6px', fontWeight: 700, color: '#fef08a' }}>Lv.{lv}</td>
-                                <td style={{ padding: '4px 6px', color: '#facc15', fontWeight: 700 }}>{r.power}</td>
-                                <td style={{ padding: '4px 6px' }}>{r.hp}</td>
-                                <td style={{ padding: '4px 6px' }}>{r.attack}</td>
+                                <td style={{ textAlign: 'left', padding: '4px 6px', fontWeight: 700, color: '#fef08a' }}>
+                                  Lv.{lv}{cls === 'infantry' ? ` (${MAGAR_PROGRESSION_SPECS[lv].tierName})` : ''}
+                                </td>
+                                <td style={{ padding: '4px 6px', color: '#facc15', fontWeight: 700 }}>{effPower}</td>
+                                <td style={{ padding: '4px 6px' }}>{effHp}</td>
+                                <td style={{ padding: '4px 6px' }}>{effAtk}</td>
+                                {cls === 'infantry' && (
+                                  <td style={{ padding: '4px 6px', color: '#38bdf8' }}>
+                                    +{Math.round((gMult?.shieldMitigationPct || 0) * 100)}% DEF ({activeInfantryGear[lv].weapon}/{activeInfantryGear[lv].shield}/{activeInfantryGear[lv].armor})
+                                  </td>
+                                )}
                                 <td style={{ padding: '4px 6px' }}>{r.load}</td>
                                 <td style={{ padding: '4px 6px' }}>{r.gatheringSpeed.toFixed(1)}</td>
                                 <td style={{ padding: '4px 6px' }}>{r.marchingSpeed.toFixed(1)}</td>
@@ -1544,23 +1898,28 @@ export const CommandHubDrawer: React.FC<CommandHubDrawerProps> = ({
                   const pct = Math.min(100, Math.round((elapsedMs / Math.max(1, march.phaseDurationMs)) * 100));
                   const remSec = Math.max(0, (march.phaseDurationMs - elapsedMs) / 1000);
                   const heroCfg = getHeroById(march.heroId);
-                  const mMetrics = calculateArmyMetrics(march.stacks, balanceConfig, bonuses, heroCfg);
+                  const mMetrics = calculateArmyMetrics(march.stacks, balanceConfig, bonuses, heroCfg, activeInfantryGear);
 
                   return (
                     <div key={march.id} style={{ ...panelBg, padding: '10px 12px', display: 'flex', flexDirection: 'column', gap: '6px', fontVariantNumeric: 'tabular-nums' }}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
-                        <div>
-                          <span style={{ font: "800 14px 'Barlow Condensed', sans-serif", color: '#fef08a' }}>
-                            {march.targetName} (Lv.{march.targetLevel})
-                          </span>
-                          {(march.heroName || heroCfg?.name) && (
-                            <span style={{ marginLeft: '8px', fontSize: '10.5px', color: heroCfg?.crestColor || '#fde047', fontWeight: 700 }}>
-                              · Lead Hero: {march.heroName || heroCfg?.name}
-                            </span>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                          {(heroCfg || march.heroId || march.heroName) && (
+                            <HeroPortrait hero={heroCfg} heroId={march.heroId} heroName={march.heroName} size={36} rounded={7} />
                           )}
-                          <span style={{ marginLeft: '8px', fontSize: '11px', color: '#38bdf8', textTransform: 'uppercase', fontWeight: 700 }}>
-                            · {march.status} ({formatDurationSec(remSec)})
-                          </span>
+                          <div>
+                            <span style={{ font: "800 14px 'Barlow Condensed', sans-serif", color: '#fef08a' }}>
+                              {march.targetName} (Lv.{march.targetLevel})
+                            </span>
+                            {(march.heroName || heroCfg?.name) && (
+                              <span style={{ marginLeft: '8px', fontSize: '10.5px', color: heroCfg?.crestColor || '#fde047', fontWeight: 700 }}>
+                                · Lead Hero: {march.heroName || heroCfg?.name}
+                              </span>
+                            )}
+                            <span style={{ marginLeft: '8px', fontSize: '11px', color: '#38bdf8', textTransform: 'uppercase', fontWeight: 700 }}>
+                              · {march.status} ({formatDurationSec(remSec)})
+                            </span>
+                          </div>
                         </div>
                         {march.status !== 'returning' && (
                           <button

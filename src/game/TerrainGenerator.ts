@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import {
   WORLD_BOUNDS,
   RESERVED_PLOTS,
+  WORLD_MONSTERS,
   WORLD_RESOURCES,
   NILE_DELTA_FORK_Z,
   NILE_HIGHWAY_BRIDGES,
@@ -67,11 +68,11 @@ export const MODULAR_BIOME_SPECS: Record<TerrainBiomeType, BiomeTileSpec> = {
     id: 'green_plains',
     name: 'Green Plains',
     shortName: 'Plains',
-    colorHex: '#3f7638',
+    colorHex: '#438139',
     skirtColorHex: '#2f5929',
-    roughness: 0.82,
-    metalness: 0.05,
-    normalScale: 0.75,
+    roughness: 0.86,
+    metalness: 0.03,
+    normalScale: 0.85,
     movementCost: 1.0,
     passable: true,
     description: 'Smooth pastoral alpine valley turf ideal for rapid cavalry maneuvers and citadel foundations.',
@@ -81,11 +82,11 @@ export const MODULAR_BIOME_SPECS: Record<TerrainBiomeType, BiomeTileSpec> = {
     id: 'grass',
     name: 'Verdant Steppe Grass',
     shortName: 'Grass',
-    colorHex: '#4f883d',
+    colorHex: '#55963e',
     skirtColorHex: '#3b662d',
-    roughness: 0.78,
-    metalness: 0.05,
-    normalScale: 0.85,
+    roughness: 0.84,
+    metalness: 0.03,
+    normalScale: 0.95,
     movementCost: 1.0,
     passable: true,
     description: 'Lush highland meadow grass with wildflower clusters and dense turf blades.',
@@ -95,10 +96,10 @@ export const MODULAR_BIOME_SPECS: Record<TerrainBiomeType, BiomeTileSpec> = {
     id: 'forest_floor',
     name: 'Deodar Forest Floor',
     shortName: 'Forest',
-    colorHex: '#2b4b29',
+    colorHex: '#294d27',
     skirtColorHex: '#1f361e',
-    roughness: 0.88,
-    metalness: 0.04,
+    roughness: 0.9,
+    metalness: 0.03,
     normalScale: 0.95,
     movementCost: 1.4,
     passable: true,
@@ -109,11 +110,11 @@ export const MODULAR_BIOME_SPECS: Record<TerrainBiomeType, BiomeTileSpec> = {
     id: 'hills',
     name: 'Highland Hills',
     shortName: 'Hills',
-    colorHex: '#5e7a42',
+    colorHex: '#5f8741',
     skirtColorHex: '#465931',
-    roughness: 0.80,
-    metalness: 0.08,
-    normalScale: 0.90,
+    roughness: 0.85,
+    metalness: 0.05,
+    normalScale: 0.95,
     movementCost: 1.5,
     passable: true,
     description: 'Rolling highland knolls with smooth elevation transitions and strategic vantage points.',
@@ -226,6 +227,7 @@ export class TerrainGenerator {
   public mistParticles: Array<{ mesh: THREE.Mesh; baseY: number; phase: number; speed: number; rotSpeed: number }> = [];
   public leylineMaterial!: THREE.MeshStandardMaterial;
   public terrainMaterial!: THREE.MeshStandardMaterial;
+  private grassWindUniform = { value: 0 };
 
   // Spatial Tile Constants
   public static readonly HEX_RADIUS = 22.0;
@@ -614,9 +616,9 @@ export class TerrainGenerator {
       vertexColors: true,
       map: detailAlbedo,
       normalMap: normalMap,
-      normalScale: new THREE.Vector2(1.05, 1.05),
-      roughness: 0.87,
-      metalness: 0.04,
+      normalScale: new THREE.Vector2(1.15, 1.15),
+      roughness: 0.90,
+      metalness: 0.02,
       flatShading: false,
     });
 
@@ -1245,6 +1247,22 @@ export class TerrainGenerator {
           break;
         }
       }
+      if (!isNearPlot) {
+        for (const mon of WORLD_MONSTERS) {
+          if (Math.hypot(rx - mon.position[0], rz - mon.position[2]) < 16) {
+            isNearPlot = true;
+            break;
+          }
+        }
+      }
+      if (!isNearPlot) {
+        for (const res of WORLD_RESOURCES) {
+          if (Math.hypot(rx - res.position[0], rz - res.position[2]) < 14) {
+            isNearPlot = true;
+            break;
+          }
+        }
+      }
       if (isNearPlot) continue;
       if (this.getDistanceToRoads(rx, rz) < 10.0) continue;
 
@@ -1316,6 +1334,173 @@ export class TerrainGenerator {
     boulderInst.computeBoundingSphere();
 
     this.vegetationGroup.add(trunkInst, coneLowInst, coneHighInst, boulderInst);
+
+    // Hardware-Instanced 3D Meadow Grass Tuft Clumps (1 draw call, GPU breeze sway)
+    const grassGeo = this.createGrassTuftGeometry();
+    const grassMat = new THREE.MeshStandardMaterial({
+      vertexColors: true,
+      roughness: 0.88,
+      metalness: 0.02,
+      side: THREE.DoubleSide,
+    });
+    grassMat.onBeforeCompile = (shader) => {
+      shader.uniforms.uTime = this.grassWindUniform;
+      shader.vertexShader = `uniform float uTime;\n${shader.vertexShader}`.replace(
+        '#include <begin_vertex>',
+        `#include <begin_vertex>
+        float bladeTip = clamp(position.y / 1.25, 0.0, 1.0);
+        #ifdef USE_INSTANCING
+          vec2 worldAnchor = instanceMatrix[3].xz;
+        #else
+          vec2 worldAnchor = position.xz;
+        #endif
+        float gust = sin(uTime * 1.9 + worldAnchor.x * 0.035 + worldAnchor.y * 0.028);
+        float microFlutter = cos(uTime * 3.1 + worldAnchor.x * 0.09);
+        transformed.x += (gust * 0.16 + microFlutter * 0.05) * bladeTip * bladeTip;
+        transformed.z += (gust * 0.11 - microFlutter * 0.04) * bladeTip * bladeTip;`
+      );
+    };
+
+    const MAX_GRASS_TUFTS = 5600;
+    const grassInst = new THREE.InstancedMesh(grassGeo, grassMat, MAX_GRASS_TUFTS);
+    grassInst.castShadow = false;
+    grassInst.receiveShadow = true;
+
+    let grassIdx = 0;
+    let grassSeed = 9103;
+    const grassRand = () => {
+      grassSeed = (grassSeed * 9301 + 49297) % 233280;
+      return grassSeed / 233280;
+    };
+
+    const grassPalette = ['#4b923c', '#5ca444', '#397b34', '#6bb048', '#41853b'];
+    const baseGrassCol = new THREE.Color();
+
+    for (let i = 0; i < 8200 && grassIdx < MAX_GRASS_TUFTS; i++) {
+      const gx = 30 + grassRand() * 3140;
+      const gz = 30 + grassRand() * 3140;
+
+      // Keep central citadel courtyard clear
+      if (Math.hypot(gx - 1600, gz - 1600) < 92) continue;
+
+      let nearReserved = false;
+      for (const plot of RESERVED_PLOTS) {
+        if (Math.hypot(gx - plot.position[0], gz - plot.position[2]) < plot.radius + 11.0) {
+          nearReserved = true;
+          break;
+        }
+      }
+      if (nearReserved) continue;
+      if (this.getDistanceToRoads(gx, gz) < 10.5) continue;
+
+      const nile = getDistanceToNile(gx, gz);
+      if (nile.distBeyondWater < 4.8) continue;
+
+      const gy = this.getHeightAt(gx, gz);
+      const hR = this.getHeightAt(Math.min(3199.5, gx + 3), gz);
+      const hU = this.getHeightAt(gx, Math.min(3199.5, gz + 3));
+      const slope = Math.hypot(gy - hR, gy - hU);
+      if (slope > 2.6 || gy > 30.0) continue;
+
+      const sXZ = 0.85 + grassRand() * 0.75;
+      const sY = 0.75 + grassRand() * 0.7;
+      dummy.position.set(gx, gy - 0.04, gz);
+      dummy.rotation.set(
+        (grassRand() - 0.5) * 0.14,
+        grassRand() * Math.PI * 2,
+        (grassRand() - 0.5) * 0.14
+      );
+      dummy.scale.set(sXZ, sY, sXZ);
+      dummy.updateMatrix();
+      grassInst.setMatrixAt(grassIdx, dummy.matrix);
+
+      const pick = grassPalette[Math.floor(grassRand() * grassPalette.length)];
+      baseGrassCol.set(pick);
+      if (nile.distBeyondWater < 42.0) {
+        baseGrassCol.lerp(this._fertileCol, 0.25);
+      }
+      baseGrassCol.offsetHSL((grassRand() - 0.5) * 0.025, 0.04, (grassRand() - 0.5) * 0.06);
+      grassInst.setColorAt(grassIdx, baseGrassCol);
+
+      grassIdx++;
+    }
+
+    grassInst.count = grassIdx;
+    grassInst.instanceMatrix.needsUpdate = true;
+    if (grassInst.instanceColor) grassInst.instanceColor.needsUpdate = true;
+    grassInst.computeBoundingSphere();
+
+    this.vegetationGroup.add(grassInst);
+  }
+
+  /**
+   * Creates a 5-blade splayed 3D grass tuft clump geometry anchored at y=0
+   * with darker soil-root vertex colors fading to sunlit meadow-tip colors.
+   */
+  private createGrassTuftGeometry(): THREE.BufferGeometry {
+    const positions: number[] = [];
+    const normals: number[] = [];
+    const colors: number[] = [];
+    const indices: number[] = [];
+
+    const blades = 5;
+    const baseCol = new THREE.Color('#4d6b38');
+    const tipCol = new THREE.Color('#d8f5a2');
+
+    for (let b = 0; b < blades; b++) {
+      const yaw = (b / blades) * Math.PI * 2 + (b % 2) * 0.32;
+      const cosY = Math.cos(yaw);
+      const sinY = Math.sin(yaw);
+
+      const halfW = 0.24;
+      const height = 0.92 + (b % 3) * 0.18;
+      const lean = 0.42 + (b % 2) * 0.18;
+      const rootRadius = 0.12;
+
+      const rx = cosY * rootRadius;
+      const rz = sinY * rootRadius;
+
+      // Perpendicular width axis
+      const px = -sinY * halfW;
+      const pz = cosY * halfW;
+
+      // Root left, root right, mid left, mid right, tip
+      const vBase = b * 5;
+      positions.push(
+        rx - px, 0, rz - pz,
+        rx + px, 0, rz + pz,
+        rx + cosY * (lean * 0.45) - px * 0.55, height * 0.55, rz + sinY * (lean * 0.45) - pz * 0.55,
+        rx + cosY * (lean * 0.45) + px * 0.55, height * 0.55, rz + sinY * (lean * 0.45) + pz * 0.55,
+        rx + cosY * lean, height, rz + sinY * lean
+      );
+
+      // Smooth upward-biased normals for soft meadow shading
+      for (let v = 0; v < 5; v++) {
+        normals.push(cosY * 0.2, 0.96, sinY * 0.2);
+      }
+
+      const midCol = baseCol.clone().lerp(tipCol, 0.55);
+      colors.push(
+        baseCol.r, baseCol.g, baseCol.b,
+        baseCol.r, baseCol.g, baseCol.b,
+        midCol.r, midCol.g, midCol.b,
+        midCol.r, midCol.g, midCol.b,
+        tipCol.r, tipCol.g, tipCol.b
+      );
+
+      indices.push(
+        vBase + 0, vBase + 1, vBase + 2,
+        vBase + 1, vBase + 3, vBase + 2,
+        vBase + 2, vBase + 3, vBase + 4
+      );
+    }
+
+    const geo = new THREE.BufferGeometry();
+    geo.setIndex(indices);
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+    geo.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
+    geo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+    return geo;
   }
 
   /**
@@ -1656,6 +1841,8 @@ export class TerrainGenerator {
    * Living Animation Update for Terrain (LOD Chunks, Flowing Nile River, High-Ridge Mist)
    */
   public updateTerrainOverflow(delta: number, elapsed: number, camera?: THREE.Camera) {
+    this.grassWindUniform.value = elapsed;
+
     if (this.currentLodMode === 'auto' && camera) {
       for (const lod of this.lodChunks) {
         lod.update(camera);

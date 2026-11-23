@@ -34,7 +34,11 @@ import {
   GameBalanceConfig,
   HospitalQueueItem,
   INITIAL_EQUIPMENT_CATALOG,
+  InfantryGearSlot,
+  InfantryGearState,
   KINGDOM_SIM_STORAGE_KEY,
+  MAGAR_PROGRESSION_SPECS,
+  MAX_INFANTRY_GEAR_RANK,
   PlayerAllianceIdentity,
   PlayerResources,
   ResearchState,
@@ -50,15 +54,18 @@ import {
   calculateMarchTiming,
   calculateResourceGatherTiming,
   createEmptyTroopInventory,
+  createInitialInfantryGear,
   createInitialTroopInventory,
   evaluateAllianceShrineRules,
   getCalculatedBonuses,
   getEnemyCastleMaxHp,
   getHeroById,
+  getInfantryGearUpgradeCost,
   inferStructureKeyFromId,
   loadAllianceIdentity,
   loadBalanceConfig,
   normalizeAllianceTag,
+  normalizeInfantryGear,
   resetBalanceConfig,
   resolveCastleSiegeCombat,
   resolveGarrisonDefenseBattle,
@@ -98,6 +105,7 @@ interface PersistedSimState {
   nodeStates: Record<string, LiveNodeStatus>;
   monsterStates: Record<string, LiveMonsterStatus>;
   castleStates?: Record<string, LiveCastleStatus>;
+  infantryGear?: InfantryGearState;
   commanderXp: number;
 }
 
@@ -263,6 +271,7 @@ function loadInitialSimState(cfg: GameBalanceConfig): PersistedSimState {
         nodeStates: buildInitialNodeStates(cfg, parsed.nodeStates),
         monsterStates: buildInitialMonsterStates(cfg, parsed.monsterStates),
         castleStates: parsed.castleStates || {},
+        infantryGear: normalizeInfantryGear(parsed.infantryGear),
         commanderXp: typeof parsed.commanderXp === 'number' ? parsed.commanderXp : 1450,
       };
     }
@@ -284,6 +293,7 @@ function loadInitialSimState(cfg: GameBalanceConfig): PersistedSimState {
     nodeStates: buildInitialNodeStates(cfg),
     monsterStates: buildInitialMonsterStates(cfg),
     castleStates: {},
+    infantryGear: createInitialInfantryGear(),
     commanderXp: 1450,
   };
 }
@@ -310,6 +320,9 @@ export const App: React.FC = () => {
   const [nodeStates, setNodeStates] = useState<Record<string, LiveNodeStatus>>(initialSim.nodeStates);
   const [monsterStates, setMonsterStates] = useState<Record<string, LiveMonsterStatus>>(initialSim.monsterStates);
   const [castleStates, setCastleStates] = useState<Record<string, LiveCastleStatus>>(initialSim.castleStates || {});
+  const [infantryGear, setInfantryGear] = useState<InfantryGearState>(
+    () => normalizeInfantryGear(initialSim.infantryGear)
+  );
   const [commanderXp, setCommanderXp] = useState<number>(initialSim.commanderXp);
   const [nowMs, setNowMs] = useState<number>(() => Date.now());
 
@@ -383,6 +396,7 @@ export const App: React.FC = () => {
     monsterStates,
     castleStates,
     shrineGarrisons,
+    infantryGear,
   });
   simSnapshotRef.current = {
     balanceConfig,
@@ -398,6 +412,7 @@ export const App: React.FC = () => {
     monsterStates,
     castleStates,
     shrineGarrisons,
+    infantryGear,
   };
 
   const getMyCastlePosition = useCallback((): [number, number, number] => {
@@ -423,6 +438,7 @@ export const App: React.FC = () => {
         nodeStates,
         monsterStates,
         castleStates,
+        infantryGear,
         commanderXp,
       };
       localStorage.setItem(KINGDOM_SIM_STORAGE_KEY, JSON.stringify(payload));
@@ -444,6 +460,7 @@ export const App: React.FC = () => {
     nodeStates,
     monsterStates,
     castleStates,
+    infantryGear,
     commanderXp,
   ]);
 
@@ -830,7 +847,16 @@ export const App: React.FC = () => {
   );
 
   const handleDispatchNepaleseMarch = useCallback(
-    (target: WorldEntity, action: EntityAction, stacks: TroopStack[], heroId?: string): boolean => {
+    (
+      target: WorldEntity,
+      action: EntityAction,
+      stacks: TroopStack[],
+      heroId?: string,
+      rallyMeta?: {
+        captains?: string[];
+        alliedOrigins?: Array<{ name: string; position: [number, number, number] }>;
+      }
+    ): boolean => {
       const cleanStacks = stacks.filter((s) => s.count > 0);
       if (action === 'scout' || action === 'upgrade' || target.type === 'alliance_castle' || target.type === 'my_castle') {
         worldMapRef.current?.dispatchTroops(target, action);
@@ -874,7 +900,7 @@ export const App: React.FC = () => {
 
       const myCastlePos = getMyCastlePosition();
       const marchBonuses = getCalculatedBonuses(research, equippedIds, equipmentBag, selectedHero);
-      const metrics = calculateArmyMetrics(cleanStacks, balanceConfig, marchBonuses, selectedHero);
+      const metrics = calculateArmyMetrics(cleanStacks, balanceConfig, marchBonuses, selectedHero, infantryGear);
       const timing = calculateMarchTiming(
         myCastlePos,
         target.position,
@@ -1011,6 +1037,27 @@ export const App: React.FC = () => {
             return next;
           });
 
+          const isRally = action === 'rally' || Boolean(rallyMeta);
+          const defaultAllied = castles
+            .filter((c) => c.faction === 'alliance' && !c.isMyCastle)
+            .sort(
+              (a, b) =>
+                Math.hypot(a.position[0] - target.position[0], a.position[2] - target.position[2]) -
+                Math.hypot(b.position[0] - target.position[0], b.position[2] - target.position[2])
+            )
+            .slice(0, 3)
+            .map((c) => ({ name: c.owner || c.name, position: c.position }));
+          const alliedOrigins =
+            isRally && rallyMeta?.alliedOrigins && rallyMeta.alliedOrigins.length > 0
+              ? rallyMeta.alliedOrigins
+              : isRally
+                ? defaultAllied
+                : undefined;
+          const rallyCaptains =
+            isRally && rallyMeta?.captains && rallyMeta.captains.length > 0
+              ? rallyMeta.captains
+              : alliedOrigins?.map((o) => o.name);
+
           const march: ActiveMarch = {
             id: `march-${now}-${Math.random().toString(36).slice(2, 6)}`,
             kind: 'attack_monster',
@@ -1018,6 +1065,11 @@ export const App: React.FC = () => {
             targetName: target.name,
             targetLevel: target.level,
             targetPosition: [...target.position],
+            targetSubtype: target.subtype,
+            isRally,
+            rallyCaptains,
+            rallyBonusPower: isRally && alliedOrigins ? alliedOrigins.length * 28 : 0,
+            alliedOrigins,
             heroId: selectedHero?.id,
             heroName: selectedHero?.name,
             stacks: cleanStacks,
@@ -1034,7 +1086,9 @@ export const App: React.FC = () => {
           };
           setActiveMarches((prev) => [...prev, march]);
           showToast(
-            `⚔️ ${heroLabel}${metrics.totalCount.toLocaleString()} troops (${metrics.totalPower.toLocaleString()} PWR) marching to ${target.name}!`
+            isRally
+              ? `🚩 Alliance Rally (${(alliedOrigins?.length || 0) + 1} columns) marching on ${target.name}!`
+              : `⚔️ ${heroLabel}${metrics.totalCount.toLocaleString()} troops (${metrics.totalPower.toLocaleString()} PWR) marching to ${target.name}!`
           );
           return true;
         }
@@ -1113,6 +1167,7 @@ export const App: React.FC = () => {
     [
       activeMarches,
       balanceConfig,
+      castles,
       checkStructureRuleBlock,
       equipmentBag,
       equippedIds,
@@ -1124,6 +1179,7 @@ export const App: React.FC = () => {
       showToast,
       shrineGarrisons,
       troopInventory,
+      infantryGear,
     ]
   );
 
@@ -1551,7 +1607,8 @@ export const App: React.FC = () => {
         combinedGarrison,
         attackerStacks,
         balanceConfig,
-        effectiveBonuses
+        effectiveBonuses,
+        infantryGear
       );
 
       // Map survival ratio back to player vs alliance garrison proportionally
@@ -1670,7 +1727,55 @@ export const App: React.FC = () => {
       }
       showToast(summary);
     },
-    [balanceConfig, bonuses, showToast, shrineGarrisons, shrineRuleStatus.congressRequirementText, shrineRuleStatus.congressUnlocked]
+    [balanceConfig, bonuses, infantryGear, showToast, shrineGarrisons, shrineRuleStatus.congressRequirementText, shrineRuleStatus.congressUnlocked]
+  );
+
+  const handleUpgradeInfantryGear = useCallback(
+    (level: TroopLevel, slot: InfantryGearSlot) => {
+      const currentRank = infantryGear[level]?.[slot] ?? 0;
+      if (currentRank >= MAX_INFANTRY_GEAR_RANK) {
+        showToast(`⚒️ Lv.${level} Magar ${slot} is already forged to Master Rank +${MAX_INFANTRY_GEAR_RANK}.`);
+        return;
+      }
+      const cost = getInfantryGearUpgradeCost(level, slot, currentRank);
+      if (!cost) return;
+      if (
+        resources.wood < cost.wood ||
+        resources.iron < cost.iron ||
+        resources.gold < cost.gold ||
+        resources.crystal < cost.crystal
+      ) {
+        showToast(
+          `⚠️ Need ${cost.wood.toLocaleString()} Wood, ${cost.iron.toLocaleString()} Iron, ${cost.gold.toLocaleString()} Gold${cost.crystal > 0 ? ` & ${cost.crystal.toLocaleString()} Crystal` : ''}.`
+        );
+        return;
+      }
+
+      setResources((prev) => ({
+        ...prev,
+        wood: prev.wood - cost.wood,
+        iron: prev.iron - cost.iron,
+        gold: prev.gold - cost.gold,
+        crystal: prev.crystal - cost.crystal,
+      }));
+
+      const nextRank = currentRank + 1;
+      const nextTierRanks = {
+        ...infantryGear[level],
+        [slot]: nextRank,
+      };
+      setInfantryGear((prev) => ({
+        ...prev,
+        [level]: nextTierRanks,
+      }));
+      worldMapRef.current?.setArmyEquipmentTier(level, nextTierRanks);
+
+      const spec = MAGAR_PROGRESSION_SPECS[level];
+      const itemLabel =
+        slot === 'weapon' ? spec.weaponName : slot === 'shield' ? spec.shieldName : spec.armorName;
+      showToast(`⚒️ Forged Lv.${level} ${spec.tierName} · ${itemLabel} to +${nextRank}!`);
+    },
+    [infantryGear, resources.crystal, resources.gold, resources.iron, resources.wood, showToast]
   );
 
   const handleUpgradeResearch = useCallback(
@@ -1864,7 +1969,13 @@ export const App: React.FC = () => {
                   march.targetLevel,
                   curMonster.currentHp,
                   cfg,
-                  marchBonuses
+                  marchBonuses,
+                  {
+                    isRally: march.isRally,
+                    alliedColumnCount: march.alliedOrigins?.length ?? march.rallyCaptains?.length ?? 0,
+                    monsterSubtype: march.targetSubtype,
+                  },
+                  snap.infantryGear
                 );
 
                 monsterChanged = true;
@@ -1990,7 +2101,8 @@ export const App: React.FC = () => {
                   targetCastle?.power ?? 160000,
                   cfg,
                   marchBonuses,
-                  marchHero
+                  marchHero,
+                  snap.infantryGear
                 );
 
                 if (siegeRes.woundedStacks.length > 0) {
@@ -2215,6 +2327,20 @@ export const App: React.FC = () => {
         // Drive 3D Map battalion visual & top-left HUD bar from primary march
         const lead = remainingMarches[0];
         if (lead) {
+          const leadInfTier = lead.stacks.reduce<TroopLevel>(
+            (best, s) => (s.classId === 'infantry' && s.level > best ? s.level : best),
+            1
+          );
+          const leadTierFromAll = lead.stacks.reduce<TroopLevel>(
+            (best, s) => (s.level > best ? s.level : best),
+            leadInfTier
+          );
+          const leadHero = getHeroById(lead.heroId);
+          worldMapRef.current?.setArmyEquipmentTier(
+            leadTierFromAll,
+            snap.infantryGear[leadTierFromAll] || { weapon: 0, shield: 0, armor: 0 },
+            leadHero?.crestColor
+          );
           const frac = Math.max(0, Math.min(1, (now - lead.phaseStartedAt) / Math.max(500, lead.phaseDurationMs)));
           if (lead.status === 'marching') {
             worldMapRef.current?.setMarchVisual({
@@ -2273,8 +2399,32 @@ export const App: React.FC = () => {
             setArmyPos([myCastlePos[0], 10, myCastlePos[2] - 17]);
           }
         }
+        // Sync 3D Allied Rally March Columns for every active rally march
+        const alliedColumnsPayload: Array<{
+          id: string;
+          from: [number, number, number];
+          to: [number, number, number];
+          progress01: number;
+          isReturning?: boolean;
+        }> = [];
+        for (const m of remainingMarches) {
+          if (m.isRally && m.alliedOrigins && m.alliedOrigins.length > 0) {
+            const mFrac = Math.max(0, Math.min(1, (now - m.phaseStartedAt) / Math.max(500, m.phaseDurationMs)));
+            m.alliedOrigins.forEach((origin, oIdx) => {
+              alliedColumnsPayload.push({
+                id: `${m.id}-ally-${oIdx}`,
+                from: m.status === 'returning' ? m.targetPosition : origin.position,
+                to: m.status === 'returning' ? origin.position : m.targetPosition,
+                progress01: m.status === 'gathering' ? 1 : mFrac,
+                isReturning: m.status === 'returning',
+              });
+            });
+          }
+        }
+        worldMapRef.current?.setAlliedRallyColumns(alliedColumnsPayload);
       } else if (worldMapRef.current?.armyState === 'IDLE') {
         worldMapRef.current?.setMarchVisual(null);
+        worldMapRef.current?.setAlliedRallyColumns([]);
       }
 
       if (nodeChanged) setNodeStates(nextNodes);
@@ -2580,6 +2730,18 @@ export const App: React.FC = () => {
         nodeStates={nodeStates}
         monsterStates={monsterStates}
         castleStates={castleStates}
+        nowMs={nowMs}
+        onRecallMarch={handleRecallMarch}
+        onSelectWorldTarget={(entityId, x, z) => {
+          if (viewMode === 'kingdom') {
+            setViewMode('world');
+            worldMapRef.current?.setSceneMode('world');
+          }
+          const matched = worldMapRef.current?.selectEntityById(entityId);
+          if (!matched) {
+            worldMapRef.current?.panTo(x, z);
+          }
+        }}
         onDispatchNepaleseMarch={handleDispatchNepaleseMarch}
         onOpenCommandHub={handleOpenCommandHub}
         playerAlliance={playerAlliance}
@@ -2587,6 +2749,7 @@ export const App: React.FC = () => {
         shrineRuleStatus={shrineRuleStatus}
         shrineGarrisons={shrineGarrisons}
         onRelinquishStructure={handleRelinquishStructure}
+        infantryGear={infantryGear}
       />
 
       {/* 3B. Unified 8-Panel Kingdom Command Hub Drawer */}
@@ -2642,6 +2805,8 @@ export const App: React.FC = () => {
             onUpdateAllianceIdentity={handleUpdateAllianceIdentity}
             shrineRuleStatus={shrineRuleStatus}
             onRelinquishStructure={handleRelinquishStructure}
+            infantryGear={infantryGear}
+            onUpgradeInfantryGear={handleUpgradeInfantryGear}
             onShowToast={showToast}
           />
         </Suspense>

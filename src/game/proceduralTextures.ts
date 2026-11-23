@@ -443,19 +443,19 @@ export function createTerrainDetailAlbedoTexture(): THREE.CanvasTexture {
   const data = imgData.data;
   const field = buildPeriodicTerrainMicroField(size);
 
-  // Neutral organic variation modulated from periodic turf heightfield (keeps vertex colors true)
+  // Neutral-green organic tonal range so vertex biome greens stay lush, velvety, and vibrant
   for (let i = 0; i < size * size; i++) {
     const h = Math.max(-1, Math.min(1, field[i]));
-    const lum = 232 + h * 22; // ~210..254 smooth tonal range (no muddy darkening or blown-out whites)
+    const lum = 228 + h * 26;
     const idx = i * 4;
-    data[idx] = Math.round(Math.max(195, Math.min(254, lum - 2)));
-    data[idx + 1] = Math.round(Math.max(198, Math.min(255, lum + 3)));
-    data[idx + 2] = Math.round(Math.max(190, Math.min(250, lum - 5)));
+    data[idx] = Math.round(Math.max(185, Math.min(252, lum - 6)));
+    data[idx + 1] = Math.round(Math.max(196, Math.min(255, lum + 7)));
+    data[idx + 2] = Math.round(Math.max(180, Math.min(246, lum - 10)));
     data[idx + 3] = 255;
   }
   ctx.putImageData(imgData, 0, 0);
 
-  // Subtle wrapped organic grass blade strokes & natural soil variation
+  // Wrapped organic grass blade clusters & subtle soil texture
   let seed = 1337;
   const rand = () => {
     seed = (seed * 16807) % 2147483647;
@@ -463,20 +463,25 @@ export function createTerrainDetailAlbedoTexture(): THREE.CanvasTexture {
   };
 
   ctx.lineCap = 'round';
-  for (let i = 0; i < 3600; i++) {
+  for (let i = 0; i < 5200; i++) {
     const x = rand() * size;
     const y = rand() * size;
-    const len = 3 + rand() * 5;
-    const tilt = (rand() - 0.5) * 2.6;
-    const isHighlight = rand() > 0.42;
-    ctx.strokeStyle = isHighlight ? 'rgba(255, 255, 245, 0.14)' : 'rgba(52, 72, 46, 0.12)';
-    ctx.lineWidth = 0.9 + rand() * 0.8;
+    const len = 3 + rand() * 6;
+    const tilt = (rand() - 0.5) * 3.4;
+    const tonePick = rand();
+    ctx.strokeStyle =
+      tonePick > 0.55
+        ? 'rgba(246, 255, 224, 0.17)'
+        : tonePick > 0.22
+          ? 'rgba(64, 96, 48, 0.14)'
+          : 'rgba(38, 62, 34, 0.15)';
+    ctx.lineWidth = 0.85 + rand() * 0.95;
 
     for (const ox of [0, -size, size]) {
       for (const oy of [0, -size, size]) {
         const bx = x + ox;
         const by = y + oy;
-        if (bx >= -8 && bx <= size + 8 && by >= -8 && by <= size + 8) {
+        if (bx >= -10 && bx <= size + 10 && by >= -10 && by <= size + 10) {
           ctx.beginPath();
           ctx.moveTo(bx, by);
           ctx.lineTo(bx + tilt, by - len);

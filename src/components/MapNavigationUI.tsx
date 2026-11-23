@@ -17,6 +17,7 @@ import {
   AllianceShrineRuleStatus,
   CalculatedBonuses,
   GameBalanceConfig,
+  InfantryGearState,
   NEPALESE_HEROES,
   PlayerAllianceIdentity,
   PlayerResources,
@@ -37,6 +38,8 @@ import {
   validateAllianceAlias,
 } from '../game/NepaleseBalanceConfig';
 import type { CommandHubTab, LiveCastleStatus, LiveMonsterStatus, LiveNodeStatus } from './CommandHubDrawer';
+import { MonsterPortrait } from './MonsterPortrait';
+import { HeroPortrait } from './HeroPortrait';
 import { usePWAInstall, useOnlineStatus } from '../hooks/usePWAInstall';
 
 const CASTLE_EMBLEM_SRC = '/assets/aistudio/Gemini_Generated_Image_fzxzmyfzxzmyfzxz_6436d71f.jfif';
@@ -90,7 +93,11 @@ interface MapNavigationUIProps {
     target: WorldEntity,
     action: EntityAction,
     stacks: TroopStack[],
-    heroId?: string
+    heroId?: string,
+    rallyMeta?: {
+      captains?: string[];
+      alliedOrigins?: Array<{ name: string; position: [number, number, number] }>;
+    }
   ) => boolean;
   onOpenCommandHub: (tab: CommandHubTab, structureId?: string) => void;
   playerAlliance: PlayerAllianceIdentity;
@@ -98,6 +105,10 @@ interface MapNavigationUIProps {
   shrineRuleStatus: AllianceShrineRuleStatus;
   shrineGarrisons: Record<string, ShrineGarrisonState>;
   onRelinquishStructure: (structureId: string) => void;
+  infantryGear?: InfantryGearState;
+  nowMs?: number;
+  onRecallMarch?: (marchId: string) => void;
+  onSelectWorldTarget?: (entityId: string, x: number, z: number) => void;
 }
 
 interface BookmarkPin {
@@ -114,7 +125,7 @@ const BOOKMARKS_STORAGE_KEY = 'himalayan_realm_bookmarks_v3';
 const DEFAULT_BOOKMARKS: BookmarkPin[] = [
   { id: 'bm-shrine-a1', name: 'Shrine A1 Sanctum', x: 1352, y: 1352, category: 'shrine', createdAt: 1 },
   { id: 'bm-congress', name: 'The Congress Citadel', x: 1600, y: 1600, category: 'shrine', createdAt: 2 },
-  { id: 'bm-highland-boss', name: 'Highland Yeti Sovereign', x: 240, y: 2960, category: 'enemy', createdAt: 3 },
+  { id: 'bm-drago-boss', name: 'Drago · World Boss (Lv.10)', x: 240, y: 2960, category: 'enemy', createdAt: 3 },
 ];
 
 interface InventoryItemData {
@@ -200,6 +211,10 @@ export const MapNavigationUI: React.FC<MapNavigationUIProps> = ({
   shrineRuleStatus,
   shrineGarrisons,
   onRelinquishStructure,
+  infantryGear,
+  nowMs,
+  onRecallMarch,
+  onSelectWorldTarget,
 }) => {
   const minimapCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const isMinimapDraggingRef = useRef<boolean>(false);
@@ -320,16 +335,75 @@ export const MapNavigationUI: React.FC<MapNavigationUIProps> = ({
   const [isChatOpen, setIsChatOpen] = useState(false);
   const [chatChannel, setChatChannel] = useState<'world' | 'alliance'>('world');
   const [chatInput, setChatInput] = useState('');
-  const [chatMessages, setChatMessages] = useState<Array<{ id: string; sender: string; tag: string; text: string; time: string }>>([
-    { id: '1', sender: 'Lord Kazi', tag: 'Vanguard', text: 'Ironcrest Pass is secured. Watch for Rock Drake patrols.', time: '14:22' },
-    { id: '2', sender: 'Lady Maya', tag: 'Alliance', text: 'Gathering granite for Citadel Level 21 foundation upgrade.', time: '14:25' },
-    { id: '3', sender: 'Herald Gorkha', tag: 'System', text: 'Ancient Highland Yeti Sovereign spotted in SW Green Corner [240, 2960]!', time: '14:28' },
+  const [chatMessages, setChatMessages] = useState<
+    Array<{
+      id: string;
+      channel: 'world' | 'alliance';
+      sender: string;
+      tag: string;
+      text: string;
+      time: string;
+      sharedTarget?: {
+        entityId: string;
+        name: string;
+        level: number;
+        category: string;
+        x: number;
+        y: number;
+      };
+    }>
+  >([
+    {
+      id: '1',
+      channel: 'world',
+      sender: 'Lord Kazi',
+      tag: 'Vanguard',
+      text: 'Ironcrest Pass is secured. Watch for Death Knight & Orc patrols.',
+      time: '14:22',
+    },
+    {
+      id: '2',
+      channel: 'alliance',
+      sender: 'Lady Maya',
+      tag: 'Alliance',
+      text: 'Ready to join Alliance Rally marches on Golden Goblin & Death Knight targets!',
+      time: '14:25',
+    },
+    {
+      id: '3',
+      channel: 'world',
+      sender: 'Herald Gorkha',
+      tag: 'System',
+      text: 'Lv.10 Drago World Boss spotted roosting in the Southwest Highlands!',
+      time: '14:28',
+      sharedTarget: {
+        entityId: 'm_drago_boss_sw',
+        name: 'Drago',
+        level: 10,
+        category: 'monster',
+        x: 240,
+        y: 2960,
+      },
+    },
   ]);
 
-  const [isRadarOpen, setIsRadarOpen] = useState(false);
-  const [radarCategory, setRadarCategory] = useState<
-    'all' | 'enemies' | 'shrines' | 'monsters' | 'gold' | 'iron' | 'stone' | 'wood' | 'farm' | 'crystal'
+  const [isSearchOpen, setIsSearchOpen] = useState(false);
+  const [searchCategory, setSearchCategory] = useState<
+    'all' | 'monsters' | 'farm' | 'wood' | 'stone' | 'iron' | 'gold' | 'crystal'
   >('all');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [selectedMarchTooltipId, setSelectedMarchTooltipId] = useState<string | null>(null);
+  const [openShareKey, setOpenShareKey] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (selectedMarchTooltipId && !activeMarches.some((m) => m.id === selectedMarchTooltipId)) {
+      setSelectedMarchTooltipId(null);
+    }
+  }, [activeMarches, selectedMarchTooltipId]);
+
+  useEffect(() => {
+    setOpenShareKey(null);
+  }, [selectedEntity?.id]);
 
   // Alliance Hub Modal State
   const [isAllianceOpen, setIsAllianceOpen] = useState(false);
@@ -548,19 +622,39 @@ export const MapNavigationUI: React.FC<MapNavigationUIProps> = ({
   // Scout & Rally Modals
   const [scoutModalTarget, setScoutModalTarget] = useState<WorldEntity | null>(null);
   const [rallyModalTarget, setRallyModalTarget] = useState<WorldEntity | null>(null);
-  const [rallyTimer, setRallyTimer] = useState<number>(5);
+  const [rallyTimer, setRallyTimer] = useState<number>(0);
+  const [selectedRallyAllyIds, setSelectedRallyAllyIds] = useState<string[]>([]);
+
+  const rallyCandidateCastles = useMemo(() => {
+    if (!rallyModalTarget) return [];
+    return castles
+      .filter((c) => c.faction !== 'enemy' && !c.isMyCastle)
+      .sort(
+        (a, b) =>
+          Math.hypot(a.position[0] - rallyModalTarget.position[0], a.position[2] - rallyModalTarget.position[2]) -
+          Math.hypot(b.position[0] - rallyModalTarget.position[0], b.position[2] - rallyModalTarget.position[2])
+      )
+      .slice(0, 4);
+  }, [castles, rallyModalTarget]);
+
+  useEffect(() => {
+    if (rallyModalTarget) {
+      setSelectedRallyAllyIds(rallyCandidateCastles.slice(0, 3).map((c) => c.id));
+    }
+  }, [rallyModalTarget, rallyCandidateCastles]);
 
   // Helper to open one dock panel cleanly while closing conflicting floating drawers
   const openExclusiveDockPanel = (
-    panel: 'inventory' | 'quests' | 'alliance' | 'mail' | 'radar' | 'chat' | 'bookmarks'
+    panel: 'inventory' | 'quests' | 'alliance' | 'mail' | 'search' | 'chat' | 'bookmarks'
   ) => {
     setIsInventoryOpen(panel === 'inventory' ? !isInventoryOpen : false);
     setIsQuestsOpen(panel === 'quests' ? !isQuestsOpen : false);
     setIsAllianceOpen(panel === 'alliance' ? !isAllianceOpen : false);
     setIsMailOpen(panel === 'mail' ? !isMailOpen : false);
-    setIsRadarOpen(panel === 'radar' ? !isRadarOpen : false);
+    setIsSearchOpen(panel === 'search' ? !isSearchOpen : false);
     setIsChatOpen(panel === 'chat' ? !isChatOpen : false);
     setIsBookmarksOpen(panel === 'bookmarks' ? !isBookmarksOpen : false);
+    setOpenShareKey(null);
   };
 
   const handleSaveCurrentBookmark = (e: React.FormEvent) => {
@@ -583,6 +677,96 @@ export const MapNavigationUI: React.FC<MapNavigationUIProps> = ({
 
   const handleDeleteBookmark = (id: string) => {
     setBookmarks((prev) => prev.filter((b) => b.id !== id));
+  };
+
+  const isTargetBookmarked = (x: number, y: number) => {
+    const rx = Math.round(x);
+    const ry = Math.round(y);
+    return bookmarks.some((b) => Math.abs(Math.round(b.x) - rx) <= 2 && Math.abs(Math.round(b.y) - ry) <= 2);
+  };
+
+  const toggleEntityBookmark = (target: {
+    id: string;
+    name: string;
+    level?: number;
+    category: string;
+    x: number;
+    y: number;
+  }) => {
+    const rx = Math.round(target.x);
+    const ry = Math.round(target.y);
+    const existing = bookmarks.find(
+      (b) => Math.abs(Math.round(b.x) - rx) <= 2 && Math.abs(Math.round(b.y) - ry) <= 2
+    );
+    if (existing) {
+      setBookmarks((prev) => prev.filter((b) => b.id !== existing.id));
+      onShowToast?.(`Bookmark removed: "${existing.name}"`);
+      return;
+    }
+    const pinCategory: BookmarkPin['category'] =
+      target.category === 'shrine' ||
+      target.category === 'congress' ||
+      target.category === 'shrine_a' ||
+      target.category === 'shrine_b' ||
+      target.category === 'shrine_c'
+        ? 'shrine'
+        : target.category === 'enemy' || target.category === 'monster' || target.category === 'enemy_castle'
+          ? 'enemy'
+          : target.category === 'alliance' || target.category === 'castle'
+            ? 'alliance'
+            : 'favorite';
+    const displayLabel = target.level ? `${target.name} (Lv.${target.level})` : target.name;
+    const newPin: BookmarkPin = {
+      id: `bm-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+      name: displayLabel,
+      x: rx,
+      y: ry,
+      category: pinCategory,
+      createdAt: Date.now(),
+    };
+    setBookmarks((prev) => [newPin, ...prev]);
+    onShowToast?.(`Bookmarked "${displayLabel}" at X:${rx} · Y:${ry}`);
+  };
+
+  const shareEntityToChat = (
+    target: {
+      entityId: string;
+      name: string;
+      level: number;
+      category: string;
+      x: number;
+      y: number;
+    },
+    channel: 'world' | 'alliance'
+  ) => {
+    const now = new Date();
+    const timeStr = `${now.getHours()}:${String(now.getMinutes()).padStart(2, '0')}`;
+    const rx = Math.round(target.x);
+    const ry = Math.round(target.y);
+    setChatMessages((prev) => [
+      ...prev,
+      {
+        id: `share-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+        channel,
+        sender: 'Emperor Dangol',
+        tag: channel === 'world' ? 'Monarch' : playerAlliance.tag,
+        text: `Shared target coordinates:`,
+        time: timeStr,
+        sharedTarget: {
+          entityId: target.entityId,
+          name: target.name,
+          level: target.level,
+          category: target.category,
+          x: rx,
+          y: ry,
+        },
+      },
+    ]);
+    setChatChannel(channel);
+    setOpenShareKey(null);
+    onShowToast?.(
+      `Shared "${target.name}" [X:${rx}, Y:${ry}] to ${channel === 'world' ? 'World' : 'Alliance'} Chat`
+    );
   };
 
   const totalInventoryCount = useMemo(
@@ -653,9 +837,9 @@ export const MapNavigationUI: React.FC<MapNavigationUIProps> = ({
     onShowToast?.(`✉️ Claimed rewards from ${unclaimed.length} Imperial Dispatches!`);
   };
 
-  // Sculpted 3D Isometric SVG Models for Inventory, Quests, Alliance, Mail, Radar, Chat, Hub
+  // Sculpted 3D Isometric SVG Models for Inventory, Quests, Alliance, Mail, Search, Chat, Hub
   const render3DModelIcon = (
-    type: 'inventory' | 'quests' | 'alliance' | 'mail' | 'radar' | 'chat' | 'hub',
+    type: 'inventory' | 'quests' | 'alliance' | 'mail' | 'search' | 'chat' | 'hub',
     size = 28
   ) => {
     switch (type) {
@@ -734,15 +918,15 @@ export const MapNavigationUI: React.FC<MapNavigationUIProps> = ({
             </defs>
           </svg>
         );
-      case 'radar':
+      case 'search':
         return (
           <svg width={size} height={size} viewBox="0 0 36 36" fill="none">
-            <ellipse cx="18" cy="31" rx="12" ry="3" fill="rgba(0,0,0,0.55)" />
-            <circle cx="18" cy="18" r="11.5" fill="#0f172a" stroke="#34d399" strokeWidth="1.6" />
-            <circle cx="18" cy="18" r="8.5" stroke="#facc15" strokeWidth="0.9" strokeDasharray="2 2" />
-            <polygon points="18,8 21.5,18 18,16 14.5,18" fill="#38bdf8" />
-            <polygon points="18,28 21.5,18 18,20 14.5,18" fill="#f87171" />
-            <circle cx="18" cy="18" r="2.2" fill="#fef08a" />
+            <ellipse cx="18" cy="31" rx="11" ry="2.8" fill="rgba(0,0,0,0.55)" />
+            <circle cx="15.5" cy="15.5" r="9" fill="#0f172a" stroke="#facc15" strokeWidth="2.1" />
+            <circle cx="15.5" cy="15.5" r="6" fill="#0c4a6e" stroke="#38bdf8" strokeWidth="1.2" />
+            <path d="M12.5 12.5C13.6 11.4 15.2 11 16.8 11.4" stroke="#bae6fd" strokeWidth="1.5" strokeLinecap="round" />
+            <line x1="22" y1="22" x2="29" y2="29" stroke="#d97706" strokeWidth="3.6" strokeLinecap="round" />
+            <line x1="22" y1="22" x2="29" y2="29" stroke="#fef08a" strokeWidth="1.4" strokeLinecap="round" />
           </svg>
         );
       case 'alliance':
@@ -855,8 +1039,8 @@ export const MapNavigationUI: React.FC<MapNavigationUIProps> = ({
         if (count > 0) allStacks.push({ classId: cls, level: lv, count });
       }
     }
-    return calculateArmyMetrics(allStacks, balanceConfig, bonuses).totalPower;
-  }, [troopInventory, balanceConfig, bonuses]);
+    return calculateArmyMetrics(allStacks, balanceConfig, bonuses, undefined, infantryGear).totalPower;
+  }, [troopInventory, balanceConfig, bonuses, infantryGear]);
 
   const selectedBattalionStacks = useMemo<TroopStack[]>(() => {
     return (['infantry', 'archer', 'cavalry'] as TroopClassId[])
@@ -869,8 +1053,8 @@ export const MapNavigationUI: React.FC<MapNavigationUIProps> = ({
   }, [marchCounts, selectedTroopLv, troopInventory]);
 
   const selectedBattalionMetrics = useMemo(
-    () => calculateArmyMetrics(selectedBattalionStacks, balanceConfig, effectiveBonuses, activeHero),
-    [selectedBattalionStacks, balanceConfig, effectiveBonuses, activeHero]
+    () => calculateArmyMetrics(selectedBattalionStacks, balanceConfig, effectiveBonuses, activeHero, infantryGear),
+    [selectedBattalionStacks, balanceConfig, effectiveBonuses, activeHero, infantryGear]
   );
 
   const applyBattalionRatio = (ratio: number) => {
@@ -1254,8 +1438,9 @@ export const MapNavigationUI: React.FC<MapNavigationUIProps> = ({
       ...prev,
       {
         id: String(Date.now()),
+        channel: chatChannel,
         sender: 'Emperor Dangol',
-        tag: chatChannel === 'world' ? 'Monarch' : 'Alliance',
+        tag: chatChannel === 'world' ? 'Monarch' : playerAlliance.tag,
         text: chatInput.trim(),
         time: timeStr,
       },
@@ -1303,54 +1488,128 @@ export const MapNavigationUI: React.FC<MapNavigationUIProps> = ({
     };
   }, [conqueredPlots, allianceMemberCastles]);
 
-  // Filtered radar targets (includes Enemy Castles, Shrines/Congress, Monsters, Resources)
-  const radarTargetItems = useMemo(() => {
-    const enemyTargets = enemyCastles.map((ec) => ({
-      id: ec.id,
-      name: `${ec.allianceTag} ${ec.name}`,
-      level: ec.level,
-      category: 'enemy' as const,
-      subtype: 'Enemy Citadel',
-      position: ec.position,
-      dist: Math.round(Math.hypot(ec.position[0] - myCastleCoords[0], ec.position[2] - myCastleCoords[1])),
-    }));
+  // Strictly Resources & Monsters within 100 km (100 tiles = 1,000 world units) from My Castle
+  const searchTargetItems = useMemo(() => {
+    const items: Array<{
+      id: string;
+      name: string;
+      level: number;
+      category: 'monster' | 'resource';
+      subtype: string;
+      position: [number, number, number];
+      distWorld: number;
+      distanceKm: number;
+      remainingYield?: number;
+    }> = [];
 
-    const shrineTargets = RESERVED_PLOTS.map((p) => ({
-      id: p.id,
-      name: conqueredPlots?.[p.id] === 'alliance' ? `${p.name} [ALLIANCE]` : p.name,
-      level: p.type === 'congress' ? 30 : p.type === 'shrine_a' ? 25 : p.type === 'shrine_b' ? 18 : 12,
-      category: 'shrine' as const,
-      subtype: p.type === 'congress' ? 'Congress Citadel' : p.type.replace('_', ' ').toUpperCase(),
-      position: p.position,
-      dist: Math.round(Math.hypot(p.position[0] - myCastleCoords[0], p.position[2] - myCastleCoords[1])),
-    }));
+    for (const m of WORLD_MONSTERS) {
+      if (m.isDefeated || monsterStates[m.id]?.isDefeated) continue;
+      const distWorld = Math.hypot(m.position[0] - myCastleCoords[0], m.position[2] - myCastleCoords[1]);
+      const distanceKm = Math.round(distWorld / 10);
+      if (distanceKm <= 100) {
+        items.push({
+          id: m.id,
+          name: m.name,
+          level: m.level,
+          category: 'monster',
+          subtype: m.subtype,
+          position: m.position,
+          distWorld,
+          distanceKm,
+        });
+      }
+    }
 
-    const monsterAndResourceTargets = [...WORLD_MONSTERS, ...WORLD_RESOURCES].map((ent) => ({
-      id: ent.id,
-      name: ent.name,
-      level: ent.level,
-      category: ent.category,
-      subtype: ent.subtype,
-      position: ent.position,
-      dist: Math.round(Math.hypot(ent.position[0] - myCastleCoords[0], ent.position[2] - myCastleCoords[1])),
-    }));
+    for (const r of WORLD_RESOURCES) {
+      const remYield = nodeStates[r.id]?.remainingYield ?? r.yieldAmount ?? 1;
+      if (remYield <= 0) continue;
+      const distWorld = Math.hypot(r.position[0] - myCastleCoords[0], r.position[2] - myCastleCoords[1]);
+      const distanceKm = Math.round(distWorld / 10);
+      if (distanceKm <= 100) {
+        items.push({
+          id: r.id,
+          name: r.name,
+          level: r.level,
+          category: 'resource',
+          subtype: r.subtype,
+          position: r.position,
+          distWorld,
+          distanceKm,
+          remainingYield: remYield,
+        });
+      }
+    }
 
-    return [...enemyTargets, ...shrineTargets, ...monsterAndResourceTargets].sort((a, b) => a.dist - b.dist);
-  }, [enemyCastles, conqueredPlots, myCastleCoords]);
+    return items.sort((a, b) => a.distWorld - b.distWorld);
+  }, [myCastleCoords, monsterStates, nodeStates]);
 
-  const filteredRadarEntities = radarTargetItems.filter((ent) => {
-    if (radarCategory === 'all') return ent.category !== 'shrine';
-    if (radarCategory === 'enemies') return ent.category === 'enemy';
-    if (radarCategory === 'shrines') return ent.category === 'shrine';
-    if (radarCategory === 'monsters') return ent.category === 'monster';
-    return ent.subtype === radarCategory;
-  });
+  const filteredSearchEntities = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    return searchTargetItems.filter((ent) => {
+      if (searchCategory === 'monsters' && ent.category !== 'monster') return false;
+      if (searchCategory !== 'all' && searchCategory !== 'monsters' && ent.subtype !== searchCategory) {
+        return false;
+      }
+      if (!q) return true;
+      return (
+        ent.name.toLowerCase().includes(q) ||
+        ent.subtype.toLowerCase().includes(q) ||
+        `lv.${ent.level}`.includes(q) ||
+        `lv ${ent.level}`.includes(q)
+      );
+    });
+  }, [searchTargetItems, searchCategory, searchQuery]);
 
-  const latestChatMessage = chatMessages[chatMessages.length - 1];
+  const channelChatMessages = useMemo(
+    () => chatMessages.filter((m) => m.channel === chatChannel),
+    [chatMessages, chatChannel]
+  );
+  const latestChatMessage =
+    channelChatMessages[channelChatMessages.length - 1] || chatMessages[chatMessages.length - 1];
   const zoomOutScore = Math.min(
     100,
     Math.max(0, Math.round(((3.2 - cameraInfo.zoom) / (3.2 - 0.023)) * 100))
   );
+
+  const activeTooltipMarch = useMemo(
+    () => activeMarches.find((m) => m.id === selectedMarchTooltipId) || null,
+    [activeMarches, selectedMarchTooltipId]
+  );
+
+  const renderMarchQueueSvg = (kind: ActiveMarch['kind'], isRally?: boolean) => {
+    if (isRally) {
+      return (
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+          <path d="M5 20V5" stroke="#fef08a" strokeWidth="2.2" strokeLinecap="round" />
+          <path d="M5 5.5L19 9L5 14V5.5Z" fill="#f59e0b" stroke="#fde047" strokeWidth="1.3" strokeLinejoin="round" />
+          <circle cx="17" cy="17.5" r="2.2" fill="#38bdf8" />
+        </svg>
+      );
+    }
+    if (kind === 'gather') {
+      return (
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+          <path d="M5 19L15 9" stroke="#fde047" strokeWidth="2.2" strokeLinecap="round" />
+          <path d="M12 5C15.5 5 18.5 8 18.5 11.5L13.5 9.5L12 5Z" fill="#34d399" stroke="#a7f3d0" strokeWidth="1.2" />
+          <rect x="13" y="14" width="7" height="6" rx="1.2" fill="#b45309" stroke="#fef08a" strokeWidth="1.1" />
+        </svg>
+      );
+    }
+    if (kind === 'reinforce_structure') {
+      return (
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+          <polygon points="12,3 20,6.5 18.5,15 12,21 5.5,15 4,6.5" fill="#0369a1" stroke="#38bdf8" strokeWidth="1.5" />
+          <path d="M12 7.5V16M8.5 11.5L12 8L15.5 11.5" stroke="#fef08a" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      );
+    }
+    return (
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+        <path d="M5 19L18 6M15 5H19V9" stroke="#fca5a5" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
+        <path d="M19 19L6 6M9 5H5V9" stroke="#f87171" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+    );
+  };
 
   return (
     <>
@@ -1612,6 +1871,277 @@ export const MapNavigationUI: React.FC<MapNavigationUIProps> = ({
           </button>
         </div>
 
+        {/* March Icon Queue Directly Below X & Y Axis */}
+        {activeMarches.length > 0 && (
+          <div className="hud-march-queue-wrap" style={{ display: 'flex', flexDirection: 'column', gap: '5px', alignItems: 'flex-start' }}>
+            <div
+              className="hud-march-queue-row"
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '5px',
+                flexWrap: 'wrap',
+              }}
+            >
+              {activeMarches.map((march) => {
+                const isSelected = selectedMarchTooltipId === march.id;
+                const remSec = Math.max(
+                  0,
+                  Math.ceil((march.phaseStartedAt + march.phaseDurationMs - (nowMs ?? Date.now())) / 1000)
+                );
+                const mm = String(Math.floor(remSec / 60)).padStart(2, '0');
+                const ss = String(remSec % 60).padStart(2, '0');
+                const isGather = march.kind === 'gather';
+                const isReinf = march.kind === 'reinforce_structure';
+                const isRallyMarch = Boolean(march.isRally);
+                const kindLabel = isGather ? 'GATHER' : isReinf ? 'REINF' : isRallyMarch ? 'RALLY' : 'ATTACK';
+                const borderCol = isGather ? '#34d399' : isReinf ? '#38bdf8' : isRallyMarch ? '#f59e0b' : '#f87171';
+                const bevelCol = isGather ? '#064e3b' : isReinf ? '#0c4a6e' : isRallyMarch ? '#78350f' : '#7f1d1d';
+                const marchHero = getHeroById(march.heroId);
+
+                return (
+                  <button
+                    key={march.id}
+                    type="button"
+                    onClick={() => {
+                      onPanTo(march.targetPosition[0], march.targetPosition[2]);
+                      setSelectedMarchTooltipId((prev) => (prev === march.id ? null : march.id));
+                    }}
+                    style={{
+                      minHeight: '40px',
+                      minWidth: '54px',
+                      padding: '4px 7px',
+                      borderRadius: '8px',
+                      background: isSelected
+                        ? isGather
+                          ? 'linear-gradient(180deg, #065f46, #022c22)'
+                          : isReinf
+                            ? 'linear-gradient(180deg, #0369a1, #082f49)'
+                            : isRallyMarch
+                              ? 'linear-gradient(180deg, #b45309, #451a03)'
+                              : 'linear-gradient(180deg, #991b1b, #450a0a)'
+                        : 'rgba(12, 17, 26, 0.94)',
+                      borderTop: `1.5px solid ${borderCol}`,
+                      borderLeft: `1.5px solid ${borderCol}`,
+                      borderRight: `1.5px solid ${borderCol}`,
+                      borderBottom: `3px solid ${bevelCol}`,
+                      boxShadow: isSelected
+                        ? `0 0 12px ${borderCol}66`
+                        : '0 4px 12px rgba(0, 0, 0, 0.7)',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      gap: '5px',
+                      cursor: 'pointer',
+                      color: '#f8fafc',
+                    }}
+                    title={`${kindLabel}: ${march.targetName}${marchHero ? ` · ${marchHero.name}` : ''} (${march.status}) · Tap to pan & inspect`}
+                  >
+                    {marchHero && <HeroPortrait hero={marchHero} size={24} rounded={5} />}
+                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '1px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '3px' }}>
+                        {renderMarchQueueSvg(march.kind, isRallyMarch)}
+                        <span
+                          style={{
+                            font: "800 8.5px 'Barlow Condensed', sans-serif",
+                            color: borderCol,
+                            letterSpacing: '0.03em',
+                            lineHeight: 1,
+                          }}
+                        >
+                          {kindLabel}
+                        </span>
+                      </div>
+                      <span
+                        style={{
+                          font: "700 9.5px 'Barlow Condensed', sans-serif",
+                          fontVariantNumeric: 'tabular-nums',
+                          color: '#fef08a',
+                          lineHeight: 1,
+                        }}
+                      >
+                        {mm}:{ss}
+                      </span>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+
+            {activeTooltipMarch && (() => {
+              const remSec = Math.max(
+                0,
+                Math.ceil(
+                  (activeTooltipMarch.phaseStartedAt + activeTooltipMarch.phaseDurationMs - (nowMs ?? Date.now())) / 1000
+                )
+              );
+              const mm = String(Math.floor(remSec / 60)).padStart(2, '0');
+              const ss = String(remSec % 60).padStart(2, '0');
+              const tx = Math.round(activeTooltipMarch.targetPosition[0]);
+              const ty = Math.round(activeTooltipMarch.targetPosition[2]);
+              const statusBadge =
+                activeTooltipMarch.status === 'marching'
+                  ? 'Marching'
+                  : activeTooltipMarch.status === 'gathering'
+                    ? 'Gathering'
+                    : 'Returning';
+              const kindTitle =
+                activeTooltipMarch.kind === 'gather'
+                  ? 'Gather March'
+                  : activeTooltipMarch.kind === 'reinforce_structure'
+                    ? 'Reinforcement March'
+                    : activeTooltipMarch.isRally
+                      ? `Alliance Rally (${(activeTooltipMarch.alliedOrigins?.length || 0) + 1} Columns)`
+                      : 'Attack March';
+              return (
+                <div
+                  className="hud-march-tooltip"
+                  style={{
+                    width: '256px',
+                    maxWidth: 'calc(100vw - 24px)',
+                    background: 'rgba(10, 16, 28, 0.97)',
+                    borderTop: '1.5px solid #dfba6e',
+                    borderLeft: '1.5px solid #dfba6e',
+                    borderRight: '1.5px solid #dfba6e',
+                    borderBottom: '3.5px solid #78350f',
+                    borderRadius: '10px',
+                    padding: '8px 10px',
+                    boxShadow: '0 10px 26px rgba(0, 0, 0, 0.85)',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '6px',
+                    fontVariantNumeric: 'tabular-nums',
+                  }}
+                >
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '6px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '5px', minWidth: 0 }}>
+                      {renderMarchQueueSvg(activeTooltipMarch.kind, activeTooltipMarch.isRally)}
+                      <span
+                        style={{
+                          font: "800 12px 'Barlow Condensed', sans-serif",
+                          color: '#fef08a',
+                          whiteSpace: 'nowrap',
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                        }}
+                      >
+                        {activeTooltipMarch.targetName} (Lv.{activeTooltipMarch.targetLevel})
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedMarchTooltipId(null)}
+                      style={{
+                        background: 'transparent',
+                        border: 'none',
+                        color: '#94a3b8',
+                        cursor: 'pointer',
+                        fontSize: '12px',
+                        padding: '2px 4px',
+                      }}
+                      title="Close Tooltip"
+                    >
+                      ✕
+                    </button>
+                  </div>
+
+                  <div style={{ fontSize: '10px', color: '#cbd5e1', display: 'flex', justifyContent: 'space-between' }}>
+                    <span>
+                      {kindTitle} · <strong style={{ color: '#38bdf8' }}>{statusBadge}</strong>
+                    </span>
+                    <span style={{ color: '#86efac', fontWeight: 700 }}>
+                      {mm}:{ss}
+                    </span>
+                  </div>
+
+                  <div style={{ fontSize: '9.5px', color: '#94a3b8', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '6px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      {activeTooltipMarch.heroId && (
+                        <HeroPortrait
+                          hero={getHeroById(activeTooltipMarch.heroId)}
+                          heroId={activeTooltipMarch.heroId}
+                          heroName={activeTooltipMarch.heroName}
+                          size={26}
+                          rounded={6}
+                        />
+                      )}
+                      <span>Hero: <strong style={{ color: '#e2e8f0' }}>{activeTooltipMarch.heroName || 'Vanguard'}</strong></span>
+                    </div>
+                    <span>[X:{tx}, Y:{ty}]</span>
+                  </div>
+
+                  {activeTooltipMarch.isRally && activeTooltipMarch.rallyCaptains && activeTooltipMarch.rallyCaptains.length > 0 && (
+                    <div style={{ fontSize: '9.5px', color: '#fde047', lineHeight: 1.35 }}>
+                      Allies Marching: {activeTooltipMarch.rallyCaptains.join(', ')} (+{activeTooltipMarch.rallyBonusPower || 0}% PWR)
+                    </div>
+                  )}
+
+                  <div style={{ display: 'flex', gap: '5px' }}>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (onSelectWorldTarget) {
+                          onSelectWorldTarget(activeTooltipMarch.targetId, tx, ty);
+                        } else {
+                          onPanTo(tx, ty);
+                        }
+                      }}
+                      style={{
+                        flex: 1,
+                        minHeight: '30px',
+                        padding: '4px 6px',
+                        borderRadius: '6px',
+                        background: 'rgba(2, 132, 199, 0.25)',
+                        border: '1px solid #38bdf8',
+                        color: '#bae6fd',
+                        font: "700 10.5px 'Barlow Condensed', sans-serif",
+                        cursor: 'pointer',
+                      }}
+                    >
+                      Pan Target
+                    </button>
+                    {activeTooltipMarch.status !== 'returning' && onRecallMarch && (
+                      <button
+                        type="button"
+                        onClick={() => onRecallMarch(activeTooltipMarch.id)}
+                        style={{
+                          flex: 1,
+                          minHeight: '30px',
+                          padding: '4px 6px',
+                          borderRadius: '6px',
+                          background: 'rgba(185, 28, 28, 0.28)',
+                          border: '1px solid #f87171',
+                          color: '#fca5a5',
+                          font: "700 10.5px 'Barlow Condensed', sans-serif",
+                          cursor: 'pointer',
+                        }}
+                      >
+                        Recall
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => onOpenCommandHub('marches')}
+                      style={{
+                        minHeight: '30px',
+                        padding: '4px 8px',
+                        borderRadius: '6px',
+                        background: 'rgba(180, 83, 9, 0.3)',
+                        border: '1px solid #f59e0b',
+                        color: '#fef08a',
+                        font: "700 10.5px 'Barlow Condensed', sans-serif",
+                        cursor: 'pointer',
+                      }}
+                    >
+                      Marches
+                    </button>
+                  </div>
+                </div>
+              );
+            })()}
+          </div>
+        )}
+
         {/* Coordinate Bookmark Popover (Directly below X/Y + Bookmark row) */}
         {isBookmarksOpen && (
           <div
@@ -1766,26 +2296,101 @@ export const MapNavigationUI: React.FC<MapNavigationUIProps> = ({
                       {pin.tag} · X:{pin.x} · Y:{pin.y}
                     </div>
                   </button>
-                  {!pin.isPreset && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '4px', flexShrink: 0 }}>
                     <button
                       type="button"
-                      onClick={() => handleDeleteBookmark(pin.id)}
+                      onClick={() =>
+                        setOpenShareKey((prev) => (prev === `bm-${pin.id}` ? null : `bm-${pin.id}`))
+                      }
                       style={{
-                        background: 'rgba(220, 38, 38, 0.2)',
-                        border: '1px solid rgba(248, 113, 113, 0.4)',
+                        background: 'rgba(2, 132, 199, 0.22)',
+                        border: '1px solid rgba(56, 189, 248, 0.45)',
                         borderRadius: '4px',
-                        color: '#fca5a5',
+                        color: '#bae6fd',
                         fontSize: '10px',
-                        padding: '2px 5px',
+                        padding: '3px 6px',
                         cursor: 'pointer',
                       }}
-                      title="Delete Bookmark"
+                      title="Share Bookmark Coordinate to World or Alliance Chat"
                     >
-                      ✕
+                      Share
                     </button>
-                  )}
+                    {!pin.isPreset && (
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteBookmark(pin.id)}
+                        style={{
+                          background: 'rgba(220, 38, 38, 0.2)',
+                          border: '1px solid rgba(248, 113, 113, 0.4)',
+                          borderRadius: '4px',
+                          color: '#fca5a5',
+                          fontSize: '10px',
+                          padding: '3px 6px',
+                          cursor: 'pointer',
+                        }}
+                        title="Delete Bookmark"
+                      >
+                        ✕
+                      </button>
+                    )}
+                  </div>
                 </div>
               ))}
+              {openShareKey?.startsWith('bm-') && (() => {
+                const targetPinId = openShareKey.slice(3);
+                const targetPin = [
+                  { id: 'preset-castle', name: 'My Castle', x: Math.round(myCastleCoords[0]), y: Math.round(myCastleCoords[1]), tag: 'HOME' },
+                  { id: 'preset-congress', name: 'The Congress', x: 1600, y: 1600, tag: 'CENTER' },
+                  ...bookmarks.map((b) => ({ id: b.id, name: b.name, x: b.x, y: b.y, tag: b.category })),
+                ].find((p) => p.id === targetPinId);
+                if (!targetPin) return null;
+                return (
+                  <div style={{ display: 'flex', gap: '6px', padding: '4px 6px', background: 'rgba(15, 23, 42, 0.9)', borderRadius: '6px', border: '1px solid rgba(56,189,248,0.4)' }}>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        shareEntityToChat(
+                          { entityId: targetPin.id, name: targetPin.name, level: 1, category: targetPin.tag, x: targetPin.x, y: targetPin.y },
+                          'world'
+                        )
+                      }
+                      style={{
+                        flex: 1,
+                        padding: '4px 8px',
+                        borderRadius: '5px',
+                        background: 'linear-gradient(180deg, #b45309, #78350f)',
+                        border: '1px solid #facc15',
+                        color: '#fef08a',
+                        font: "700 10.5px 'Barlow Condensed'",
+                        cursor: 'pointer',
+                      }}
+                    >
+                      Share to World
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        shareEntityToChat(
+                          { entityId: targetPin.id, name: targetPin.name, level: 1, category: targetPin.tag, x: targetPin.x, y: targetPin.y },
+                          'alliance'
+                        )
+                      }
+                      style={{
+                        flex: 1,
+                        padding: '4px 8px',
+                        borderRadius: '5px',
+                        background: 'linear-gradient(180deg, #059669, #064e3b)',
+                        border: '1px solid #34d399',
+                        color: '#ecfdf5',
+                        font: "700 10.5px 'Barlow Condensed'",
+                        cursor: 'pointer',
+                      }}
+                    >
+                      Share to Alliance
+                    </button>
+                  </div>
+                );
+              })()}
             </div>
           </div>
         )}
@@ -2103,8 +2708,54 @@ export const MapNavigationUI: React.FC<MapNavigationUIProps> = ({
       </div>
 
       {/* ============================================================ */}
-      {/* 3. BOTTOM-LEFT: LIVE CHAT PREVIEW BAR (CHAT BUTTON ON LEFT)  */}
+      {/* 3. BOTTOM-LEFT: 100 KM SEARCH ABOVE LIVE CHAT PREVIEW BAR    */}
       {/* ============================================================ */}
+      <button
+        className="hud-bottom-left-search"
+        type="button"
+        onClick={() => openExclusiveDockPanel('search')}
+        style={{
+          position: 'absolute',
+          bottom: '70px',
+          left: '12px',
+          zIndex: 55,
+          height: '44px',
+          minWidth: '116px',
+          padding: '5px 12px',
+          borderRadius: '10px',
+          background: isSearchOpen
+            ? 'linear-gradient(180deg, #059669 0%, #064e3b 100%)'
+            : 'rgba(10, 16, 28, 0.94)',
+          borderTop: isSearchOpen ? '1.5px solid #34d399' : '1.5px solid rgba(250, 204, 21, 0.6)',
+          borderLeft: isSearchOpen ? '1.5px solid #34d399' : '1.5px solid rgba(250, 204, 21, 0.6)',
+          borderRight: isSearchOpen ? '1.5px solid #34d399' : '1.5px solid rgba(250, 204, 21, 0.6)',
+          borderBottom: isSearchOpen ? '3.5px solid #022c22' : '3.5px solid #78350f',
+          boxShadow: isSearchOpen
+            ? '0 4px 18px rgba(52, 211, 153, 0.4)'
+            : '0 8px 20px rgba(0, 0, 0, 0.78)',
+          color: '#f8fafc',
+          cursor: 'pointer',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '7px',
+          pointerEvents: 'auto',
+          transition: 'all 0.15s ease',
+        }}
+        title="Search Resources & Monsters within 100 km of My Castle"
+      >
+        <div style={{ flexShrink: 0, filter: 'drop-shadow(0 2px 4px rgba(0,0,0,0.65))' }}>
+          {render3DModelIcon('search', 23)}
+        </div>
+        <div className="hud-search-btn-text" style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', lineHeight: 1.05 }}>
+          <span style={{ font: "800 11px 'Barlow Condensed'", color: '#fef08a', letterSpacing: '0.04em' }}>
+            SEARCH
+          </span>
+          <span style={{ font: "700 8.5px 'Barlow Condensed'", color: '#86efac', fontVariantNumeric: 'tabular-nums' }}>
+            100 KM · {searchTargetItems.length}
+          </span>
+        </div>
+      </button>
+
       <button
         className="hud-bottom-left-chat"
         type="button"
@@ -2182,57 +2833,150 @@ export const MapNavigationUI: React.FC<MapNavigationUIProps> = ({
             }}
           >
             <strong style={{ color: '#fef08a' }}>{latestChatMessage?.sender}:</strong>{' '}
-            {latestChatMessage?.text}
+            {latestChatMessage?.sharedTarget
+              ? `[${latestChatMessage.sharedTarget.name} X:${latestChatMessage.sharedTarget.x} Y:${latestChatMessage.sharedTarget.y}]`
+              : latestChatMessage?.text}
           </div>
         </div>
       </button>
 
       {/* ============================================================ */}
-      {/* 4. BOTTOM-CENTER: RADAR BUTTON (MIDDLE DOWNWARD)             */}
+      {/* 4b. MIDDLE-BOTTOM: CASTLE RANGE COMPASS (KM + BEARING)       */}
       {/* ============================================================ */}
-      <button
-        className="hud-bottom-center-radar"
-        type="button"
-        onClick={() => openExclusiveDockPanel('radar')}
-        style={{
-          position: 'absolute',
-          bottom: '12px',
-          left: '50%',
-          transform: isRadarOpen ? 'translate(-50%, -2px)' : 'translateX(-50%)',
-          zIndex: 55,
-          height: '54px',
-          minWidth: '88px',
-          padding: '5px 14px',
-          borderRadius: '11px',
-          background: isRadarOpen
-            ? 'linear-gradient(180deg, #059669 0%, #064e3b 100%)'
-            : 'linear-gradient(180deg, #1e293b 0%, #0b1120 100%)',
-          borderTop: isRadarOpen ? '2px solid #34d399' : '1.5px solid rgba(52, 211, 153, 0.7)',
-          borderLeft: isRadarOpen ? '2px solid #34d399' : '1.5px solid rgba(52, 211, 153, 0.7)',
-          borderRight: isRadarOpen ? '2px solid #34d399' : '1.5px solid rgba(52, 211, 153, 0.7)',
-          borderBottom: '4px solid #022c22',
-          boxShadow: isRadarOpen
-            ? '0 4px 18px rgba(52, 211, 153, 0.45)'
-            : '0 8px 22px rgba(0, 0, 0, 0.8)',
-          color: '#f8fafc',
-          cursor: 'pointer',
-          display: 'flex',
-          flexDirection: 'column',
-          alignItems: 'center',
-          justifyContent: 'center',
-          gap: '2px',
-          pointerEvents: 'auto',
-          transition: 'all 0.15s ease',
-        }}
-        title="Open Realm Target Search Radar"
-      >
-        <div style={{ filter: 'drop-shadow(0 2px 4px rgba(0,0,0,0.65))' }}>
-          {render3DModelIcon('radar', 25)}
-        </div>
-        <span style={{ font: "800 9.5px 'Barlow Condensed'", color: isRadarOpen ? '#fef08a' : '#86efac', letterSpacing: '0.05em', lineHeight: 1 }}>
-          RADAR
-        </span>
-      </button>
+      {(() => {
+        const targetX = selectedEntity ? selectedEntity.position[0] : cameraInfo.x;
+        const targetZ = selectedEntity ? selectedEntity.position[2] : cameraInfo.z;
+        const dx = targetX - myCastleCoords[0];
+        const dz = targetZ - myCastleCoords[1];
+        const distWorld = Math.hypot(dx, dz);
+        const worldUnitsPerKm = Math.max(1, balanceConfig.worldUnitsPerTile || 16);
+        const rangeKm = distWorld / worldUnitsPerKm;
+        const bearingDeg = ((Math.atan2(dx, -dz) * 180) / Math.PI + 360) % 360;
+        const cardinals = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'] as const;
+        const cardinal = distWorld < 8 ? 'CASTLE' : cardinals[Math.round(bearingDeg / 45) % 8];
+        const areaLabel = selectedEntity ? selectedEntity.name : 'Castle → View Area';
+        const isAtCastle = Math.hypot(cameraInfo.x - myCastleCoords[0], cameraInfo.z - myCastleCoords[1]) < 14;
+
+        return (
+          <button
+            type="button"
+            className="hud-bottom-compass"
+            onPointerDown={() => handleHudPointerDown('compass')}
+            onPointerLeave={() => handleHudPointerLeave('compass')}
+            onPointerCancel={() => handleHudPointerLeave('compass')}
+            onClick={(e) => {
+              triggerTouchVfx(e, 'compass');
+              if (selectedEntity && isAtCastle) {
+                onPanTo(selectedEntity.position[0], selectedEntity.position[2]);
+              } else {
+                onPanTo(myCastleCoords[0], myCastleCoords[1]);
+              }
+            }}
+            title={
+              selectedEntity
+                ? `Range from My Castle to ${selectedEntity.name}: ${rangeKm.toFixed(1)} km (${cardinal}). Click to return to Castle.`
+                : `Range from My Castle to View Center: ${rangeKm.toFixed(1)} km (${cardinal}). Click to center on My Castle.`
+            }
+            style={{
+              position: 'absolute',
+              bottom: '12px',
+              left: '50%',
+              transform: pressedBtnKey === 'compass' ? 'translateX(-50%) scale(0.94)' : 'translateX(-50%)',
+              zIndex: 55,
+              display: 'flex',
+              alignItems: 'center',
+              gap: '9px',
+              minHeight: '48px',
+              maxWidth: '240px',
+              padding: '6px 13px 6px 8px',
+              borderRadius: '12px',
+              background: 'rgba(10, 16, 28, 0.94)',
+              borderTop: '1.5px solid rgba(218, 165, 32, 0.65)',
+              borderLeft: '1.5px solid rgba(218, 165, 32, 0.65)',
+              borderRight: '1.5px solid rgba(218, 165, 32, 0.65)',
+              borderBottom: '4px solid #451a03',
+              boxShadow: '0 10px 26px rgba(0, 0, 0, 0.85)',
+              cursor: 'pointer',
+              pointerEvents: 'auto',
+              touchAction: 'manipulation',
+              textAlign: 'left',
+              transition: 'transform 0.14s cubic-bezier(0.34, 1.56, 0.64, 1)',
+            }}
+          >
+            {/* Brass Compass Rose Icon with Live Rotating Bearing Needle */}
+            <svg
+              width="36"
+              height="36"
+              viewBox="0 0 40 40"
+              aria-hidden="true"
+              style={{ flexShrink: 0, filter: 'drop-shadow(0 2px 5px rgba(0,0,0,0.75))' }}
+            >
+              <defs>
+                <radialGradient id="hudCompassDial" cx="50%" cy="45%" r="55%">
+                  <stop offset="0%" stopColor="#1e293b" />
+                  <stop offset="100%" stopColor="#090d16" />
+                </radialGradient>
+                <linearGradient id="hudCompassBrass" x1="0%" y1="0%" x2="100%" y2="100%">
+                  <stop offset="0%" stopColor="#fef08a" />
+                  <stop offset="50%" stopColor="#d97706" />
+                  <stop offset="100%" stopColor="#78350f" />
+                </linearGradient>
+              </defs>
+              <circle cx="20" cy="20" r="18.2" fill="url(#hudCompassDial)" stroke="url(#hudCompassBrass)" strokeWidth="2.1" />
+              <circle cx="20" cy="20" r="14.2" fill="none" stroke="rgba(250, 204, 21, 0.25)" strokeWidth="0.9" strokeDasharray="2 2" />
+              {/* Cardinal ticks */}
+              <path d="M20 3.2 L20 6.2 M20 33.8 L20 36.8 M3.2 20 L6.2 20 M33.8 20 L36.8 20" stroke="#facc15" strokeWidth="1.4" strokeLinecap="round" />
+              <text x="20" y="9.2" textAnchor="middle" fill="#fef08a" fontSize="5.2" fontWeight="800" fontFamily="Barlow Condensed, sans-serif">N</text>
+              {/* Rotating Magnetic Needle pointing from Castle toward target/view */}
+              <g
+                style={{
+                  transform: `rotate(${Math.round(bearingDeg)}deg)`,
+                  transformOrigin: '20px 20px',
+                  transition: 'transform 0.16s ease-out',
+                }}
+              >
+                <polygon points="20,6.5 23.2,20 20,18.2 16.8,20" fill="#ef4444" stroke="#fecaca" strokeWidth="0.5" />
+                <polygon points="20,33.5 22.8,20 20,21.8 17.2,20" fill="#94a3b8" stroke="#475569" strokeWidth="0.5" />
+              </g>
+              <circle cx="20" cy="20" r="2.6" fill="#facc15" stroke="#451a03" strokeWidth="0.9" />
+            </svg>
+
+            <div style={{ minWidth: 0, display: 'flex', flexDirection: 'column', gap: '1px' }}>
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'baseline',
+                  gap: '5px',
+                  whiteSpace: 'nowrap',
+                  fontVariantNumeric: 'tabular-nums',
+                }}
+              >
+                <span style={{ font: "800 14px 'Barlow Condensed', sans-serif", color: '#fef08a', letterSpacing: '0.03em', lineHeight: 1 }}>
+                  {rangeKm.toFixed(1)} km
+                </span>
+                <span style={{ font: "700 10.5px 'Barlow Condensed', sans-serif", color: '#38bdf8', letterSpacing: '0.05em', lineHeight: 1 }}>
+                  · {cardinal}
+                </span>
+              </div>
+              <div
+                className="hud-compass-area-label"
+                style={{
+                  fontSize: '10px',
+                  fontWeight: 600,
+                  color: selectedEntity ? '#fde68a' : '#94a3b8',
+                  whiteSpace: 'nowrap',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  maxWidth: '158px',
+                  lineHeight: 1.2,
+                }}
+              >
+                {areaLabel}
+              </div>
+            </div>
+          </button>
+        );
+      })()}
 
       {/* ============================================================ */}
       {/* 5. BOTTOM-RIGHT: INVENTORY, QUESTS, MAIL & CASTLE INSIDE     */}
@@ -2773,32 +3517,173 @@ export const MapNavigationUI: React.FC<MapNavigationUIProps> = ({
               fontVariantNumeric: 'tabular-nums',
             }}
           >
-            {/* Target Summary Header */}
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid rgba(255,255,255,0.08)', paddingBottom: '5px' }}>
-              <div style={{ minWidth: 0 }}>
-                <div style={{ font: "800 13px 'Barlow Condensed'", color: '#fef08a', lineHeight: 1.1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                  {selectedEntity.name} (Lv.{selectedEntity.level})
+            {/* Target Summary Header with Bookmark & Share Icons */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '5px', borderBottom: '1px solid rgba(255,255,255,0.08)', paddingBottom: '6px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' }}>
+                {isMonster && (
+                  <MonsterPortrait
+                    subtype={selectedEntity.subtype}
+                    level={selectedEntity.level}
+                    name={selectedEntity.name}
+                    size={42}
+                    rounded={8}
+                  />
+                )}
+                <div style={{ minWidth: 0, flex: 1 }}>
+                  <div style={{ font: "800 13px 'Barlow Condensed'", color: '#fef08a', lineHeight: 1.1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                    {selectedEntity.name} (Lv.{selectedEntity.level})
+                  </div>
+                  <div style={{ fontSize: '9.5px', color: '#94a3b8' }}>
+                    {targetDistanceInfo.distanceTiles} km · [X:{Math.round(selectedEntity.position[0])}, Y:{Math.round(selectedEntity.position[2])}] · {targetDistanceInfo.seconds}s march
+                  </div>
                 </div>
-                <div style={{ fontSize: '9.5px', color: '#94a3b8' }}>
-                  {targetDistanceInfo.distanceTiles} tiles · {targetDistanceInfo.formulaMinutes}m formula ({targetDistanceInfo.seconds}s live)
+                <div style={{ display: 'flex', alignItems: 'center', gap: '4px', flexShrink: 0 }}>
+                  {(() => {
+                    const pinned = isTargetBookmarked(selectedEntity.position[0], selectedEntity.position[2]);
+                    return (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          toggleEntityBookmark({
+                            id: selectedEntity.id,
+                            name: selectedEntity.name,
+                            level: selectedEntity.level,
+                            category: selectedEntity.type || selectedEntity.category,
+                            x: selectedEntity.position[0],
+                            y: selectedEntity.position[2],
+                          })
+                        }
+                        style={{
+                          minWidth: '34px',
+                          minHeight: '34px',
+                          display: 'grid',
+                          placeItems: 'center',
+                          borderRadius: '6px',
+                          background: pinned ? 'rgba(180, 83, 9, 0.45)' : 'rgba(30, 41, 59, 0.9)',
+                          border: pinned ? '1px solid #facc15' : '1px solid rgba(148,163,184,0.35)',
+                          color: '#fef08a',
+                          cursor: 'pointer',
+                        }}
+                        title={pinned ? 'Remove Bookmark' : 'Bookmark Target Tag'}
+                      >
+                        <svg width="14" height="14" viewBox="0 0 20 20" fill="none">
+                          <path
+                            d="M5 3.5C5 2.7 5.7 2 6.5 2H13.5C14.3 2 15 2.7 15 3.5V18L10 14.5L5 18V3.5Z"
+                            fill={pinned ? '#facc15' : 'none'}
+                            stroke="#fef08a"
+                            strokeWidth="1.4"
+                          />
+                        </svg>
+                      </button>
+                    );
+                  })()}
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setOpenShareKey((prev) => (prev === 'selected-target' ? null : 'selected-target'))
+                    }
+                    style={{
+                      minWidth: '34px',
+                      minHeight: '34px',
+                      display: 'grid',
+                      placeItems: 'center',
+                      borderRadius: '6px',
+                      background: openShareKey === 'selected-target' ? 'rgba(2, 132, 199, 0.45)' : 'rgba(30, 41, 59, 0.9)',
+                      border: openShareKey === 'selected-target' ? '1px solid #38bdf8' : '1px solid rgba(148,163,184,0.35)',
+                      color: '#bae6fd',
+                      cursor: 'pointer',
+                    }}
+                    title="Share Target Tag to World or Alliance Chat"
+                  >
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
+                      <circle cx="18" cy="5" r="2.5" stroke="#bae6fd" strokeWidth="1.8" />
+                      <circle cx="6" cy="12" r="2.5" stroke="#bae6fd" strokeWidth="1.8" />
+                      <circle cx="18" cy="19" r="2.5" stroke="#bae6fd" strokeWidth="1.8" />
+                      <line x1="8.3" y1="10.8" x2="15.7" y2="6.2" stroke="#bae6fd" strokeWidth="1.6" />
+                      <line x1="8.3" y1="13.2" x2="15.7" y2="17.8" stroke="#bae6fd" strokeWidth="1.6" />
+                    </svg>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={onCloseSelection}
+                    style={{
+                      minWidth: '34px',
+                      minHeight: '34px',
+                      background: 'rgba(30, 41, 59, 0.9)',
+                      border: '1px solid rgba(148,163,184,0.3)',
+                      color: '#cbd5e1',
+                      fontSize: '12px',
+                      cursor: 'pointer',
+                      padding: '4px 8px',
+                      borderRadius: '6px',
+                    }}
+                    title="Close Target"
+                  >
+                    ✕
+                  </button>
                 </div>
               </div>
-              <button
-                onClick={onCloseSelection}
-                style={{
-                  background: 'rgba(30, 41, 59, 0.9)',
-                  border: '1px solid rgba(148,163,184,0.3)',
-                  color: '#cbd5e1',
-                  fontSize: '12px',
-                  cursor: 'pointer',
-                  padding: '4px 8px',
-                  borderRadius: '5px',
-                  minHeight: '30px',
-                }}
-                title="Close Target"
-              >
-                ✕
-              </button>
+
+              {openShareKey === 'selected-target' && (
+                <div style={{ display: 'flex', gap: '6px' }}>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      shareEntityToChat(
+                        {
+                          entityId: selectedEntity.id,
+                          name: selectedEntity.name,
+                          level: selectedEntity.level,
+                          category: selectedEntity.type || selectedEntity.category,
+                          x: selectedEntity.position[0],
+                          y: selectedEntity.position[2],
+                        },
+                        'world'
+                      )
+                    }
+                    style={{
+                      flex: 1,
+                      minHeight: '32px',
+                      borderRadius: '6px',
+                      background: 'linear-gradient(180deg, #b45309, #78350f)',
+                      border: '1px solid #facc15',
+                      color: '#fef08a',
+                      font: "800 11px 'Barlow Condensed', sans-serif",
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Share to World
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      shareEntityToChat(
+                        {
+                          entityId: selectedEntity.id,
+                          name: selectedEntity.name,
+                          level: selectedEntity.level,
+                          category: selectedEntity.type || selectedEntity.category,
+                          x: selectedEntity.position[0],
+                          y: selectedEntity.position[2],
+                        },
+                        'alliance'
+                      )
+                    }
+                    style={{
+                      flex: 1,
+                      minHeight: '32px',
+                      borderRadius: '6px',
+                      background: 'linear-gradient(180deg, #059669, #064e3b)',
+                      border: '1px solid #34d399',
+                      color: '#ecfdf5',
+                      font: "800 11px 'Barlow Condensed', sans-serif",
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Share to Alliance
+                  </button>
+                </div>
+              )}
             </div>
 
             {/* Target Live Stats Row */}
@@ -2981,7 +3866,7 @@ export const MapNavigationUI: React.FC<MapNavigationUIProps> = ({
                   </span>
                 </div>
 
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, minmax(0, 1fr))', gap: '3px' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, minmax(0, 1fr))', gap: '4px' }}>
                   {NEPALESE_HEROES.map((hero) => {
                     const lockedMarch = occupiedHeroMap.get(hero.id);
                     const isLocked = Boolean(lockedMarch);
@@ -3010,13 +3895,13 @@ export const MapNavigationUI: React.FC<MapNavigationUIProps> = ({
                           flexDirection: 'column',
                           alignItems: 'center',
                           justifyContent: 'center',
-                          gap: '1px',
+                          gap: '2px',
                           padding: '4px 2px',
-                          borderRadius: '5px',
+                          borderRadius: '6px',
                           background: isLocked
                             ? 'rgba(30, 41, 59, 0.45)'
                             : isSelected
-                              ? 'rgba(180, 83, 9, 0.45)'
+                              ? 'rgba(180, 83, 9, 0.42)'
                               : 'rgba(30, 41, 59, 0.85)',
                           border: isSelected
                             ? '1.5px solid #fde047'
@@ -3025,34 +3910,21 @@ export const MapNavigationUI: React.FC<MapNavigationUIProps> = ({
                               : `1px solid ${hero.crestColor}55`,
                           color: isLocked ? '#64748b' : '#f8fafc',
                           cursor: isLocked ? 'not-allowed' : 'pointer',
-                          opacity: isLocked ? 0.62 : 1,
+                          opacity: isLocked ? 0.65 : 1,
                         }}
                       >
-                        <svg width="14" height="14" viewBox="0 0 20 20" fill="none">
-                          {hero.specialty === 'infantry' && (
-                            <polygon points="10,2 17,5 15,14 10,18 5,14 3,5" fill={hero.crestColor} stroke="#fef08a" strokeWidth="1" />
-                          )}
-                          {hero.specialty === 'archer' && (
-                            <>
-                              <path d="M5 15C9 15 15 9 15 5" stroke={hero.crestColor} strokeWidth="2" strokeLinecap="round" />
-                              <line x1="4" y1="16" x2="16" y2="4" stroke="#fef08a" strokeWidth="1.5" />
-                            </>
-                          )}
-                          {hero.specialty === 'cavalry' && (
-                            <polygon points="3,13 11,4 17,6 13,15 7,17" fill={hero.crestColor} stroke="#fef08a" strokeWidth="1" />
-                          )}
-                          {hero.specialty === 'gather' && (
-                            <polygon points="10,2 16,8 10,18 4,8" fill={hero.crestColor} stroke="#fef08a" strokeWidth="1" />
-                          )}
-                          {hero.specialty === 'siege' && (
-                            <polygon points="10,2 14,9 17,15 10,18 3,15 6,9" fill={hero.crestColor} stroke="#fef08a" strokeWidth="1" />
-                          )}
-                        </svg>
+                        <HeroPortrait
+                          hero={hero}
+                          size={38}
+                          rounded={7}
+                          isSelected={isSelected}
+                          isLocked={isLocked}
+                        />
                         <span style={{ font: "700 9.5px 'Barlow Condensed'", lineHeight: 1.05, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '100%' }}>
                           {shortName}
                         </span>
                         <span style={{ fontSize: '8px', color: isLocked ? '#f87171' : hero.crestColor, fontWeight: 700, lineHeight: 1 }}>
-                          {isLocked ? 'MARCH' : buffTag}
+                          {isLocked ? 'BUSY' : buffTag}
                         </span>
                       </button>
                     );
@@ -3060,8 +3932,11 @@ export const MapNavigationUI: React.FC<MapNavigationUIProps> = ({
                 </div>
 
                 {activeHero ? (
-                  <div style={{ fontSize: '9px', color: '#cbd5e1', lineHeight: 1.25 }}>
-                    <strong style={{ color: activeHero.crestColor }}>{activeHero.title}</strong> · ATK +{Math.round(activeHero.attackPct * 100)}% · HP +{Math.round(activeHero.hpPct * 100)}% · Gather +{Math.round(activeHero.gatherPct * 100)}% · Load +{Math.round(activeHero.loadPct * 100)}% · March +{Math.round(activeHero.marchPct * 100)}% · Siege +{Math.round(activeHero.siegeDamagePct * 100)}%
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '7px', paddingTop: '2px' }}>
+                    <HeroPortrait hero={activeHero} size={28} rounded={6} isSelected />
+                    <div style={{ fontSize: '9px', color: '#cbd5e1', lineHeight: 1.25 }}>
+                      <strong style={{ color: activeHero.crestColor }}>{activeHero.title}</strong> · ATK +{Math.round(activeHero.attackPct * 100)}% · HP +{Math.round(activeHero.hpPct * 100)}% · Gather +{Math.round(activeHero.gatherPct * 100)}% · Load +{Math.round(activeHero.loadPct * 100)}% · March +{Math.round(activeHero.marchPct * 100)}% · Siege +{Math.round(activeHero.siegeDamagePct * 100)}%
+                    </div>
                   </div>
                 ) : (
                   <div style={{ fontSize: '9px', color: '#fbbf24' }}>
@@ -3337,18 +4212,17 @@ export const MapNavigationUI: React.FC<MapNavigationUIProps> = ({
       )}
 
       {/* ============================================================ */}
-      {/* 7. RADAR TARGET SEARCH PANEL (ANCHORED ABOVE CENTER RADAR)   */}
+      {/* 7. 100 KM RESOURCE & MONSTER SEARCH PANEL (ABOVE SEARCH BTN) */}
       {/* ============================================================ */}
-      {isRadarOpen && (
+      {isSearchOpen && (
         <div
-          className="hud-floating-drawer hud-radar-drawer"
+          className="hud-floating-drawer hud-search-drawer"
           style={{
             position: 'absolute',
-            bottom: '76px',
-            left: '50%',
-            transform: 'translateX(-50%)',
-            width: '340px',
-            maxWidth: 'calc(100vw - 20px)',
+            bottom: '122px',
+            left: '12px',
+            width: '350px',
+            maxWidth: 'calc(100vw - 24px)',
             maxHeight: '420px',
             background: 'rgba(12, 17, 26, 0.98)',
             border: '1px solid #dfba6e',
@@ -3362,23 +4236,55 @@ export const MapNavigationUI: React.FC<MapNavigationUIProps> = ({
           }}
         >
           <div style={{ padding: '10px 14px', borderBottom: '1px solid rgba(255,255,255,0.1)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <div style={{ font: "700 13px 'Barlow Condensed'", color: '#fef08a' }}>
-              🧭 REALM TARGET RADAR
+            <div>
+              <div style={{ font: "800 13.5px 'Barlow Condensed'", color: '#fef08a', letterSpacing: '0.03em' }}>
+                SEARCH RESOURCES &amp; MONSTERS (100 KM)
+              </div>
+              <div style={{ fontSize: '9.5px', color: '#86efac' }}>
+                Within 100 km of My Castle [X:{Math.round(myCastleCoords[0])}, Y:{Math.round(myCastleCoords[1])}]
+              </div>
             </div>
-            <button onClick={() => setIsRadarOpen(false)} style={{ background: 'transparent', border: 'none', color: '#94a3b8', cursor: 'pointer' }}>✕</button>
+            <button
+              type="button"
+              onClick={() => setIsSearchOpen(false)}
+              style={{ background: 'transparent', border: 'none', color: '#94a3b8', cursor: 'pointer', fontSize: '14px' }}
+            >
+              ✕
+            </button>
           </div>
 
-          <div style={{ display: 'flex', gap: '4px', padding: '8px 12px', borderBottom: '1px solid rgba(255,255,255,0.06)', overflowX: 'auto' }}>
-            {(['all', 'enemies', 'shrines', 'monsters', 'crystal', 'gold', 'iron', 'stone', 'wood', 'farm'] as const).map((cat) => (
+          <div style={{ padding: '8px 12px 4px' }}>
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Filter monster or resource (e.g. orc, skeleton, goblin, death knight, drago, lv.5)..."
+              style={{
+                width: '100%',
+                boxSizing: 'border-box',
+                background: 'rgba(15, 23, 42, 0.92)',
+                border: '1px solid rgba(218, 165, 32, 0.4)',
+                borderRadius: '6px',
+                padding: '6px 10px',
+                color: '#f8fafc',
+                fontSize: '11px',
+                outline: 'none',
+              }}
+            />
+          </div>
+
+          <div style={{ display: 'flex', gap: '4px', padding: '6px 12px', borderBottom: '1px solid rgba(255,255,255,0.06)', overflowX: 'auto' }}>
+            {(['all', 'monsters', 'crystal', 'gold', 'iron', 'stone', 'wood', 'farm'] as const).map((cat) => (
               <button
                 key={cat}
-                onClick={() => setRadarCategory(cat)}
+                type="button"
+                onClick={() => setSearchCategory(cat)}
                 style={{
-                  padding: '3px 8px',
+                  padding: '4px 8px',
                   borderRadius: '6px',
-                  background: radarCategory === cat ? '#b45309' : 'rgba(255,255,255,0.06)',
+                  background: searchCategory === cat ? '#b45309' : 'rgba(255,255,255,0.06)',
                   border: 'none',
-                  color: radarCategory === cat ? '#fef08a' : '#cbd5e1',
+                  color: searchCategory === cat ? '#fef08a' : '#cbd5e1',
                   font: "700 10.5px 'Barlow Condensed'",
                   cursor: 'pointer',
                   textTransform: 'uppercase',
@@ -3391,68 +4297,217 @@ export const MapNavigationUI: React.FC<MapNavigationUIProps> = ({
           </div>
 
           <div style={{ flex: 1, overflowY: 'auto', padding: '6px 10px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
-            {filteredRadarEntities.map((ent) => (
-              <div
-                key={ent.id}
-                onClick={() => {
-                  onPanTo(ent.position[0], ent.position[2]);
-                  setIsRadarOpen(false);
-                }}
-                style={{
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  alignItems: 'center',
-                  padding: '8px 10px',
-                  background: 'rgba(255, 255, 255, 0.04)',
-                  borderRadius: '6px',
-                  cursor: 'pointer',
-                  borderWidth: '1px',
-                  borderStyle: 'solid',
-                  borderColor: 'transparent',
-                  transition: 'all 0.15s ease',
-                }}
-                onMouseEnter={(e) => (e.currentTarget.style.borderColor = '#38bdf8')}
-                onMouseLeave={(e) => (e.currentTarget.style.borderColor = 'transparent')}
-              >
-                <div>
+            {filteredSearchEntities.length === 0 ? (
+              <div style={{ padding: '18px 10px', textAlign: 'center', color: '#94a3b8', fontSize: '11.5px' }}>
+                No active resources or monsters within 100 km match this filter.
+              </div>
+            ) : (
+              filteredSearchEntities.map((ent) => {
+                const pinned = isTargetBookmarked(ent.position[0], ent.position[2]);
+                const shareOpen = openShareKey === `search-${ent.id}`;
+                return (
                   <div
+                    key={ent.id}
                     style={{
-                      font: "700 12px 'Barlow Condensed'",
-                      color:
-                        ent.category === 'enemy'
-                          ? '#fca5a5'
-                          : ent.category === 'shrine'
-                            ? '#fef08a'
-                            : ent.category === 'monster'
-                              ? '#f87171'
-                              : '#86efac',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: '5px',
+                      padding: '8px 10px',
+                      background: 'rgba(255, 255, 255, 0.04)',
+                      borderRadius: '7px',
+                      border: '1px solid rgba(255,255,255,0.08)',
                     }}
                   >
-                    {ent.name} (Lv.{ent.level})
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '6px' }}>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (onSelectWorldTarget) {
+                            onSelectWorldTarget(ent.id, ent.position[0], ent.position[2]);
+                          } else {
+                            onPanTo(ent.position[0], ent.position[2]);
+                          }
+                          setIsSearchOpen(false);
+                        }}
+                        style={{
+                          flex: 1,
+                          minWidth: 0,
+                          textAlign: 'left',
+                          background: 'transparent',
+                          border: 'none',
+                          padding: 0,
+                          cursor: 'pointer',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '8px',
+                        }}
+                      >
+                        {ent.category === 'monster' && (
+                          <MonsterPortrait
+                            subtype={ent.subtype}
+                            level={ent.level}
+                            name={ent.name}
+                            size={34}
+                            rounded={6}
+                          />
+                        )}
+                        <div style={{ minWidth: 0, flex: 1 }}>
+                          <div
+                            style={{
+                              font: "700 12px 'Barlow Condensed'",
+                              color: ent.category === 'monster' ? '#f87171' : '#86efac',
+                              whiteSpace: 'nowrap',
+                              overflow: 'hidden',
+                              textOverflow: 'ellipsis',
+                            }}
+                          >
+                            {ent.name} (Lv.{ent.level})
+                          </div>
+                          <div style={{ fontSize: '9.5px', color: '#94a3b8', fontVariantNumeric: 'tabular-nums' }}>
+                            [X:{Math.round(ent.position[0])}, Y:{Math.round(ent.position[2])}] · {ent.subtype.toUpperCase()} · {ent.distanceKm} km
+                          </div>
+                        </div>
+                      </button>
+
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '4px', flexShrink: 0 }}>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            toggleEntityBookmark({
+                              id: ent.id,
+                              name: ent.name,
+                              level: ent.level,
+                              category: ent.category,
+                              x: ent.position[0],
+                              y: ent.position[2],
+                            })
+                          }
+                          style={{
+                            minWidth: '30px',
+                            minHeight: '30px',
+                            display: 'grid',
+                            placeItems: 'center',
+                            borderRadius: '5px',
+                            background: pinned ? 'rgba(180, 83, 9, 0.4)' : 'rgba(30, 41, 59, 0.85)',
+                            border: pinned ? '1px solid #facc15' : '1px solid rgba(148,163,184,0.3)',
+                            cursor: 'pointer',
+                          }}
+                          title={pinned ? 'Remove Bookmark' : 'Bookmark Target'}
+                        >
+                          <svg width="12" height="12" viewBox="0 0 20 20" fill="none">
+                            <path
+                              d="M5 3.5C5 2.7 5.7 2 6.5 2H13.5C14.3 2 15 2.7 15 3.5V18L10 14.5L5 18V3.5Z"
+                              fill={pinned ? '#facc15' : 'none'}
+                              stroke="#fef08a"
+                              strokeWidth="1.5"
+                            />
+                          </svg>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setOpenShareKey((prev) => (prev === `search-${ent.id}` ? null : `search-${ent.id}`))
+                          }
+                          style={{
+                            minWidth: '30px',
+                            minHeight: '30px',
+                            display: 'grid',
+                            placeItems: 'center',
+                            borderRadius: '5px',
+                            background: shareOpen ? 'rgba(2, 132, 199, 0.45)' : 'rgba(30, 41, 59, 0.85)',
+                            border: shareOpen ? '1px solid #38bdf8' : '1px solid rgba(148,163,184,0.3)',
+                            cursor: 'pointer',
+                          }}
+                          title="Share to World or Alliance Chat"
+                        >
+                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none">
+                            <circle cx="18" cy="5" r="2.5" stroke="#bae6fd" strokeWidth="1.8" />
+                            <circle cx="6" cy="12" r="2.5" stroke="#bae6fd" strokeWidth="1.8" />
+                            <circle cx="18" cy="19" r="2.5" stroke="#bae6fd" strokeWidth="1.8" />
+                            <line x1="8.3" y1="10.8" x2="15.7" y2="6.2" stroke="#bae6fd" strokeWidth="1.6" />
+                            <line x1="8.3" y1="13.2" x2="15.7" y2="17.8" stroke="#bae6fd" strokeWidth="1.6" />
+                          </svg>
+                        </button>
+                      </div>
+                    </div>
+
+                    {shareOpen && (
+                      <div style={{ display: 'flex', gap: '5px' }}>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            shareEntityToChat(
+                              {
+                                entityId: ent.id,
+                                name: ent.name,
+                                level: ent.level,
+                                category: ent.category,
+                                x: ent.position[0],
+                                y: ent.position[2],
+                              },
+                              'world'
+                            )
+                          }
+                          style={{
+                            flex: 1,
+                            padding: '4px 8px',
+                            borderRadius: '5px',
+                            background: 'linear-gradient(180deg, #b45309, #78350f)',
+                            border: '1px solid #facc15',
+                            color: '#fef08a',
+                            font: "700 10.5px 'Barlow Condensed'",
+                            cursor: 'pointer',
+                          }}
+                        >
+                          Share to World
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            shareEntityToChat(
+                              {
+                                entityId: ent.id,
+                                name: ent.name,
+                                level: ent.level,
+                                category: ent.category,
+                                x: ent.position[0],
+                                y: ent.position[2],
+                              },
+                              'alliance'
+                            )
+                          }
+                          style={{
+                            flex: 1,
+                            padding: '4px 8px',
+                            borderRadius: '5px',
+                            background: 'linear-gradient(180deg, #059669, #064e3b)',
+                            border: '1px solid #34d399',
+                            color: '#ecfdf5',
+                            font: "700 10.5px 'Barlow Condensed'",
+                            cursor: 'pointer',
+                          }}
+                        >
+                          Share to Alliance
+                        </button>
+                      </div>
+                    )}
                   </div>
-                  <div style={{ fontSize: '9px', color: '#94a3b8' }}>
-                    [X:{Math.round(ent.position[0])}, Y:{Math.round(ent.position[2])}] · {ent.subtype}
-                  </div>
-                </div>
-                <div style={{ textAlign: 'right' }}>
-                  <div style={{ fontSize: '11px', fontWeight: 700, color: '#fef08a', fontVariantNumeric: 'tabular-nums' }}>{ent.dist}m</div>
-                  <div style={{ fontSize: '9px', color: '#38bdf8' }}>Pan ↗</div>
-                </div>
-              </div>
-            ))}
+                );
+              })
+            )}
           </div>
         </div>
       )}
 
       {/* ============================================================ */}
-      {/* 8. CHAT POPUP (ANCHORED ABOVE BOTTOM-LEFT CHAT BAR)          */}
+      {/* 8. CHAT POPUP (ANCHORED ABOVE BOTTOM-LEFT SEARCH & CHAT)     */}
       {/* ============================================================ */}
       {isChatOpen && (
         <div
           className="hud-floating-drawer hud-chat-drawer"
           style={{
             position: 'absolute',
-            bottom: '70px',
+            bottom: '122px',
             left: '12px',
             width: '320px',
             maxWidth: 'calc(100vw - 24px)',
@@ -3471,6 +4526,7 @@ export const MapNavigationUI: React.FC<MapNavigationUIProps> = ({
           <div style={{ padding: '8px 12px', borderBottom: '1px solid rgba(255,255,255,0.1)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <div style={{ display: 'flex', gap: '6px' }}>
               <button
+                type="button"
                 onClick={() => setChatChannel('world')}
                 style={{
                   padding: '3px 8px',
@@ -3485,13 +4541,14 @@ export const MapNavigationUI: React.FC<MapNavigationUIProps> = ({
                 World
               </button>
               <button
+                type="button"
                 onClick={() => setChatChannel('alliance')}
                 style={{
                   padding: '3px 8px',
                   borderRadius: '4px',
-                  background: chatChannel === 'alliance' ? '#b45309' : 'transparent',
+                  background: chatChannel === 'alliance' ? '#059669' : 'transparent',
                   border: 'none',
-                  color: chatChannel === 'alliance' ? '#fef08a' : '#94a3b8',
+                  color: chatChannel === 'alliance' ? '#ecfdf5' : '#94a3b8',
                   font: "700 11px 'Barlow Condensed'",
                   cursor: 'pointer',
                 }}
@@ -3499,15 +4556,48 @@ export const MapNavigationUI: React.FC<MapNavigationUIProps> = ({
                 Alliance
               </button>
             </div>
-            <button onClick={() => setIsChatOpen(false)} style={{ background: 'transparent', border: 'none', color: '#94a3b8', cursor: 'pointer' }}>✕</button>
+            <button type="button" onClick={() => setIsChatOpen(false)} style={{ background: 'transparent', border: 'none', color: '#94a3b8', cursor: 'pointer' }}>✕</button>
           </div>
 
           <div style={{ flex: 1, overflowY: 'auto', padding: '10px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
-            {chatMessages.map((msg) => (
-              <div key={msg.id} style={{ fontSize: '11px', lineHeight: 1.4 }}>
-                <span style={{ color: '#94a3b8', fontSize: '9px', marginRight: '4px' }}>[{msg.time}]</span>
-                <span style={{ color: '#fef08a', fontWeight: 700, marginRight: '4px' }}>{msg.sender}:</span>
-                <span style={{ color: '#e2e8f0' }}>{msg.text}</span>
+            {channelChatMessages.map((msg) => (
+              <div key={msg.id} style={{ fontSize: '11px', lineHeight: 1.4, display: 'flex', flexDirection: 'column', gap: '3px' }}>
+                <div>
+                  <span style={{ color: '#94a3b8', fontSize: '9px', marginRight: '4px' }}>[{msg.time}]</span>
+                  <span style={{ color: '#fef08a', fontWeight: 700, marginRight: '4px' }}>{msg.sender}:</span>
+                  <span style={{ color: '#e2e8f0' }}>{msg.text}</span>
+                </div>
+                {msg.sharedTarget && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (onSelectWorldTarget) {
+                        onSelectWorldTarget(
+                          msg.sharedTarget!.entityId,
+                          msg.sharedTarget!.x,
+                          msg.sharedTarget!.y
+                        );
+                      } else {
+                        onPanTo(msg.sharedTarget!.x, msg.sharedTarget!.y);
+                      }
+                      setIsChatOpen(false);
+                    }}
+                    style={{
+                      alignSelf: 'flex-start',
+                      padding: '4px 8px',
+                      borderRadius: '6px',
+                      background: 'rgba(2, 132, 199, 0.22)',
+                      border: '1px solid rgba(56, 189, 248, 0.55)',
+                      color: '#bae6fd',
+                      font: "700 10.5px 'Barlow Condensed', sans-serif",
+                      fontVariantNumeric: 'tabular-nums',
+                      cursor: 'pointer',
+                    }}
+                    title="Jump camera to shared target"
+                  >
+                    📍 {msg.sharedTarget.name} (Lv.{msg.sharedTarget.level}) · X:{msg.sharedTarget.x} Y:{msg.sharedTarget.y} ↗
+                  </button>
+                )}
               </div>
             ))}
           </div>
@@ -3517,7 +4607,7 @@ export const MapNavigationUI: React.FC<MapNavigationUIProps> = ({
               type="text"
               value={chatInput}
               onChange={(e) => setChatInput(e.target.value)}
-              placeholder="Send dispatch to realm..."
+              placeholder={`Message ${chatChannel === 'world' ? 'World' : 'Alliance'} channel...`}
               style={{
                 flex: 1,
                 background: 'rgba(255,255,255,0.06)',
@@ -3589,11 +4679,24 @@ export const MapNavigationUI: React.FC<MapNavigationUIProps> = ({
               </button>
             </div>
 
-            <div style={{ fontSize: '13px', fontWeight: 700, color: '#fef08a', marginBottom: '4px' }}>
-              {scoutModalTarget.name} (Lv.{scoutModalTarget.level})
-            </div>
-            <div style={{ fontSize: '11px', color: '#94a3b8', marginBottom: '12px' }}>
-              Sector Coordinates: [{Math.round(scoutModalTarget.position[0])}, {Math.round(scoutModalTarget.position[2])}]
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '12px' }}>
+              {scoutModalTarget.category === 'monster' && (
+                <MonsterPortrait
+                  subtype={scoutModalTarget.subtype}
+                  level={scoutModalTarget.level}
+                  name={scoutModalTarget.name}
+                  size={56}
+                  rounded={10}
+                />
+              )}
+              <div>
+                <div style={{ fontSize: '14px', fontWeight: 700, color: '#fef08a', marginBottom: '3px' }}>
+                  {scoutModalTarget.name} (Lv.{scoutModalTarget.level})
+                </div>
+                <div style={{ fontSize: '11px', color: '#94a3b8' }}>
+                  Sector Coordinates: [{Math.round(scoutModalTarget.position[0])}, {Math.round(scoutModalTarget.position[2])}]
+                </div>
+              </div>
             </div>
 
             <div style={{ background: 'rgba(255,255,255,0.05)', padding: '10px', borderRadius: '8px', fontSize: '12px', color: '#cbd5e1', lineHeight: 1.5, marginBottom: '16px' }}>
@@ -3622,107 +4725,350 @@ export const MapNavigationUI: React.FC<MapNavigationUIProps> = ({
       {/* ============================================================ */}
       {/* 10. ALLIANCE RALLY MODAL                                     */}
       {/* ============================================================ */}
-      {rallyModalTarget && (
-        <div
-          style={{
-            position: 'fixed',
-            inset: 0,
-            background: 'rgba(0, 0, 0, 0.75)',
-            zIndex: 100,
-            display: 'grid',
-            placeItems: 'center',
-            padding: '20px',
-            pointerEvents: 'auto',
-          }}
-          onClick={() => setRallyModalTarget(null)}
-        >
+      {rallyModalTarget && (() => {
+        const isDragoBoss = rallyModalTarget.subtype === 'boss' || (rallyModalTarget.level >= 10 && rallyModalTarget.type === 'monster');
+        const isGoldenGoblin = rallyModalTarget.subtype === 'goblin';
+        const isMonsterOrEnemy = rallyModalTarget.type === 'monster' || rallyModalTarget.type === 'enemy_castle';
+        const selectedAllies = rallyCandidateCastles.filter((c) => selectedRallyAllyIds.includes(c.id));
+        const boostPct = selectedAllies.length * 28;
+        const monsterLive = rallyModalTarget.type === 'monster' ? monsterStates[rallyModalTarget.id] : undefined;
+        const castleLive = rallyModalTarget.type === 'enemy_castle' ? castleStates[rallyModalTarget.id] : undefined;
+        const hpCurrent = monsterLive?.currentHp ?? castleLive?.currentHp;
+        const hpMax = monsterLive?.maxHp ?? castleLive?.maxHp;
+
+        const accentColor = isDragoBoss ? '#ef4444' : isGoldenGoblin ? '#fbbf24' : '#f59e0b';
+        const badgeText = isDragoBoss
+          ? '🐉 APEX WORLD BOSS RALLY'
+          : isGoldenGoblin
+          ? '💰 GOLDEN GOBLIN TREASURE RALLY'
+          : '🚩 ALLIANCE WAR RALLY';
+
+        return (
           <div
             style={{
-              width: '100%',
-              maxWidth: '440px',
-              background: '#0f172a',
-              border: '1px solid #f59e0b',
-              borderRadius: '12px',
+              position: 'fixed',
+              inset: 0,
+              background: 'rgba(0, 0, 0, 0.78)',
+              zIndex: 100,
+              display: 'grid',
+              placeItems: 'center',
               padding: '20px',
-              boxShadow: '0 24px 60px rgba(0,0,0,0.85)',
-              color: '#f8fafc',
+              pointerEvents: 'auto',
             }}
-            onClick={(e) => e.stopPropagation()}
+            onClick={() => setRallyModalTarget(null)}
           >
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
-              <div style={{ font: "700 17px 'Barlow Condensed'", color: '#fef08a' }}>
-                🚩 DECLARE ALLIANCE RALLY
-              </div>
-              <button
-                onClick={() => setRallyModalTarget(null)}
-                style={{ background: 'transparent', border: 'none', color: '#94a3b8', fontSize: '18px', cursor: 'pointer' }}
-              >
-                ✕
-              </button>
-            </div>
-
-            <div style={{ fontSize: '13px', color: '#cbd5e1', marginBottom: '10px' }}>
-              Rallying imperial troops against <b>{rallyModalTarget.name}</b>.{' '}
-              {rallyModalTarget.type === 'enemy_castle'
-                ? `Battalion led by ${activeHero ? activeHero.name : 'Unled Vanguard'} (${selectedBattalionMetrics.totalCount.toLocaleString()} troops · ${selectedBattalionMetrics.totalPower.toLocaleString()} PWR) will launch a siege march.`
-                : 'All alliance members will march in formation from Vanguard Fortress!'}
-            </div>
-
-            <div style={{ display: 'flex', gap: '8px', marginBottom: '16px' }}>
-              {[5, 10, 15, 30].map((mins) => (
+            <div
+              style={{
+                width: '100%',
+                maxWidth: '470px',
+                background: isDragoBoss
+                  ? 'linear-gradient(180deg, rgba(45,10,16,0.98) 0%, rgba(15,23,42,0.98) 100%)'
+                  : '#0f172a',
+                border: `1.5px solid ${accentColor}`,
+                borderRadius: '12px',
+                padding: '20px',
+                boxShadow: isDragoBoss
+                  ? '0 24px 60px rgba(220,38,38,0.35)'
+                  : '0 24px 60px rgba(0,0,0,0.85)',
+                color: '#f8fafc',
+              }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+                <div style={{ font: "700 17px 'Barlow Condensed'", color: isDragoBoss ? '#fca5a5' : '#fef08a', letterSpacing: '0.04em' }}>
+                  {badgeText}
+                </div>
                 <button
-                  key={mins}
-                  onClick={() => setRallyTimer(mins)}
-                  style={{
-                    flex: 1,
-                    padding: '8px',
-                    borderRadius: '6px',
-                    background: rallyTimer === mins ? '#b45309' : 'rgba(255,255,255,0.05)',
-                    border: rallyTimer === mins ? '1px solid #f59e0b' : '1px solid rgba(255,255,255,0.1)',
-                    color: rallyTimer === mins ? '#fef08a' : '#cbd5e1',
-                    font: "700 12px 'Barlow Condensed'",
-                    cursor: 'pointer',
-                  }}
+                  onClick={() => setRallyModalTarget(null)}
+                  style={{ background: 'transparent', border: 'none', color: '#94a3b8', fontSize: '18px', cursor: 'pointer' }}
                 >
-                  {mins}m
+                  ✕
                 </button>
-              ))}
-            </div>
+              </div>
 
-            <button
-              onClick={() => {
-                if (rallyModalTarget.type === 'enemy_castle') {
-                  if (
-                    onDispatchNepaleseMarch(
+              <div
+                style={{
+                  background: 'rgba(255,255,255,0.04)',
+                  border: '1px solid rgba(255,255,255,0.1)',
+                  borderRadius: '8px',
+                  padding: '10px 12px',
+                  marginBottom: '12px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '12px',
+                }}
+              >
+                {rallyModalTarget.category === 'monster' && (
+                  <MonsterPortrait
+                    subtype={rallyModalTarget.subtype}
+                    level={rallyModalTarget.level}
+                    name={rallyModalTarget.name}
+                    size={58}
+                    rounded={10}
+                  />
+                )}
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+                    <span style={{ fontWeight: 700, fontSize: '14px', color: '#f8fafc' }}>
+                      {rallyModalTarget.name} (Lv.{rallyModalTarget.level})
+                    </span>
+                    <span style={{ fontSize: '11px', color: '#94a3b8' }}>
+                      [{Math.round(rallyModalTarget.position[0])}, {Math.round(rallyModalTarget.position[2])}]
+                    </span>
+                  </div>
+                  {hpCurrent !== undefined && hpMax !== undefined && (
+                    <div style={{ fontSize: '11px', color: isDragoBoss ? '#fca5a5' : '#cbd5e1', marginBottom: '4px' }}>
+                      HP: <b>{Math.round(hpCurrent).toLocaleString()}</b> / {Math.round(hpMax).toLocaleString()}
+                    </div>
+                  )}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '4px' }}>
+                    {activeHero && <HeroPortrait hero={activeHero} size={30} rounded={6} isSelected />}
+                    <div style={{ fontSize: '11px', color: '#cbd5e1' }}>
+                      Commander: <b style={{ color: activeHero?.crestColor || '#fef08a' }}>{activeHero ? activeHero.name : 'Unled Vanguard'}</b> ·{' '}
+                      {selectedBattalionMetrics.totalCount.toLocaleString()} troops ({selectedBattalionMetrics.totalPower.toLocaleString()} PWR)
+                    </div>
+                  </div>
+                  <div style={{ fontSize: '11px', color: '#38bdf8', marginTop: '4px', fontWeight: 700 }}>
+                    Alliance Rally Bonus: +{boostPct}% Attack Power ({selectedAllies.length} Allied Columns)
+                  </div>
+                </div>
+              </div>
+
+              {/* Select Lead Hero Commander inside Alliance Rally Modal */}
+              <div style={{ marginBottom: '12px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+                  <span style={{ fontSize: '11px', fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                    Select Rally Lead Hero
+                  </span>
+                  <span style={{ fontSize: '10.5px', color: activeHero ? activeHero.crestColor : '#f87171', fontWeight: 700 }}>
+                    {activeHero ? `${activeHero.name} · ${activeHero.title}` : 'All Heroes Marching'}
+                  </span>
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, minmax(0, 1fr))', gap: '6px' }}>
+                  {NEPALESE_HEROES.map((hero) => {
+                    const lockedMarch = occupiedHeroMap.get(hero.id);
+                    const isLocked = Boolean(lockedMarch);
+                    const isSelected = activeHero?.id === hero.id;
+                    const shortName = hero.name.split(' ')[0];
+                    const specialtyStat =
+                      hero.specialty === 'gather'
+                        ? `+${Math.round(hero.gatherPct * 100)}% GATH`
+                        : hero.specialty === 'siege'
+                          ? `+${Math.round(hero.siegeDamagePct * 100)}% SIEGE`
+                          : `+${Math.round(hero.classAttackPct * 100)}% ${hero.classBonusClass.slice(0, 3).toUpperCase()}`;
+
+                    return (
+                      <button
+                        key={hero.id}
+                        type="button"
+                        disabled={isLocked}
+                        onClick={() => setSelectedHeroId(hero.id)}
+                        title={
+                          isLocked
+                            ? `${hero.name} is marching on ${lockedMarch?.targetName}`
+                            : `${hero.name} — ${hero.title}`
+                        }
+                        style={{
+                          display: 'flex',
+                          flexDirection: 'column',
+                          alignItems: 'center',
+                          gap: '3px',
+                          padding: '5px 4px',
+                          borderRadius: '8px',
+                          background: isLocked
+                            ? 'rgba(30, 41, 59, 0.4)'
+                            : isSelected
+                              ? 'rgba(180, 83, 9, 0.42)'
+                              : 'rgba(255, 255, 255, 0.04)',
+                          border: isSelected
+                            ? '1.5px solid #fde047'
+                            : isLocked
+                              ? '1px solid rgba(100, 116, 139, 0.25)'
+                              : `1px solid ${hero.crestColor}55`,
+                          color: isLocked ? '#64748b' : '#f8fafc',
+                          cursor: isLocked ? 'not-allowed' : 'pointer',
+                          opacity: isLocked ? 0.65 : 1,
+                        }}
+                      >
+                        <HeroPortrait
+                          hero={hero}
+                          size={44}
+                          rounded={8}
+                          isSelected={isSelected}
+                          isLocked={isLocked}
+                        />
+                        <span style={{ font: "700 10.5px 'Barlow Condensed', sans-serif", whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '100%' }}>
+                          {shortName}
+                        </span>
+                        <span style={{ fontSize: '9px', fontWeight: 700, color: isLocked ? '#f87171' : hero.crestColor }}>
+                          {isLocked ? 'BUSY' : specialtyStat}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Select Allied March Columns */}
+              <div style={{ marginBottom: '12px' }}>
+                <div style={{ fontSize: '11px', fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '6px' }}>
+                  Converging Alliance Castles ({selectedAllies.length}/{rallyCandidateCastles.length} Selected)
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', maxHeight: '165px', overflowY: 'auto' }}>
+                  {rallyCandidateCastles.map((ally) => {
+                    const isChecked = selectedRallyAllyIds.includes(ally.id);
+                    const distKm = Math.round(
+                      Math.hypot(
+                        ally.position[0] - rallyModalTarget.position[0],
+                        ally.position[2] - rallyModalTarget.position[2]
+                      )
+                    );
+                    return (
+                      <button
+                        key={ally.id}
+                        type="button"
+                        onClick={() =>
+                          setSelectedRallyAllyIds((prev) =>
+                            prev.includes(ally.id)
+                              ? prev.filter((id) => id !== ally.id)
+                              : [...prev, ally.id]
+                          )
+                        }
+                        style={{
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          alignItems: 'center',
+                          padding: '8px 10px',
+                          borderRadius: '7px',
+                          background: isChecked ? 'rgba(30, 58, 138, 0.55)' : 'rgba(255,255,255,0.03)',
+                          border: isChecked ? '1px solid #38bdf8' : '1px solid rgba(255,255,255,0.08)',
+                          color: '#f8fafc',
+                          cursor: 'pointer',
+                          textAlign: 'left',
+                        }}
+                      >
+                        <div>
+                          <div style={{ fontSize: '12px', fontWeight: 700 }}>
+                            {isChecked ? '☑ ' : '☐ '}
+                            [{ally.allianceTag}] {ally.owner}
+                          </div>
+                          <div style={{ fontSize: '10px', color: '#94a3b8' }}>
+                            {ally.name} · Lv.{ally.level}
+                          </div>
+                        </div>
+                        <div style={{ textAlign: 'right' }}>
+                          <div style={{ fontSize: '11px', fontWeight: 700, color: '#fde047' }}>
+                            {(ally.power / 1000).toFixed(0)}k PWR
+                          </div>
+                          <div style={{ fontSize: '10px', color: '#38bdf8' }}>{distKm} km</div>
+                        </div>
+                      </button>
+                    );
+                  })}
+                  {rallyCandidateCastles.length === 0 && (
+                    <div style={{ fontSize: '11px', color: '#94a3b8', padding: '8px' }}>
+                      No nearby allied castles available; solo vanguard rally will deploy.
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Rally Assembly Timing */}
+              <div style={{ display: 'flex', gap: '8px', marginBottom: '14px' }}>
+                {[
+                  { mins: 0, label: 'Instant Rally' },
+                  { mins: 5, label: '5m Prep' },
+                  { mins: 10, label: '10m Prep' },
+                  { mins: 15, label: '15m Prep' },
+                ].map((opt) => (
+                  <button
+                    key={opt.mins}
+                    type="button"
+                    onClick={() => setRallyTimer(opt.mins)}
+                    style={{
+                      flex: 1,
+                      padding: '8px 4px',
+                      borderRadius: '6px',
+                      background: rallyTimer === opt.mins ? '#b45309' : 'rgba(255,255,255,0.05)',
+                      border: rallyTimer === opt.mins ? '1px solid #f59e0b' : '1px solid rgba(255,255,255,0.1)',
+                      color: rallyTimer === opt.mins ? '#fef08a' : '#cbd5e1',
+                      font: "700 11px 'Barlow Condensed'",
+                      cursor: 'pointer',
+                    }}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+
+              <button
+                type="button"
+                onClick={() => {
+                  const alliedOrigins = selectedAllies.map((c) => ({
+                    name: c.owner,
+                    position: c.position,
+                  }));
+                  const captains = selectedAllies.map((c) => c.owner);
+
+                  if (isMonsterOrEnemy) {
+                    const dispatched = onDispatchNepaleseMarch(
                       rallyModalTarget,
                       'rally',
                       selectedBattalionStacks,
-                      activeHero?.id
-                    )
-                  ) {
+                      activeHero?.id,
+                      { captains, alliedOrigins }
+                    );
+                    if (dispatched) {
+                      const now = new Date();
+                      const timeStr = `${now.getHours()}:${String(now.getMinutes()).padStart(2, '0')}`;
+                      setChatMessages((prev) => [
+                        ...prev,
+                        {
+                          id: String(Date.now()),
+                          channel: 'alliance',
+                          sender: 'Emperor Dangol',
+                          tag: playerAlliance.tag,
+                          text: `🚩 Launched Alliance Rally (+${boostPct}% PWR, ${selectedAllies.length} allies) on ${rallyModalTarget.name} (Lv.${rallyModalTarget.level})!`,
+                          time: timeStr,
+                          sharedTarget: {
+                            entityId: rallyModalTarget.id,
+                            name: rallyModalTarget.name,
+                            level: rallyModalTarget.level,
+                            category: rallyModalTarget.type,
+                            x: Math.round(rallyModalTarget.position[0]),
+                            y: Math.round(rallyModalTarget.position[2]),
+                          },
+                        },
+                      ]);
+                      setRallyModalTarget(null);
+                    }
+                  } else {
+                    onExecuteAction(rallyModalTarget, 'rally');
                     setRallyModalTarget(null);
                   }
-                } else {
-                  onExecuteAction(rallyModalTarget, 'rally');
-                  setRallyModalTarget(null);
-                }
-              }}
-              style={{
-                width: '100%',
-                padding: '12px',
-                borderRadius: '8px',
-                background: 'linear-gradient(135deg, #b45309, #78350f)',
-                border: '1px solid #f59e0b',
-                color: '#fff',
-                font: "700 14px 'Barlow Condensed'",
-                cursor: 'pointer',
-              }}
-            >
-              🚩 Sound War Horn & Launch Rally
-            </button>
+                }}
+                style={{
+                  width: '100%',
+                  padding: '12px',
+                  borderRadius: '8px',
+                  background: isDragoBoss
+                    ? 'linear-gradient(135deg, #b91c1c, #7f1d1d)'
+                    : 'linear-gradient(135deg, #b45309, #78350f)',
+                  border: `1px solid ${accentColor}`,
+                  color: '#fff',
+                  font: "700 14px 'Barlow Condensed'",
+                  cursor: 'pointer',
+                  letterSpacing: '0.04em',
+                }}
+              >
+                {isDragoBoss
+                  ? `🐉 Launch World Boss Rally (+${boostPct}% PWR)`
+                  : `🚩 Launch Alliance Rally (+${boostPct}% PWR)`}
+              </button>
+            </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* ============================================================ */}
       {/* 11. STRATEGY SETTINGS MODAL                                  */}
@@ -4029,7 +5375,7 @@ export const MapNavigationUI: React.FC<MapNavigationUIProps> = ({
                           item.iconType === 'crystal_gems'
                             ? 'quests'
                             : item.iconType === 'chrono_hourglass'
-                            ? 'radar'
+                            ? 'search'
                             : 'inventory',
                           34
                         )}
@@ -5565,18 +6911,19 @@ export const MapNavigationUI: React.FC<MapNavigationUIProps> = ({
             -webkit-overflow-scrolling: touch;
             gap: 3px !important;
           }
+          .hud-bottom-left-search {
+            bottom: 50px !important;
+            left: 6px !important;
+            height: 36px !important;
+            min-width: 96px !important;
+            padding: 3px 8px !important;
+          }
           .hud-bottom-left-chat {
             bottom: 6px !important;
             left: 6px !important;
             height: 40px !important;
             padding: 4px 8px !important;
             max-width: 190px !important;
-          }
-          .hud-bottom-center-radar {
-            bottom: 6px !important;
-            height: 40px !important;
-            min-width: 48px !important;
-            padding: 3px 8px !important;
           }
           .hud-bottom-right-dock {
             bottom: 6px !important;
@@ -5588,6 +6935,16 @@ export const MapNavigationUI: React.FC<MapNavigationUIProps> = ({
             width: 42px !important;
             height: 42px !important;
           }
+          .hud-bottom-compass {
+            bottom: 54px !important;
+            min-height: 40px !important;
+            padding: 4px 10px 4px 6px !important;
+            gap: 6px !important;
+          }
+          .hud-bottom-compass svg {
+            width: 28px !important;
+            height: 28px !important;
+          }
           .hud-castle-corner-btn {
             width: 52px !important;
             height: 44px !important;
@@ -5598,8 +6955,8 @@ export const MapNavigationUI: React.FC<MapNavigationUIProps> = ({
             max-width: 72vw !important;
           }
           .hud-floating-drawer {
-            bottom: 54px !important;
-            max-height: 62dvh !important;
+            bottom: 92px !important;
+            max-height: 58dvh !important;
             overflow-y: auto;
             touch-action: pan-y;
           }
@@ -5607,6 +6964,11 @@ export const MapNavigationUI: React.FC<MapNavigationUIProps> = ({
             max-height: 62dvh;
             overflow-y: auto;
             touch-action: pan-y;
+          }
+        }
+        @media (max-width: 1024px) and (min-height: 501px) {
+          .hud-bottom-compass {
+            bottom: 72px !important;
           }
         }
         @media (max-width: 768px) {
@@ -5655,18 +7017,19 @@ export const MapNavigationUI: React.FC<MapNavigationUIProps> = ({
             -webkit-overflow-scrolling: touch;
             gap: 4px !important;
           }
+          .hud-bottom-left-search {
+            bottom: 58px !important;
+            left: 8px !important;
+            height: 40px !important;
+            min-width: 96px !important;
+            padding: 4px 8px !important;
+          }
           .hud-bottom-left-chat {
             bottom: 8px !important;
             left: 8px !important;
             height: 46px !important;
             padding: 4px 8px !important;
             max-width: 96px !important;
-          }
-          .hud-bottom-center-radar {
-            bottom: 8px !important;
-            height: 46px !important;
-            min-width: 54px !important;
-            padding: 4px 7px !important;
           }
           .hud-bottom-right-dock {
             bottom: 8px !important;
@@ -5682,20 +7045,34 @@ export const MapNavigationUI: React.FC<MapNavigationUIProps> = ({
             width: 44px !important;
             height: 48px !important;
           }
+          .hud-bottom-compass {
+            bottom: 60px !important;
+            min-height: 42px !important;
+            padding: 4px 10px 4px 6px !important;
+            gap: 7px !important;
+            max-width: 196px !important;
+          }
+          .hud-bottom-compass svg {
+            width: 30px !important;
+            height: 30px !important;
+          }
+          .hud-compass-area-label {
+            max-width: 118px !important;
+          }
           .bottom-1x1-troop-card {
             left: 8px !important;
             right: 8px !important;
             width: auto !important;
             max-width: none !important;
-            bottom: 68px !important;
+            bottom: 108px !important;
           }
           .hud-floating-drawer {
             left: 8px !important;
             right: 8px !important;
             width: auto !important;
             transform: none !important;
-            bottom: 68px !important;
-            max-height: 48dvh !important;
+            bottom: 104px !important;
+            max-height: 46dvh !important;
             touch-action: pan-y;
           }
           .hud-mail-grid {
@@ -5709,13 +7086,18 @@ export const MapNavigationUI: React.FC<MapNavigationUIProps> = ({
           .hud-chat-preview-text {
             display: none;
           }
+          .hud-search-btn-text {
+            display: none !important;
+          }
+          .hud-bottom-left-search {
+            width: 44px !important;
+            min-width: 44px !important;
+            padding: 4px !important;
+            justify-content: center !important;
+          }
           .hud-bottom-left-chat {
             width: 44px !important;
             justify-content: center !important;
-          }
-          .hud-bottom-center-radar {
-            left: 25% !important;
-            transform: translateX(-50%) !important;
           }
         }
       `}</style>

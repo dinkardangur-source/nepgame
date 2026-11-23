@@ -696,4 +696,8 @@ export class CameraController {
     this._lookAtTarget.set(this.target.x, this.target.y + 3.2, this.target.z);
     this.camera.lookAt(this._lookAtTarget);
   }
+
+  public getYaw(): number {
+    return this.yaw;
+  }
 }

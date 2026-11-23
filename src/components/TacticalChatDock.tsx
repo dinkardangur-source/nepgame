@@ -17,7 +17,7 @@ const INITIAL_MESSAGES: ChatMessage[] = [
     sender: 'Lord Arjun',
     tag: 'GORK',
     avatar: '👑',
-    text: 'Scouts spotted an Ancient Treant Guardian near the eastern foothills. High timber bounty!',
+    text: 'Scouts spotted a Golden Goblin Hoarder near the eastern foothills. Rich gold & crystal bounty!',
     timestamp: '11:32',
   },
   {
@@ -26,7 +26,7 @@ const INITIAL_MESSAGES: ChatMessage[] = [
     sender: 'Lady Sumnima',
     tag: 'KIRAT',
     avatar: '🏹',
-    text: 'Level 4 Stone Crystal deposits discovered in mountain pass. Watch out for frost wolves.',
+    text: 'Level 4 Crystal deposits discovered in the mountain pass. Watch for Orc & Skeleton patrols.',
     timestamp: '11:34',
   },
   {
@@ -45,7 +45,7 @@ const INITIAL_MESSAGES: ChatMessage[] = [
     sender: 'Baron Kaji',
     tag: 'IRON',
     avatar: '⚔️',
-    text: 'Any commanders ready to rally against the Level 5 Snow Bear in the north?',
+    text: 'Any commanders ready to launch an Alliance Rally against Lv.10 Drago in the highlands?',
     timestamp: '11:38',
   },
 

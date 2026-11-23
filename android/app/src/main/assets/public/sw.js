@@ -87,7 +87,7 @@ define(['./workbox-afac4cd2'], (function (workbox) { 'use strict';
     "revision": "baee7932c47b483452047731c7d9d990"
   }, {
     "url": "index.html",
-    "revision": "0c5a7d96cc19a65abc46f11d0aa81395"
+    "revision": "a2ee758d9088d9b4e4c645c2b16beec1"
   }, {
     "url": "favicon.ico",
     "revision": "bced82f6fc61f49f97449e34128d81fa"
@@ -101,22 +101,22 @@ define(['./workbox-afac4cd2'], (function (workbox) { 'use strict';
     "url": "assets/workbox-window.prod.es5-Bd17z0YL.js",
     "revision": null
   }, {
-    "url": "assets/three-vendor-CPYgzXdI.js",
+    "url": "assets/three-vendor-BDIn3zjl.js",
     "revision": null
   }, {
-    "url": "assets/index-HCwtPEyO.js",
+    "url": "assets/index-CymDt8gw.js",
     "revision": null
   }, {
     "url": "assets/index-BRYu6DSd.css",
     "revision": null
   }, {
-    "url": "assets/StrategicWorldMapModal-D796LP1_.js",
+    "url": "assets/StrategicWorldMapModal-DhCkv3jx.js",
     "revision": null
   }, {
-    "url": "assets/InsideKingdomView-BFi01rvc.js",
+    "url": "assets/InsideKingdomView-DRPX0UX9.js",
     "revision": null
   }, {
-    "url": "assets/CommandHubDrawer-iNUoMSeZ.js",
+    "url": "assets/CommandHubDrawer-BnAcx-PP.js",
     "revision": null
   }, {
     "url": "assets/aistudio/screenshot_1_2be6e62f.png",
@@ -131,10 +131,28 @@ define(['./workbox-afac4cd2'], (function (workbox) { 'use strict';
     "url": "assets/aistudio/image_250842e5.png",
     "revision": null
   }, {
+    "url": "assets/aistudio/Spectral_Bone_Dragon_Unleashed_b4e1a44d.png",
+    "revision": null
+  }, {
+    "url": "assets/aistudio/Magar_Warrior_Progression_Chart_55c15772.png",
+    "revision": null
+  }, {
+    "url": "assets/aistudio/Icy_Lich_King_with_Runeblade_ff11a57c.png",
+    "revision": null
+  }, {
+    "url": "assets/aistudio/Golden_Goblin_with_Treasure_Sack_3d6e0643.png",
+    "revision": null
+  }, {
     "url": "assets/aistudio/Floating_Crystal_Shrine_0794aa82.png",
     "revision": null
   }, {
+    "url": "assets/aistudio/Fierce_Orc_Warrior_with_Branch_Club_2d06f5eb.png",
+    "revision": null
+  }, {
     "url": "assets/aistudio/Crystal_Alliance_Citadel_Strategy_Map_673bdea9.png",
+    "revision": null
+  }, {
+    "url": "assets/aistudio/Armored_Skeleton_Knight_with_Glowing_Eyes_8d07613d.png",
     "revision": null
   }, {
     "url": "apple-touch-icon.png",

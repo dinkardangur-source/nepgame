@@ -20,7 +20,14 @@ import {
   generateRandomCastles,
   pickValidCastleCoordinate,
 } from './WorldCoordinates';
-import { getEnemyCastleMaxHp, loadAllianceIdentity } from './NepaleseBalanceConfig';
+import { getEnemyCastleMaxHp, loadAllianceIdentity, TroopLevel } from './NepaleseBalanceConfig';
+import {
+  getMonsterArtConfig,
+  getSharedMonsterSpriteTexture,
+  MonsterArchetypeKey,
+  prewarmMonsterCutouts,
+} from './MonsterArtwork';
+import { getSharedMagarWarriorTexture } from './MagarChartArtwork';
 import {
   createStoneBrickTexture,
   createWoodPlankTexture,
@@ -189,7 +196,20 @@ export class WorldMap {
   public monstersGroup = new THREE.Group();
   public resourcesGroup = new THREE.Group();
   public armyGroup = new THREE.Group();
+  public alliedRallyGroup = new THREE.Group();
   public atmosphereGroup = new THREE.Group();
+
+  // Dynamic Lv.1-5 Magar Infantry Sprite Battalion & Hero Crest Indicators
+  private armyWarriorSpriteMat: THREE.SpriteMaterial | null = null;
+  private armyWarriorSprites: Array<{ sprite: THREE.Sprite; baseHeight: number; idx: number }> = [];
+  private armyWarriorAspect = 0.44;
+  private currentArmyTier: TroopLevel = 3;
+  private armyBannerBeaconMat: THREE.MeshStandardMaterial | null = null;
+  private armyCommanderRingMat: THREE.MeshBasicMaterial | null = null;
+  private armyCommanderRing: THREE.Mesh | null = null;
+  private alliedWarriorSpriteMat: THREE.SpriteMaterial | null = null;
+  private alliedWarriorSprites: THREE.Sprite[] = [];
+  private alliedWarriorAspect = 0.44;
 
   // Randomized Castles (My Castle + 10 Alliance Member Castles + 6 Enemy Castles) & Strategic Filter Mode
   public castlesList: CastleSpawnData[] = [];
@@ -220,6 +240,15 @@ export class WorldMap {
     inCombatOrGathering?: boolean;
     resourceType?: string;
   } | null = null;
+  private alliedRallyColumns = new Map<
+    string,
+    {
+      group: THREE.Group;
+      line: THREE.Line;
+      pts: [THREE.Vector3, THREE.Vector3];
+      isActive: boolean;
+    }
+  >();
   private externalMiningTimer = 0;
 
   // Selection ring indicator
@@ -336,9 +365,28 @@ export class WorldMap {
     maxLife: number;
   }> = [];
 
-  // Atmospheric living world elements (clouds & high-altitude eagles)
-  private atmosphericClouds: Array<{ group: THREE.Group; baseX: number; baseZ: number; speedX: number; phase: number }> = [];
-  private soaringEagles: Array<{ group: THREE.Group; cx: number; cz: number; baseY: number; radius: number; speed: number; phase: number }> = [];
+  // Atmospheric living world elements (clouds & high-altitude birds)
+  private atmosphericClouds: Array<{
+    group: THREE.Group;
+    baseX: number;
+    baseY: number;
+    baseZ: number;
+    speedX: number;
+    speedZ: number;
+    bobAmp: number;
+    phase: number;
+  }> = [];
+  private soaringEagles: Array<{
+    group: THREE.Group;
+    cx: number;
+    cz: number;
+    baseY: number;
+    radius: number;
+    speed: number;
+    flapSpeed: number;
+    bankTilt: number;
+    phase: number;
+  }> = [];
 
   // Animated Floating Crystal Shrines (hover crystal, twin gold orbit rings, rising flames, crackling lightning)
   private animatedShrines: Array<{
@@ -626,83 +674,230 @@ export class WorldMap {
   }
 
   /**
-   * High-altitude drifting cloud wisps and soaring Himalayan eagles for realistic living atmosphere
+   * High-altitude drifting cumulus clouds and soaring Himalayan birds (raptors + V-formation flocks)
    */
   private initAtmosphere() {
     this.scene.add(this.atmosphereGroup);
 
     const cloudGeo = new THREE.DodecahedronGeometry(1, 1);
-    const cloudMat = new THREE.MeshStandardMaterial({
+    const cloudTopMat = new THREE.MeshStandardMaterial({
       color: 0xf8fafc,
       roughness: 1.0,
       metalness: 0.0,
       transparent: true,
-      opacity: 0.44,
+      opacity: 0.46,
+      depthWrite: false,
+    });
+    const cloudShadeMat = new THREE.MeshStandardMaterial({
+      color: 0xdbeafe,
+      roughness: 1.0,
+      metalness: 0.0,
+      transparent: true,
+      opacity: 0.34,
       depthWrite: false,
     });
 
+    // 38 sculpted multi-puff cumulus clouds spread across all 4 quadrants, Nile corridor & outer peaks
     const cloudSpots: Array<[number, number, number, number]> = [
-      [280, 90, 280, 1.6], [2920, 94, 310, 1.7], [310, 96, 2920, 1.7], [2890, 92, 2880, 1.6],
-      [980, 86, 820, 1.4], [2140, 88, 2280, 1.45], [720, 98, 1780, 1.5], [2280, 88, 980, 1.4],
-      [1600, 100, 280, 1.6], [1600, 100, 2920, 1.6],
+      // Outer highlands & corners
+      [220, 92, 240, 1.75], [760, 102, 210, 1.45], [1420, 108, 190, 1.65], [2180, 104, 230, 1.55], [2920, 96, 290, 1.8],
+      [240, 98, 880, 1.5], [2980, 100, 920, 1.6], [260, 104, 1620, 1.7], [2950, 98, 1680, 1.65],
+      [290, 96, 2380, 1.55], [2910, 102, 2340, 1.6], [310, 98, 2940, 1.85], [960, 106, 2980, 1.55],
+      [1620, 104, 2940, 1.75], [2320, 100, 2960, 1.6], [2900, 94, 2890, 1.7],
+      // Mid-continent rings & Nile valley corridor
+      [680, 88, 680, 1.35], [1180, 92, 620, 1.25], [1920, 90, 640, 1.4], [2520, 94, 720, 1.45],
+      [640, 90, 1280, 1.3], [1140, 86, 1180, 1.2], [2080, 88, 1040, 1.35], [2580, 92, 1260, 1.4],
+      [740, 96, 1820, 1.5], [1220, 90, 1980, 1.25], [2020, 88, 1920, 1.35], [2540, 94, 1860, 1.45],
+      [680, 94, 2460, 1.4], [1240, 92, 2480, 1.3], [2120, 90, 2320, 1.45], [2580, 96, 2520, 1.5],
+      // High-altitude wisps around the central basin (kept high so Citadel & battles stay clear)
+      [1480, 118, 1340, 1.15], [1780, 122, 1460, 1.2], [1420, 120, 1780, 1.15], [1760, 124, 1820, 1.2],
+      [1590, 126, 980, 1.35], [1610, 126, 2220, 1.35],
     ];
 
     cloudSpots.forEach(([cx, cy, cz, scale], i) => {
       const cGrp = new THREE.Group();
       cGrp.position.set(cx, cy, cz);
-      for (let p = 0; p < 3; p++) {
-        const puff = new THREE.Mesh(cloudGeo, cloudMat);
-        puff.position.set((p - 1) * 18 * scale, (p % 2) * 3.5, (p - 1) * 6);
-        puff.scale.set(22 * scale, 5.5 * scale, 14 * scale);
+      cGrp.rotation.y = (i * 0.73) % (Math.PI * 2);
+
+      // Lower cool-tinted base puffs
+      const baseCount = 2 + (i % 2);
+      for (let b = 0; b < baseCount; b++) {
+        const basePuff = new THREE.Mesh(cloudGeo, cloudShadeMat);
+        basePuff.position.set(
+          (b - (baseCount - 1) * 0.5) * 17 * scale,
+          -1.6 * scale,
+          ((b % 2) - 0.5) * 7 * scale
+        );
+        basePuff.scale.set(20 * scale, 4.2 * scale, 13 * scale);
+        cGrp.add(basePuff);
+      }
+
+      // Upper warm-lit cumulus crown puffs (4 puffs)
+      const puffOffsets: Array<[number, number, number, number, number, number]> = [
+        [-19, 1.2, -3, 18, 5.2, 12],
+        [-5, 3.6, 2, 21, 6.8, 14],
+        [9, 2.8, -2, 19, 6.0, 13],
+        [21, 0.8, 4, 15, 4.4, 11],
+      ];
+      for (let p = 0; p < puffOffsets.length; p++) {
+        const [ox, oy, oz, sx, sy, sz] = puffOffsets[p];
+        const puff = new THREE.Mesh(cloudGeo, cloudTopMat);
+        puff.position.set(ox * scale, oy * scale, oz * scale);
+        puff.scale.set(sx * scale, sy * scale, sz * scale);
         cGrp.add(puff);
       }
+
       this.atmosphereGroup.add(cGrp);
       this.atmosphericClouds.push({
         group: cGrp,
         baseX: cx,
+        baseY: cy,
         baseZ: cz,
-        speedX: 3.2 + (i % 3) * 1.1,
-        phase: i * 1.1,
+        speedX: 2.6 + (i % 5) * 0.85,
+        speedZ: ((i % 3) - 1) * 0.45,
+        bobAmp: 1.1 + (i % 3) * 0.45,
+        phase: i * 0.92,
       });
     });
 
-    const eagleBodyGeo = new THREE.ConeGeometry(0.42, 2.2, 5);
-    eagleBodyGeo.rotateX(Math.PI / 2);
-    const eagleWingGeo = new THREE.BoxGeometry(2.3, 0.08, 0.72);
-    const eagleMat = new THREE.MeshStandardMaterial({ color: 0x3b281c, roughness: 0.85 });
+    // Composite 5-part procedural 3D bird silhouettes (body, head/beak, fanned tail, swept tapered L/R wings)
+    const birdBodyGeo = new THREE.ConeGeometry(0.36, 2.2, 6);
+    birdBodyGeo.rotateX(Math.PI / 2);
 
-    const eaglePeaks: Array<[number, number, number]> = [
-      [240, 66, 240], [2960, 68, 240], [240, 70, 2960], [2960, 72, 2960],
-      [1600, 62, 1600], [1320, 58, 1480], [1960, 60, 1480],
+    const birdBeakGeo = new THREE.ConeGeometry(0.16, 0.68, 5);
+    birdBeakGeo.rotateX(Math.PI / 2);
+
+    const birdTailGeo = new THREE.ConeGeometry(0.55, 1.15, 4);
+    birdTailGeo.rotateX(-Math.PI / 2);
+    birdTailGeo.scale(1.25, 0.16, 1.0);
+
+    // Swept tapered wing airfoil pivoted at shoulder x=0
+    const buildWingGeo = (side: -1 | 1): THREE.BufferGeometry => {
+      const shape = new THREE.Shape();
+      shape.moveTo(0, 0.44);
+      shape.lineTo(side * 1.15, 0.36);
+      shape.lineTo(side * 2.55, -0.18);
+      shape.lineTo(side * 2.2, -0.48);
+      shape.lineTo(side * 0.9, -0.22);
+      shape.lineTo(0, -0.32);
+      shape.closePath();
+
+      const geo = new THREE.ExtrudeGeometry(shape, {
+        depth: 0.06,
+        bevelEnabled: false,
+        curveSegments: 2,
+      });
+      geo.rotateX(Math.PI / 2);
+      return geo;
+    };
+    const leftWingGeo = buildWingGeo(-1);
+    const rightWingGeo = buildWingGeo(1);
+
+    const speciesPalettes = [
+      {
+        // Himalayan Golden Eagle
+        wing: new THREE.MeshStandardMaterial({ color: 0x3b281c, roughness: 0.82 }),
+        body: new THREE.MeshStandardMaterial({ color: 0x5c3a21, roughness: 0.8 }),
+        accent: new THREE.MeshStandardMaterial({ color: 0xf59e0b, roughness: 0.55 }),
+      },
+      {
+        // Highland Peregrine Falcon
+        wing: new THREE.MeshStandardMaterial({ color: 0x334155, roughness: 0.78 }),
+        body: new THREE.MeshStandardMaterial({ color: 0xe2e8f0, roughness: 0.75 }),
+        accent: new THREE.MeshStandardMaterial({ color: 0xfbbf24, roughness: 0.5 }),
+      },
+      {
+        // Alpine Snow Crane
+        wing: new THREE.MeshStandardMaterial({ color: 0xf8fafc, roughness: 0.72 }),
+        body: new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.8 }),
+        accent: new THREE.MeshStandardMaterial({ color: 0xef4444, roughness: 0.55 }),
+      },
     ];
 
-    eaglePeaks.forEach(([ex, ey, ez], idx) => {
+    const createBirdGroup = (speciesIdx: number, scale: number): THREE.Group => {
+      const pal = speciesPalettes[speciesIdx % speciesPalettes.length];
       const bird = new THREE.Group();
-      bird.position.set(ex, ey, ez);
 
-      const body = new THREE.Mesh(eagleBodyGeo, eagleMat);
+      const body = new THREE.Mesh(birdBodyGeo, pal.body);
       bird.add(body);
 
-      const leftWing = new THREE.Mesh(eagleWingGeo, eagleMat);
-      leftWing.position.set(-1.15, 0.1, 0);
+      const beak = new THREE.Mesh(birdBeakGeo, pal.accent);
+      beak.position.set(0, 0.04, 1.32);
+      bird.add(beak);
+
+      const tail = new THREE.Mesh(birdTailGeo, pal.wing);
+      tail.position.set(0, 0.02, -1.25);
+      bird.add(tail);
+
+      const leftWing = new THREE.Mesh(leftWingGeo, pal.wing);
+      leftWing.position.set(-0.2, 0.08, 0.05);
       leftWing.userData = { isEagleWingLeft: true };
       bird.add(leftWing);
 
-      const rightWing = new THREE.Mesh(eagleWingGeo, eagleMat);
-      rightWing.position.set(1.15, 0.1, 0);
+      const rightWing = new THREE.Mesh(rightWingGeo, pal.wing);
+      rightWing.position.set(0.2, 0.08, 0.05);
       rightWing.userData = { isEagleWingRight: true };
       bird.add(rightWing);
 
+      bird.scale.setScalar(scale);
+      return bird;
+    };
+
+    // 14 circling raptors over mountain peaks, Nile delta, shrines & castles
+    const raptorPeaks: Array<[number, number, number, number, number]> = [
+      [240, 64, 240, 42, 0], [2960, 66, 240, 46, 0], [240, 68, 2960, 44, 0], [2960, 70, 2960, 48, 0],
+      [1600, 62, 1600, 56, 0], [1320, 58, 1480, 38, 1], [1960, 60, 1480, 38, 1],
+      [820, 56, 2120, 40, 1], [2340, 58, 860, 44, 0], [920, 54, 1180, 36, 2],
+      [2180, 60, 2240, 46, 1], [620, 62, 740, 42, 0], [2540, 64, 1520, 40, 2], [1560, 64, 2680, 48, 0],
+    ];
+
+    raptorPeaks.forEach(([ex, ey, ez, radius, speciesIdx], idx) => {
+      const bird = createBirdGroup(speciesIdx, 1.05 + (idx % 3) * 0.14);
+      bird.position.set(ex, ey, ez);
       this.atmosphereGroup.add(bird);
       this.soaringEagles.push({
         group: bird,
         cx: ex,
         cz: ez,
         baseY: ey,
-        radius: 34 + (idx % 3) * 16,
-        speed: 0.34 + (idx % 3) * 0.08,
-        phase: idx * 1.4,
+        radius,
+        speed: 0.30 + (idx % 4) * 0.06,
+        flapSpeed: 6.4 + (idx % 3) * 1.1,
+        bankTilt: -0.22,
+        phase: idx * 1.15,
       });
+    });
+
+    // 6 gliding V-formation flocks (4 birds each = 24 birds) cruising across the valley & rivers
+    const flockRoutes: Array<[number, number, number, number, number]> = [
+      [1100, 50, 980, 155, 2],
+      [2080, 54, 1280, 175, 1],
+      [1520, 58, 2040, 190, 2],
+      [880, 52, 2360, 165, 1],
+      [2340, 56, 2420, 170, 2],
+      [1620, 60, 740, 185, 1],
+    ];
+
+    flockRoutes.forEach(([fx, fy, fz, baseRadius, speciesIdx], fIdx) => {
+      const baseSpeed = 0.16 + (fIdx % 3) * 0.03;
+      const basePhase = fIdx * 1.7;
+      for (let m = 0; m < 4; m++) {
+        const bird = createBirdGroup(speciesIdx, m === 0 ? 0.94 : 0.82);
+        const wingOffset = m === 0 ? 0 : (m % 2 === 1 ? -1 : 1) * Math.ceil(m / 2) * 11;
+        bird.position.set(fx, fy, fz);
+        this.atmosphereGroup.add(bird);
+        this.soaringEagles.push({
+          group: bird,
+          cx: fx,
+          cz: fz,
+          baseY: fy + (m === 0 ? 1.2 : -m * 0.45),
+          radius: baseRadius + wingOffset,
+          speed: baseSpeed,
+          flapSpeed: 7.4 + m * 0.45,
+          bankTilt: -0.16,
+          phase: basePhase - m * 0.09,
+        });
+      }
     });
   }
 
@@ -747,20 +942,20 @@ export class WorldMap {
         ctx.font = "900 32px 'Barlow Condensed', sans-serif";
         ctx.fillStyle = accentColor;
         ctx.textAlign = 'center';
-        ctx.fillText(starsText, 256, 52);
+        ctx.fillText(starsText, 256, 52, 452);
       }
 
       // Main Title
       ctx.font = "800 34px 'Barlow Condensed', sans-serif";
       ctx.fillStyle = '#ffffff';
       ctx.textAlign = 'center';
-      ctx.fillText(title, 256, starsText ? 94 : 76);
+      ctx.fillText(title, 256, starsText ? 94 : 76, 452);
 
       // Subtitle
       ctx.font = "700 24px 'Inter', sans-serif";
       ctx.fillStyle = accentColor;
       ctx.textAlign = 'center';
-      ctx.fillText(subtitle, 256, starsText ? 132 : 118);
+      ctx.fillText(subtitle, 256, starsText ? 132 : 118, 452);
     }
 
     const tex = new THREE.CanvasTexture(canvas);
@@ -2410,6 +2605,8 @@ export class WorldMap {
       hitCollider.userData = { gameEntity: entity };
       rGroup.add(hitCollider);
 
+      rGroup.add(this.createResourceBelowTag(entity));
+
       this.pickableObjects.push(hitCollider);
       this.starterResourcePickables.push(hitCollider);
       this.starterResourceGroups.push(rGroup);
@@ -2418,44 +2615,193 @@ export class WorldMap {
     }
   }
 
+  private createResourceBelowTag(entity: WorldEntity): THREE.Sprite {
+    const sub = (entity.resourceType || entity.subtype || 'wood').toLowerCase();
+    const lvl = entity.level ?? 1;
+    const yieldVal = entity.yieldAmount ?? 0;
+    const yieldText =
+      yieldVal >= 1000
+        ? `${(yieldVal / 1000).toFixed(yieldVal % 1000 === 0 ? 0 : 1)}K YIELD`
+        : `${yieldVal} YIELD`;
+
+    let borderCol = '#22c55e';
+    let accentCol = '#86efac';
+    let headerLabel = '🌲 TIMBER CAMP';
+    if (sub === 'crystal') {
+      borderCol = '#38bdf8';
+      accentCol = '#bae6fd';
+      headerLabel = '💎 CRYSTAL VEIN';
+    } else if (sub === 'gold') {
+      borderCol = '#facc15';
+      accentCol = '#fef08a';
+      headerLabel = '🪙 GOLD MINE';
+    } else if (sub === 'iron') {
+      borderCol = '#94a3b8';
+      accentCol = '#e2e8f0';
+      headerLabel = '⚒️ IRON QUARRY';
+    } else if (sub === 'stone') {
+      borderCol = '#a8a29e';
+      accentCol = '#e7e5e4';
+      headerLabel = '🪨 STONE QUARRY';
+    } else if (sub === 'farm' || sub === 'food') {
+      borderCol = '#84cc16';
+      accentCol = '#d9f99d';
+      headerLabel = '🌾 WHEAT FARM';
+    }
+
+    const badge = this.createFloatingBadgeSprite(
+      entity.name.toUpperCase(),
+      `LV.${lvl} · ${yieldText}`,
+      headerLabel,
+      borderCol,
+      accentCol,
+      10.2,
+      3.1
+    );
+    const dist = 5.8;
+    badge.center.set(0.5, 0);
+    badge.position.set(0, 0.25, dist);
+    badge.renderOrder = 15;
+    badge.userData = { belowTagDist: dist, belowTagY: 0.25 };
+    return badge;
+  }
+
   // ============================================================
-  // 2. PROCEDURAL 3D MONSTERS (16+ Living Beasts, Drakes & Bosses)
+  // 2. MONSTERS (Uploaded Cutout Sprites + Elemental Aura Rings)
   // ============================================================
   private initMonsters() {
     this.scene.add(this.monstersGroup);
+    prewarmMonsterCutouts();
 
-    const iceTex = createIceSpikeTexture();
-    const iceMat = new THREE.MeshStandardMaterial({ map: iceTex, roughness: 0.25, metalness: 0.4, transparent: true, opacity: 0.92 });
-    const furWhiteMat = new THREE.MeshStandardMaterial({ color: 0xf1f5f9, roughness: 0.95 });
-    const darkRockMat = new THREE.MeshStandardMaterial({ color: 0x334155, roughness: 0.85, metalness: 0.3 });
-    const magmaMat = new THREE.MeshStandardMaterial({ color: 0xff4500, emissive: 0xff3300, emissiveIntensity: 3.2 });
-    const woodBarkMat = new THREE.MeshStandardMaterial({ color: 0x4a3525, roughness: 0.9 });
-    const beastDarkMat = new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.88 });
-    const dragonRedMat = new THREE.MeshStandardMaterial({ color: 0x991b1b, roughness: 0.4, metalness: 0.3 });
-    const eyeCyanMat = new THREE.MeshBasicMaterial({ color: 0x38bdf8 });
-    const eyeAmberMat = new THREE.MeshBasicMaterial({ color: 0xfbbf24 });
+    // Soft radial contact shadow texture shared across all monster spawns
+    const shadowCanvas = document.createElement('canvas');
+    shadowCanvas.width = 128;
+    shadowCanvas.height = 128;
+    const sCtx = shadowCanvas.getContext('2d');
+    if (sCtx) {
+      const grad = sCtx.createRadialGradient(64, 64, 6, 64, 64, 60);
+      grad.addColorStop(0, 'rgba(4, 7, 15, 0.72)');
+      grad.addColorStop(0.55, 'rgba(4, 7, 15, 0.38)');
+      grad.addColorStop(1, 'rgba(4, 7, 15, 0)');
+      sCtx.fillStyle = grad;
+      sCtx.fillRect(0, 0, 128, 128);
+    }
+    const contactShadowTex = new THREE.CanvasTexture(shadowCanvas);
+    const contactShadowMat = new THREE.MeshBasicMaterial({
+      map: contactShadowTex,
+      transparent: true,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+    });
 
-    const addMesh = (parent: THREE.Object3D, geo: THREE.BufferGeometry, mat: THREE.Material, x = 0, y = 0, z = 0) => {
-      const mesh = new THREE.Mesh(geo, mat);
-      mesh.position.set(x, y, z);
-      mesh.castShadow = true;
-      mesh.receiveShadow = true;
-      parent.add(mesh);
-      return mesh;
+    const maxAniso = Math.min(8, this.renderer.capabilities.getMaxAnisotropy());
+    const spriteMatCache = new Map<
+      MonsterArchetypeKey,
+      {
+        mat: THREE.SpriteMaterial;
+        aspect: number;
+        sprites: Array<{ sprite: THREE.Sprite; height: number }>;
+      }
+    >();
+
+    const getArchetypeSpriteEntry = (key: MonsterArchetypeKey, defaultAspect: number) => {
+      const existing = spriteMatCache.get(key);
+      if (existing) return existing;
+
+      const entry = {
+        mat: new THREE.SpriteMaterial({
+          transparent: true,
+          alphaTest: 0.05,
+          depthWrite: true,
+          side: THREE.DoubleSide,
+          visible: false,
+        }),
+        aspect: defaultAspect,
+        sprites: [] as Array<{ sprite: THREE.Sprite; height: number }>,
+      };
+      spriteMatCache.set(key, entry);
+
+      const { texture, aspectRatio } = getSharedMonsterSpriteTexture(key, maxAniso, (readyAspect, readyTexture) => {
+        entry.aspect = readyAspect;
+        entry.mat.map = readyTexture;
+        entry.mat.visible = true;
+        entry.mat.needsUpdate = true;
+        for (let i = 0; i < entry.sprites.length; i++) {
+          const item = entry.sprites[i];
+          item.sprite.scale.set(item.height * readyAspect, item.height, 1);
+        }
+      });
+      if (texture) {
+        entry.mat.map = texture;
+        entry.mat.visible = true;
+        entry.mat.needsUpdate = true;
+      }
+      entry.aspect = aspectRatio;
+      return entry;
     };
 
-    const registerMonster = (group: THREE.Group, entity: WorldEntity) => {
+    // Cache aura ring geometries & materials by archetype
+    const auraGeoCache = new Map<string, THREE.RingGeometry>();
+    const auraMatCache = new Map<string, THREE.MeshBasicMaterial>();
+    const shadowGeoCache = new Map<string, THREE.CircleGeometry>();
+    const bossOuterGeo = new THREE.RingGeometry(6.8, 8.15, 36);
+    const bossOuterMat = new THREE.MeshBasicMaterial({
+      color: 0xef4444,
+      side: THREE.DoubleSide,
+      transparent: true,
+      opacity: 0.46,
+      depthWrite: false,
+    });
+
+    const registerMonster = (group: THREE.Group, entity: WorldEntity, belowTagDist: number) => {
       group.userData = { gameEntity: entity };
       this.entitiesMap.set(entity.id, entity);
       this.monsterMeshesMap.set(entity.id, group);
 
+      const isBoss = entity.subtype === 'boss' || (entity.level ?? 1) >= 10;
+      const colliderHeight = isBoss ? 14 : 10;
       const hitCollider = new THREE.Mesh(
-        new THREE.CylinderGeometry(entity.radius, entity.radius, 10, 8),
+        new THREE.CylinderGeometry(entity.radius, entity.radius, colliderHeight, 8),
         new THREE.MeshBasicMaterial({ visible: false, transparent: true, opacity: 0 })
       );
-      hitCollider.position.y = 5;
+      hitCollider.position.y = colliderHeight * 0.5;
       hitCollider.userData = { gameEntity: entity };
       group.add(hitCollider);
+
+      // Floating 3D Monster Nameplate Badge positioned cleanly BELOW the monster
+      const lvl = entity.level ?? 1;
+      const hpVal = entity.maxHealth || entity.health || 2000;
+      const hpText = hpVal >= 1000 ? `${(hpVal / 1000).toFixed(hpVal % 1000 === 0 ? 0 : 1)}K HP` : `${hpVal} HP`;
+      const isGoblin = entity.subtype === 'goblin';
+      const borderCol = isBoss ? '#ef4444' : isGoblin ? '#facc15' : lvl >= 7 ? '#38bdf8' : lvl >= 4 ? '#fb923c' : '#22c55e';
+      const accentCol = isBoss ? '#e9d5ff' : isGoblin ? '#fef08a' : lvl >= 7 ? '#bae6fd' : lvl >= 4 ? '#fed7aa' : '#86efac';
+      const headerLabel = isBoss
+        ? '★ DRAGO WORLD BOSS ★'
+        : isGoblin
+          ? '💰 TREASURE RALLY'
+          : entity.subtype === 'death_knight'
+            ? '❄ DEATH KNIGHT · RALLY'
+            : entity.subtype === 'skeleton'
+              ? '☠ SKELETON · RALLY'
+              : '⚔ ORC · RALLY';
+      const badgeW = isBoss ? 14.2 : 11.0;
+      const badgeH = isBoss ? 4.1 : 3.3;
+
+      const monsterBadge = this.createFloatingBadgeSprite(
+        entity.name.toUpperCase(),
+        `LV.${lvl} · ${hpText}`,
+        headerLabel,
+        borderCol,
+        accentCol,
+        badgeW,
+        badgeH
+      );
+      const tagY = 0.25;
+      monsterBadge.center.set(0.5, 0);
+      monsterBadge.position.set(0, tagY, belowTagDist);
+      monsterBadge.renderOrder = 15;
+      monsterBadge.userData = { belowTagDist, belowTagY: tagY };
+      group.add(monsterBadge);
 
       this.pickableObjects.push(hitCollider);
       this.monstersGroup.add(group);
@@ -2467,90 +2813,71 @@ export class WorldMap {
       const mGroup = new THREE.Group();
       mGroup.position.set(mData.position[0], groundY, mData.position[2]);
 
-      if (mData.id.includes('yeti')) {
-        // Ancient Frost Yeti King: Massive muscular chest, ice spikes, frost club
-        const torso = addMesh(mGroup, new THREE.BoxGeometry(3.8, 4.2, 3.0), furWhiteMat, 0, 3.2, 0);
-        torso.userData = { isYetiChest: true };
-        addMesh(mGroup, new THREE.BoxGeometry(1.4, 3.8, 1.5), furWhiteMat, -2.6, 2.8, 0);
-        addMesh(mGroup, new THREE.BoxGeometry(1.4, 3.8, 1.5), furWhiteMat, 2.6, 2.8, 0);
-        addMesh(mGroup, new THREE.BoxGeometry(2.2, 2.2, 2.2), furWhiteMat, 0, 6.0, 0.3);
-        // Pale cyan glowing eyes
-        addMesh(mGroup, new THREE.SphereGeometry(0.2, 6, 6), eyeCyanMat, -0.5, 6.2, 1.3);
-        addMesh(mGroup, new THREE.SphereGeometry(0.2, 6, 6), eyeCyanMat, 0.5, 6.2, 1.3);
-        // Glacial Ice Horns
-        addMesh(mGroup, new THREE.ConeGeometry(0.5, 2.8, 6), iceMat, -1.4, 7.4, 0.3).rotation.z = -0.45;
-        addMesh(mGroup, new THREE.ConeGeometry(0.5, 2.8, 6), iceMat, 1.4, 7.4, 0.3).rotation.z = 0.45;
-        // Spiked Glacial Club held in right arm
-        const club = addMesh(mGroup, new THREE.CylinderGeometry(0.25, 0.55, 4.8, 8), darkRockMat, 3.2, 3.5, 1.2);
-        club.rotation.x = 0.4;
-        club.userData = { isYetiClub: true };
-        addMesh(club, new THREE.ConeGeometry(0.35, 1.2, 6), iceMat, 0, 2.2, 0);
-      } else if (mData.id.includes('crimson_wyvern') || mData.subtype === 'drake') {
-        // Crimson Sky Wyvern & Mountain Drakes: Articulated dual wings & swaying tail
-        const isWyvern = mData.id.includes('crimson_wyvern');
-        const dMat = isWyvern ? dragonRedMat : darkRockMat;
+      const artCfg = getMonsterArtConfig(mData.subtype, mData.level, mData.name);
 
-        addMesh(mGroup, new THREE.BoxGeometry(3.2, 2.2, 5.4), dMat, 0, 2.5, 0);
-        // Serpentine neck & head
-        addMesh(mGroup, new THREE.CylinderGeometry(0.7, 1.0, 2.8, 6), dMat, 0, 3.8, 2.2).rotation.x = 0.5;
-        addMesh(mGroup, new THREE.BoxGeometry(1.6, 1.4, 2.6), dMat, 0, 4.8, 3.4);
-        // Fiery gullet / glowing maw
-        addMesh(mGroup, new THREE.SphereGeometry(0.55, 8, 8), magmaMat, 0, 4.4, 4.2);
-        // Articulated Left & Right Wings
-        const wingL = new THREE.Group();
-        wingL.position.set(-1.8, 3.2, 0);
-        addMesh(wingL, new THREE.BoxGeometry(5.2, 0.18, 2.8), dMat, -2.5, 0, 0);
-        addMesh(wingL, new THREE.ConeGeometry(0.4, 2.2, 5), iceMat, -4.8, 0, 1.2).rotation.z = 1.2;
-        wingL.userData = { isWingLeft: true };
-        mGroup.add(wingL);
+      // 1. Soft radial contact shadow grounded beneath monster feet
+      let sGeo = shadowGeoCache.get(artCfg.key);
+      if (!sGeo) {
+        sGeo = new THREE.CircleGeometry(artCfg.shadowRadius, 24);
+        shadowGeoCache.set(artCfg.key, sGeo);
+      }
+      const contactShadow = new THREE.Mesh(sGeo, contactShadowMat);
+      contactShadow.rotation.x = -Math.PI / 2;
+      contactShadow.position.y = 0.08;
+      contactShadow.userData = { isContactShadow: true };
+      mGroup.add(contactShadow);
 
-        const wingR = new THREE.Group();
-        wingR.position.set(1.8, 3.2, 0);
-        addMesh(wingR, new THREE.BoxGeometry(5.2, 0.18, 2.8), dMat, 2.5, 0, 0);
-        addMesh(wingR, new THREE.ConeGeometry(0.4, 2.2, 5), iceMat, 4.8, 0, 1.2).rotation.z = -1.2;
-        wingR.userData = { isWingRight: true };
-        mGroup.add(wingR);
+      // 2. Archetype elemental ground aura ring
+      let aGeo = auraGeoCache.get(artCfg.key);
+      if (!aGeo) {
+        aGeo = new THREE.RingGeometry(artCfg.ringInner, artCfg.ringOuter, 32);
+        auraGeoCache.set(artCfg.key, aGeo);
+      }
+      let aMat = auraMatCache.get(artCfg.key);
+      if (!aMat) {
+        aMat = new THREE.MeshBasicMaterial({
+          color: artCfg.auraHex,
+          side: THREE.DoubleSide,
+          transparent: true,
+          opacity: artCfg.key === 'boss' ? 0.62 : 0.45,
+          depthWrite: false,
+        });
+        auraMatCache.set(artCfg.key, aMat);
+      }
+      const auraRing = new THREE.Mesh(aGeo, aMat);
+      auraRing.rotation.x = -Math.PI / 2;
+      auraRing.position.y = 0.13;
+      auraRing.userData = { isMonsterAuraRing: true };
+      mGroup.add(auraRing);
 
-        // Dragon Tail
-        const tail = addMesh(mGroup, new THREE.ConeGeometry(0.8, 4.5, 6), dMat, 0, 2.0, -4.2);
-        tail.rotation.x = -1.3;
-        tail.userData = { isDragonTail: true };
-      } else if (mData.subtype === 'golem') {
-        // Corrupted Stone Colossus: Magma fissures & levitating shoulder boulders
-        addMesh(mGroup, new THREE.BoxGeometry(3.2, 4.5, 2.4), darkRockMat, 0, 2.6, 0);
-        addMesh(mGroup, new THREE.BoxGeometry(1.6, 1.6, 1.6), darkRockMat, 0, 5.4, 0);
-        addMesh(mGroup, new THREE.SphereGeometry(0.65, 8, 8), magmaMat, 0, 3.0, 1.2);
-        // Big heavy stone arms
-        addMesh(mGroup, new THREE.BoxGeometry(1.4, 4.0, 1.4), darkRockMat, -2.4, 2.4, 0);
-        addMesh(mGroup, new THREE.BoxGeometry(1.4, 4.0, 1.4), darkRockMat, 2.4, 2.4, 0);
-        // Levitating shoulder boulders that bob in the air
-        const floatRockL = addMesh(mGroup, new THREE.DodecahedronGeometry(0.85, 0), darkRockMat, -2.6, 5.6, 0);
-        floatRockL.userData = { isFloatingRock: true, phase: 0 };
-        const floatRockR = addMesh(mGroup, new THREE.DodecahedronGeometry(0.85, 0), darkRockMat, 2.6, 5.6, 0);
-        floatRockR.userData = { isFloatingRock: true, phase: Math.PI };
-      } else if (mData.subtype === 'treant') {
-        // Ancient Forest Treant: Gnarled bark, swaying branches & bioluminescent nodes
-        addMesh(mGroup, new THREE.CylinderGeometry(1.0, 1.8, 5.2, 7), woodBarkMat, 0, 2.6, 0);
-        addMesh(mGroup, new THREE.DodecahedronGeometry(2.4, 1), new THREE.MeshStandardMaterial({ color: 0x15803d, roughness: 0.8 }), 0, 6.0, 0);
-        addMesh(mGroup, new THREE.SphereGeometry(0.5, 8, 8), new THREE.MeshStandardMaterial({ color: 0x22c55e, emissive: 0x16a34a, emissiveIntensity: 3.0 }), 0, 3.0, 1.1);
-        // Swaying leafy branch arms
-        const bArmL = addMesh(mGroup, new THREE.BoxGeometry(2.4, 0.6, 0.6), woodBarkMat, -2.0, 4.2, 0);
-        bArmL.userData = { isTreantBranch: true, phase: 0 };
-        const bArmR = addMesh(mGroup, new THREE.BoxGeometry(2.4, 0.6, 0.6), woodBarkMat, 2.0, 4.2, 0);
-        bArmR.userData = { isTreantBranch: true, phase: Math.PI };
-      } else {
-        // Predators (Dire Wolf / Leopard / Chimera)
-        addMesh(mGroup, new THREE.BoxGeometry(1.8, 1.5, 3.4), beastDarkMat, 0, 1.2, 0);
-        addMesh(mGroup, new THREE.BoxGeometry(1.1, 1.1, 1.5), beastDarkMat, 0, 2.0, 2.0);
-        addMesh(mGroup, new THREE.SphereGeometry(0.14, 6, 6), eyeAmberMat, -0.32, 2.2, 2.6);
-        addMesh(mGroup, new THREE.SphereGeometry(0.14, 6, 6), eyeAmberMat, 0.32, 2.2, 2.6);
-        // Articulated tail
-        const tail = addMesh(mGroup, new THREE.CylinderGeometry(0.12, 0.22, 2.2, 6), beastDarkMat, 0, 1.6, -2.4);
-        tail.rotation.x = 0.8;
-        tail.userData = { isBeastTail: true };
+      if (artCfg.key === 'boss') {
+        const outerBossRing = new THREE.Mesh(bossOuterGeo, bossOuterMat);
+        outerBossRing.rotation.x = -Math.PI / 2;
+        outerBossRing.position.y = 0.16;
+        outerBossRing.userData = { isBossAuraRing: true };
+        mGroup.add(outerBossRing);
       }
 
-      registerMonster(mGroup, mData);
+      // 3. Exact Uploaded PNG Cutout Sprite Standee (feet firmly planted at y = 0)
+      const bodyRoot = new THREE.Group();
+      bodyRoot.position.set(0, 0, 0);
+      bodyRoot.frustumCulled = false;
+      bodyRoot.userData = {
+        isMonsterBodyRoot: true,
+        baseY: 0,
+      };
+
+      const spriteEntry = getArchetypeSpriteEntry(artCfg.key, artCfg.initialAspect);
+      const monsterSprite = new THREE.Sprite(spriteEntry.mat);
+      monsterSprite.center.set(0.5, 0);
+      monsterSprite.scale.set(artCfg.spriteHeight * spriteEntry.aspect, artCfg.spriteHeight, 1);
+      monsterSprite.renderOrder = 12;
+      monsterSprite.frustumCulled = false;
+      spriteEntry.sprites.push({ sprite: monsterSprite, height: artCfg.spriteHeight });
+      bodyRoot.add(monsterSprite);
+
+      mGroup.add(bodyRoot);
+      registerMonster(mGroup, mData, artCfg.belowTagDist);
     }
   }
 
@@ -2918,6 +3245,8 @@ export class WorldMap {
       hitCollider.userData = { gameEntity: entity };
       group.add(hitCollider);
 
+      group.add(this.createResourceBelowTag(entity));
+
       this.pickableObjects.push(hitCollider);
       this.resourcesGroup.add(group);
     };
@@ -2936,89 +3265,180 @@ export class WorldMap {
     this.armyGroup.visible = false;
     this.scene.add(this.armyGroup);
 
-    const metalMat = new THREE.MeshStandardMaterial({ color: 0x94a3b8, roughness: 0.3, metalness: 0.85 });
-    const clothMat = new THREE.MeshStandardMaterial({ color: 0x991b1b, roughness: 0.8 });
-    const skinMat = new THREE.MeshStandardMaterial({ color: 0xcfa07e, roughness: 0.8 });
-    const dragonBannerTex = createDragonBannerTexture();
-    const dragonBannerMat = new THREE.MeshStandardMaterial({ map: dragonBannerTex, side: THREE.DoubleSide, roughness: 0.5 });
+    const maxAniso = Math.min(8, this.renderer.capabilities.getMaxAnisotropy());
+    const initTex = getSharedMagarWarriorTexture(3, maxAniso, (readyAspect, readyTexture) => {
+      if (this.currentArmyTier !== 3) return;
+      this.armyWarriorAspect = readyAspect;
+      if (this.armyWarriorSpriteMat) {
+        this.armyWarriorSpriteMat.map = readyTexture;
+        this.armyWarriorSpriteMat.visible = true;
+        this.armyWarriorSpriteMat.needsUpdate = true;
+      }
+      for (let i = 0; i < this.armyWarriorSprites.length; i++) {
+        const item = this.armyWarriorSprites[i];
+        item.sprite.scale.set(item.baseHeight * readyAspect, item.baseHeight, 1);
+      }
+    });
+    this.armyWarriorAspect = initTex.aspectRatio;
+    this.armyWarriorSpriteMat = new THREE.SpriteMaterial({
+      map: initTex.texture,
+      transparent: true,
+      alphaTest: 0.05,
+      depthWrite: true,
+      side: THREE.DoubleSide,
+      visible: Boolean(initTex.texture),
+    });
 
-    // 15 Formation Troops in 3 Rows of 5
+    this.armyCommanderRingMat = new THREE.MeshBasicMaterial({
+      color: 0xfacc15,
+      side: THREE.DoubleSide,
+      transparent: true,
+      opacity: 0.72,
+      depthWrite: false,
+    });
+    this.armyBannerBeaconMat = new THREE.MeshStandardMaterial({
+      color: 0xfef08a,
+      emissive: 0xf59e0b,
+      emissiveIntensity: 3.0,
+    });
+
+    const unitShadowGeo = new THREE.CircleGeometry(0.55, 14);
+    const unitShadowMat = new THREE.MeshBasicMaterial({
+      color: 0x050811,
+      transparent: true,
+      opacity: 0.44,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+    });
+    const dragonBannerTex = createDragonBannerTexture();
+    const dragonBannerMat = new THREE.MeshStandardMaterial({
+      map: dragonBannerTex,
+      side: THREE.DoubleSide,
+      roughness: 0.5,
+    });
+
+    this.armyWarriorSprites = [];
+
+    // 15 Formation Magar Warriors in 3 Rows of 5 (exact progression chart sprites per tier)
     for (let i = 0; i < 15; i++) {
       const warrior = new THREE.Group();
       const col = i % 5;
       const row = Math.floor(i / 5);
-      warrior.position.set((col - 2) * 0.9, 0, (row - 1) * 0.95);
+      warrior.position.set((col - 2) * 1.15, 0, (row - 1) * 1.25);
 
-      const isCommander = i === 2; // Front center is Commander
-      const isArcher = row === 2; // Back row are Longbowmen
-      warrior.userData = { idx: i, isCommander, isArcher };
+      const isCommander = i === 2; // Front center is Battalion Leader
+      warrior.userData = { idx: i, isCommander, isWarriorUnit: true };
 
-      // Legs
-      const legL = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.09, 0.55, 6), new THREE.MeshStandardMaterial({ color: 0x1e293b }));
-      legL.position.set(-0.14, 0.28, 0);
-      legL.userData = { isLegLeft: true };
-      warrior.add(legL);
+      const shadowDisc = new THREE.Mesh(unitShadowGeo, unitShadowMat);
+      shadowDisc.rotation.x = -Math.PI / 2;
+      shadowDisc.position.y = 0.04;
+      warrior.add(shadowDisc);
 
-      const legR = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.09, 0.55, 6), new THREE.MeshStandardMaterial({ color: 0x1e293b }));
-      legR.position.set(0.14, 0.28, 0);
-      legR.userData = { isLegRight: true };
-      warrior.add(legR);
+      const baseHeight = isCommander ? 3.25 : 2.75;
+      const wSprite = new THREE.Sprite(this.armyWarriorSpriteMat);
+      wSprite.center.set(0.5, 0);
+      wSprite.position.y = 0.05;
+      wSprite.scale.set(baseHeight * this.armyWarriorAspect, baseHeight, 1);
+      wSprite.renderOrder = 11;
+      wSprite.frustumCulled = false;
+      warrior.add(wSprite);
+      this.armyWarriorSprites.push({ sprite: wSprite, baseHeight, idx: i });
 
-      // Torso
-      const torsoMat = isCommander
-        ? new THREE.MeshStandardMaterial({ color: 0xb45309, metalness: 0.7, roughness: 0.3 })
-        : clothMat;
-      const torso = new THREE.Mesh(new THREE.CylinderGeometry(0.24, 0.28, 0.8, 7), torsoMat);
-      torso.position.y = 0.85;
-      warrior.add(torso);
-
-      // Head
-      const head = new THREE.Mesh(new THREE.SphereGeometry(0.2, 8, 8), skinMat);
-      head.position.y = 1.38;
-      warrior.add(head);
-
-      // Helmet
-      const helm = new THREE.Mesh(new THREE.ConeGeometry(0.24, 0.35, 7), metalMat);
-      helm.position.y = 1.62;
-      warrior.add(helm);
-
-      if (isArcher) {
-        // Recurve Bow held in left hand
-        const bow = new THREE.Mesh(new THREE.TorusGeometry(0.45, 0.04, 6, 12, Math.PI), new THREE.MeshStandardMaterial({ color: 0x78350f }));
-        bow.position.set(-0.35, 1.0, 0.1);
-        bow.rotation.z = Math.PI / 2;
-        warrior.add(bow);
-      } else {
-        // Khukuri curved sword held in right hand
-        const khukuri = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.85, 0.14), metalMat);
-        khukuri.position.set(0.4, 0.95, 0.15);
-        khukuri.rotation.z = -0.2;
-        khukuri.userData = { isWeapon: true };
-        warrior.add(khukuri);
-
-        // Round Buckler Shield on left forearm
-        const shield = new THREE.Mesh(new THREE.CylinderGeometry(0.35, 0.35, 0.06, 10), metalMat);
-        shield.position.set(-0.38, 0.95, 0.12);
-        shield.rotation.x = Math.PI / 2;
-        warrior.add(shield);
+      if (isCommander) {
+        this.armyCommanderRing = new THREE.Mesh(
+          new THREE.RingGeometry(0.68, 0.94, 24),
+          this.armyCommanderRingMat
+        );
+        this.armyCommanderRing.rotation.x = -Math.PI / 2;
+        this.armyCommanderRing.position.y = 0.08;
+        warrior.add(this.armyCommanderRing);
       }
 
       this.armyGroup.add(warrior);
     }
 
-    // Imperial Vanguard Dragon Silk Banner Pole out in front
-    const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 4.8, 8), new THREE.MeshStandardMaterial({ color: 0xdfba6e, metalness: 0.9 }));
-    pole.position.set(-1.8, 2.4, 0.4);
+    // Imperial Vanguard Dragon Silk Banner Pole flanking the vanguard
+    const pole = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.055, 0.055, 5.0, 8),
+      new THREE.MeshStandardMaterial({ color: 0xdfba6e, metalness: 0.9 })
+    );
+    pole.position.set(-2.9, 2.5, 0.6);
     this.armyGroup.add(pole);
 
-    const bannerMesh = new THREE.Mesh(new THREE.PlaneGeometry(1.6, 2.6), dragonBannerMat);
-    bannerMesh.position.set(-0.9, 3.4, 0.4);
+    const bannerMesh = new THREE.Mesh(new THREE.PlaneGeometry(1.65, 2.65), dragonBannerMat);
+    bannerMesh.position.set(-2.0, 3.55, 0.6);
     bannerMesh.userData = { isArmyBanner: true };
     this.armyGroup.add(bannerMesh);
 
-    const beacon = new THREE.Mesh(new THREE.SphereGeometry(0.28, 12, 12), new THREE.MeshStandardMaterial({ color: 0xfef08a, emissive: 0xf59e0b, emissiveIntensity: 3.0 }));
-    beacon.position.set(-1.8, 4.9, 0.4);
+    const beacon = new THREE.Mesh(new THREE.SphereGeometry(0.28, 12, 12), this.armyBannerBeaconMat);
+    beacon.position.set(-2.9, 5.1, 0.6);
     this.armyGroup.add(beacon);
+
+    this.scene.add(this.alliedRallyGroup);
+    this.setArmyEquipmentTier(3, { weapon: 0, shield: 0, armor: 0 });
+  }
+
+  public setArmyEquipmentTier(
+    infantryTier: number,
+    ranks: { weapon: number; shield: number; armor: number },
+    heroCrestColor?: string
+  ) {
+    const tier = Math.max(1, Math.min(5, Math.round(infantryTier || 1))) as TroopLevel;
+    this.currentArmyTier = tier;
+    const totalForgeRank = Math.max(0, (ranks.weapon || 0) + (ranks.shield || 0) + (ranks.armor || 0));
+    const maxAniso = Math.min(8, this.renderer.capabilities.getMaxAnisotropy());
+
+    const { texture, aspectRatio } = getSharedMagarWarriorTexture(tier, maxAniso, (readyAspect, readyTexture) => {
+      if (this.currentArmyTier !== tier) return;
+      this.armyWarriorAspect = readyAspect;
+      if (this.armyWarriorSpriteMat) {
+        this.armyWarriorSpriteMat.map = readyTexture;
+        this.armyWarriorSpriteMat.visible = true;
+        this.armyWarriorSpriteMat.needsUpdate = true;
+      }
+      for (let i = 0; i < this.armyWarriorSprites.length; i++) {
+        const item = this.armyWarriorSprites[i];
+        item.sprite.scale.set(item.baseHeight * readyAspect, item.baseHeight, 1);
+      }
+    });
+
+    this.armyWarriorAspect = aspectRatio;
+    if (this.armyWarriorSpriteMat) {
+      if (texture) {
+        this.armyWarriorSpriteMat.map = texture;
+        this.armyWarriorSpriteMat.visible = true;
+      }
+      // Subtle forged sheen without darkening the chart artwork
+      if (totalForgeRank >= 6) {
+        this.armyWarriorSpriteMat.color.setHex(0xfef9c3);
+      } else if (totalForgeRank >= 3) {
+        this.armyWarriorSpriteMat.color.setHex(0xfffbeb);
+      } else {
+        this.armyWarriorSpriteMat.color.setHex(0xffffff);
+      }
+      this.armyWarriorSpriteMat.needsUpdate = true;
+    }
+
+    for (let i = 0; i < this.armyWarriorSprites.length; i++) {
+      const item = this.armyWarriorSprites[i];
+      item.sprite.scale.set(item.baseHeight * aspectRatio, item.baseHeight, 1);
+    }
+
+    if (this.armyCommanderRing) {
+      const ringScale = 1.0 + Math.min(0.42, totalForgeRank * 0.045);
+      this.armyCommanderRing.scale.set(ringScale, ringScale, 1);
+    }
+
+    // Hero Commander Crest Ring & Banner Beacon Tint
+    if (heroCrestColor) {
+      if (this.armyCommanderRingMat) {
+        this.armyCommanderRingMat.color.set(heroCrestColor);
+      }
+      if (this.armyBannerBeaconMat) {
+        this.armyBannerBeaconMat.color.set(heroCrestColor);
+        this.armyBannerBeaconMat.emissive.set(heroCrestColor);
+      }
+    }
   }
 
   private initTacticalLine() {
@@ -3399,6 +3819,158 @@ export class WorldMap {
     this.tacticalLine.geometry.setFromPoints(this._linePts);
   }
 
+  private createAlliedColumnGroup(): THREE.Group {
+    const colGroup = new THREE.Group();
+    const goldMat = new THREE.MeshStandardMaterial({ color: 0xfacc15, roughness: 0.35, metalness: 0.82 });
+    const unitShadowGeo = new THREE.CircleGeometry(0.5, 12);
+    const unitShadowMat = new THREE.MeshBasicMaterial({
+      color: 0x050811,
+      transparent: true,
+      opacity: 0.4,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+    });
+
+    if (!this.alliedWarriorSpriteMat) {
+      const maxAniso = Math.min(8, this.renderer.capabilities.getMaxAnisotropy());
+      const alliedTex = getSharedMagarWarriorTexture(4, maxAniso, (readyAspect, readyTexture) => {
+        this.alliedWarriorAspect = readyAspect;
+        if (this.alliedWarriorSpriteMat) {
+          this.alliedWarriorSpriteMat.map = readyTexture;
+          this.alliedWarriorSpriteMat.visible = true;
+          this.alliedWarriorSpriteMat.needsUpdate = true;
+        }
+        for (let i = 0; i < this.alliedWarriorSprites.length; i++) {
+          const sp = this.alliedWarriorSprites[i];
+          const bh = sp.userData?.baseHeight ?? 2.65;
+          sp.scale.set(bh * readyAspect, bh, 1);
+        }
+      });
+      this.alliedWarriorAspect = alliedTex.aspectRatio;
+      this.alliedWarriorSpriteMat = new THREE.SpriteMaterial({
+        map: alliedTex.texture,
+        color: 0xe0f2fe,
+        transparent: true,
+        alphaTest: 0.05,
+        depthWrite: true,
+        side: THREE.DoubleSide,
+        visible: Boolean(alliedTex.texture),
+      });
+    }
+
+    // 6-troop allied Magar Elite formation (2 rows of 3)
+    for (let i = 0; i < 6; i++) {
+      const warrior = new THREE.Group();
+      const c = i % 3;
+      const r = Math.floor(i / 3);
+      warrior.position.set((c - 1) * 1.15, 0, (r - 0.5) * 1.25);
+      warrior.userData = { idx: i, isWarriorUnit: true };
+
+      const shadowDisc = new THREE.Mesh(unitShadowGeo, unitShadowMat);
+      shadowDisc.rotation.x = -Math.PI / 2;
+      shadowDisc.position.y = 0.04;
+      warrior.add(shadowDisc);
+
+      const baseHeight = i === 1 ? 3.0 : 2.65;
+      const wSprite = new THREE.Sprite(this.alliedWarriorSpriteMat);
+      wSprite.center.set(0.5, 0);
+      wSprite.position.y = 0.05;
+      wSprite.scale.set(baseHeight * this.alliedWarriorAspect, baseHeight, 1);
+      wSprite.renderOrder = 11;
+      wSprite.frustumCulled = false;
+      wSprite.userData = { baseHeight };
+      warrior.add(wSprite);
+      this.alliedWarriorSprites.push(wSprite);
+
+      colGroup.add(warrior);
+    }
+
+    // Allied Sky-Gold Rally Banner
+    const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.045, 4.2, 6), goldMat);
+    pole.position.set(-1.9, 2.1, 0.35);
+    colGroup.add(pole);
+
+    const flag = new THREE.Mesh(
+      new THREE.PlaneGeometry(1.4, 2.0),
+      new THREE.MeshStandardMaterial({
+        color: 0x38bdf8,
+        emissive: 0x0284c7,
+        emissiveIntensity: 0.45,
+        side: THREE.DoubleSide,
+      })
+    );
+    flag.position.set(-1.15, 3.1, 0.35);
+    flag.userData = { isArmyBanner: true };
+    colGroup.add(flag);
+
+    return colGroup;
+  }
+
+  public setAlliedRallyColumns(
+    columns: Array<{
+      id: string;
+      from: [number, number, number];
+      to: [number, number, number];
+      progress01: number;
+      isReturning?: boolean;
+    }>
+  ) {
+    const activeIds = new Set<string>();
+    for (const col of columns) {
+      activeIds.add(col.id);
+      let entry = this.alliedRallyColumns.get(col.id);
+      if (!entry) {
+        const group = this.createAlliedColumnGroup();
+        const pts: [THREE.Vector3, THREE.Vector3] = [new THREE.Vector3(), new THREE.Vector3()];
+        const lineGeo = new THREE.BufferGeometry().setFromPoints(pts);
+        const lineMat = new THREE.LineDashedMaterial({
+          color: 0x38bdf8,
+          dashSize: 1.4,
+          gapSize: 0.9,
+          transparent: true,
+          opacity: 0.85,
+        });
+        const line = new THREE.Line(lineGeo, lineMat);
+        this.alliedRallyGroup.add(group);
+        this.alliedRallyGroup.add(line);
+        entry = { group, line, pts, isActive: true };
+        this.alliedRallyColumns.set(col.id, entry);
+      }
+
+      const t = Math.max(0, Math.min(1, col.progress01));
+      const ax = THREE.MathUtils.lerp(col.from[0], col.to[0], t);
+      const az = THREE.MathUtils.lerp(col.from[2], col.to[2], t);
+      const ay = this.terrainGenerator.getHeightAt(ax, az);
+
+      entry.group.position.set(ax, ay, az);
+      entry.group.visible = this.currentSceneMode === 'world';
+
+      const dx = col.to[0] - col.from[0];
+      const dz = col.to[2] - col.from[2];
+      if (Math.hypot(dx, dz) > 0.1) {
+        entry.group.rotation.y = Math.atan2(dx, dz);
+      }
+
+      const toY = this.terrainGenerator.getHeightAt(col.to[0], col.to[2]);
+      entry.pts[0].set(ax, ay + 0.4, az);
+      entry.pts[1].set(col.to[0], toY + 0.4, col.to[2]);
+      entry.line.geometry.setFromPoints(entry.pts);
+      entry.line.computeLineDistances();
+      entry.line.visible = this.currentSceneMode === 'world';
+    }
+
+    // Remove inactive allied columns cleanly
+    for (const [id, entry] of this.alliedRallyColumns.entries()) {
+      if (!activeIds.has(id)) {
+        this.alliedRallyGroup.remove(entry.group);
+        this.alliedRallyGroup.remove(entry.line);
+        entry.line.geometry.dispose();
+        (entry.line.material as THREE.Material).dispose();
+        this.alliedRallyColumns.delete(id);
+      }
+    }
+  }
+
   public triggerCombatVfxAtTarget(targetId: string, damageText: string, color = '#ff4d4f', isHeavy = false) {
     const ent = this.entitiesMap.get(targetId);
     if (!ent) return;
@@ -3417,6 +3989,11 @@ export class WorldMap {
       this.spawnImpactSparks(proj);
     } else {
       this.spawnSiegeVolley(this.armyGroup.position, meshGroup.position, isHeavy);
+      this.alliedRallyColumns.forEach((colEntry) => {
+        if (colEntry.group.visible) {
+          this.spawnSiegeVolley(colEntry.group.position, meshGroup.position, true);
+        }
+      });
       this.triggerFlinchShake(meshGroup);
       this.spawnImpactSparks(proj);
       this.spawnShockwave(meshGroup.position, isHeavy ? 0xfacc15 : 0xf87171, Math.max(4.5, ent.radius * 0.9), 0.5);
@@ -3978,22 +4555,26 @@ export class WorldMap {
       // 0. Update Regional LOD Chunks, Waterfalls, Smooth Rivers & Mist
       this.terrainGenerator.updateTerrainOverflow(delta, elapsed, this.cameraController.camera);
 
-      // 0b. Update Drifting Clouds & Soaring Himalayan Eagles
+      // 0b. Update Drifting Clouds & Soaring Himalayan Birds
       if (this.atmosphereGroup.visible) {
         for (let i = 0; i < this.atmosphericClouds.length; i++) {
           const c = this.atmosphericClouds[i];
           c.group.position.x += c.speedX * delta;
+          c.group.position.z += c.speedZ * delta;
           if (c.group.position.x > 3650) c.group.position.x = -450;
-          c.group.position.y += Math.sin(elapsed * 0.4 + c.phase) * 0.015;
+          if (c.group.position.z > 3550) c.group.position.z = -350;
+          else if (c.group.position.z < -350) c.group.position.z = 3550;
+          c.group.position.y = c.baseY + Math.sin(elapsed * 0.42 + c.phase) * c.bobAmp;
         }
         for (let i = 0; i < this.soaringEagles.length; i++) {
           const e = this.soaringEagles[i];
           const ang = elapsed * e.speed + e.phase;
           const nx = e.cx + Math.cos(ang) * e.radius;
           const nz = e.cz + Math.sin(ang) * e.radius;
-          e.group.position.set(nx, e.baseY + Math.sin(elapsed * 1.4 + e.phase) * 2.2, nz);
+          e.group.position.set(nx, e.baseY + Math.sin(elapsed * 1.4 + e.phase) * 1.9, nz);
           e.group.rotation.y = -ang;
-          const flap = Math.sin(elapsed * 8.5 + e.phase) * 0.42;
+          e.group.rotation.z = e.bankTilt;
+          const flap = Math.sin(elapsed * e.flapSpeed + e.phase) * 0.44;
           const ch = e.group.children;
           for (let j = 0; j < ch.length; j++) {
             if (ch[j].userData?.isEagleWingLeft) ch[j].rotation.z = flap;
@@ -4007,45 +4588,55 @@ export class WorldMap {
       this.sunLight.target.position.copy(target);
       this.sunLight.target.updateMatrixWorld();
 
-      // 1. Monsters breathing & limb animations
+      const camYaw = this.cameraController.getYaw();
+      const sinYaw = Math.sin(camYaw);
+      const cosYaw = Math.cos(camYaw);
+
+      // 1. Monsters idle breathing, subtle weapon/cape/wing sway, contact shadow & elemental aura animations
       this.monsterMeshesMap.forEach((mGroup, id) => {
         const ent = this.entitiesMap.get(id);
         if (!ent || ent.isDefeated) return;
-        const seed = (ent.position[0] * 0.08) % 10;
-        mGroup.scale.y = 1.0 + Math.sin(elapsed * 2.4 + seed) * 0.035;
+        const seed = (ent.position[0] * 0.08 + ent.position[2] * 0.05) % 10;
+        const breath = Math.sin(elapsed * 2.2 + seed);
 
         const children = mGroup.children;
         for (let i = 0; i < children.length; i++) {
           const child = children[i];
           const ud = child.userData;
           if (!ud) continue;
-          if (ud.isWingLeft) {
-            child.rotation.z = 0.35 + Math.sin(elapsed * 5.2 + seed) * 0.35;
-          } else if (ud.isWingRight) {
-            child.rotation.z = -0.35 - Math.sin(elapsed * 5.2 + seed) * 0.35;
-          } else if (ud.isDragonTail) {
-            child.rotation.y = Math.sin(elapsed * 3.5 + seed) * 0.25;
-          } else if (ud.isYetiClub) {
-            child.rotation.x = 0.4 + Math.sin(elapsed * 2.2 + seed) * 0.15;
-          } else if (ud.isFloatingRock) {
-            child.position.y = 5.6 + Math.sin(elapsed * 2.8 + (ud.phase || 0)) * 0.35;
-            child.rotation.y += delta * 0.8;
-          } else if (ud.isTreantBranch) {
-            child.rotation.z = Math.sin(elapsed * 2.0 + (ud.phase || 0)) * 0.2;
-          } else if (ud.isBeastTail) {
-            child.rotation.y = Math.sin(elapsed * 4.2 + seed) * 0.35;
+          if (ud.belowTagDist) {
+            child.position.set(sinYaw * ud.belowTagDist, ud.belowTagY ?? 0.25, cosYaw * ud.belowTagDist);
+          } else if (ud.isMonsterBodyRoot) {
+            // Planted-feet idle pose: gentle vertical breathing only, zero lateral sway or hover drift
+            child.scale.set(
+              1.0 - breath * 0.012,
+              1.0 + breath * 0.022,
+              1.0
+            );
+            child.position.set(0, ud.baseY ?? 0, 0);
+          } else if (ud.isContactShadow) {
+            const sPulse = 1.0 - breath * 0.025;
+            child.scale.set(sPulse, sPulse, 1);
+          } else if (ud.isMonsterAuraRing) {
+            const pulse = 1.0 + breath * 0.035;
+            child.scale.set(pulse, pulse, 1);
+          } else if (ud.isBossAuraRing) {
+            const pulse = 1.0 + breath * 0.045;
+            child.scale.set(pulse, pulse, 1);
           }
         }
       });
 
-      // 2. Resources animations (waterwheel, windmill blades, saw blade, hoist pulley, swaying canopy, gold glints)
+      // 2. Resources animations (waterwheel, windmill blades, saw blade, hoist pulley, swaying canopy, gold glints, below tags)
       const resGroups = this.resourcesGroup.children;
       for (let idx = 0; idx < resGroups.length; idx++) {
         const rChildren = resGroups[idx].children;
         for (let j = 0; j < rChildren.length; j++) {
           const mesh = rChildren[j];
           const ud = mesh.userData;
-          if (ud?.isWaterwheel) {
+          if (ud?.belowTagDist) {
+            mesh.position.set(sinYaw * ud.belowTagDist, ud.belowTagY ?? 0.9, cosYaw * ud.belowTagDist);
+          } else if (ud?.isWaterwheel) {
             mesh.rotation.z += delta * 1.8;
           } else if (ud?.isWindmillBlades) {
             mesh.rotation.z -= delta * 1.35;
@@ -4231,7 +4822,25 @@ export class WorldMap {
         }
       }
 
-      // 4. Army marching and interaction loop (App simulation visual OR legacy fallback)
+      // 4. Animate visible Allied Rally Columns
+      if (this.alliedRallyColumns.size > 0 && this.alliedRallyGroup.visible) {
+        this.alliedRallyColumns.forEach((entry) => {
+          if (!entry.group.visible) return;
+          const ch = entry.group.children;
+          for (let ci = 0; ci < ch.length; ci++) {
+            const child = ch[ci];
+            if (child.userData?.isArmyBanner) {
+              child.rotation.y = Math.sin(elapsed * 6.2 + ci) * 0.24;
+            } else if (child.userData?.idx !== undefined) {
+              const idx = child.userData.idx;
+              child.position.y = Math.abs(Math.sin(elapsed * 14 + idx * 0.6)) * 0.18;
+              child.rotation.z = Math.sin(elapsed * 14 + idx * 0.6) * 0.045;
+            }
+          }
+        });
+      }
+
+      // 4b. Army marching and interaction loop (App simulation visual OR legacy fallback)
       if (this.externalMarchVisual && this.armyGroup) {
         const curPos = this.armyGroup.position;
         if (!this.externalMarchVisual.inCombatOrGathering) {
@@ -4240,20 +4849,17 @@ export class WorldMap {
             this.dustTimer = 0;
             this.spawnMarchingDustPuff(curPos);
           }
-          this.armyGroup.children.forEach((child) => {
+          const aCh = this.armyGroup.children;
+          for (let ci = 0; ci < aCh.length; ci++) {
+            const child = aCh[ci];
             if (child.userData?.isArmyBanner) {
               child.rotation.y = Math.sin(elapsed * 6.0) * 0.22;
+            } else if (child.userData?.idx !== undefined) {
+              const idx = child.userData.idx;
+              child.position.y = Math.abs(Math.sin(elapsed * 14 + idx * 0.55)) * 0.18;
+              child.rotation.z = Math.sin(elapsed * 14 + idx * 0.55) * 0.045;
             }
-            const w = child as THREE.Group;
-            if (w.userData?.idx !== undefined) {
-              const idx = w.userData.idx;
-              w.position.y = Math.abs(Math.sin(elapsed * 14 + idx * 0.5)) * 0.15;
-              w.children.forEach((m) => {
-                if (m.userData?.isLegLeft) m.rotation.x = Math.sin(elapsed * 14 + idx) * 0.55;
-                else if (m.userData?.isLegRight) m.rotation.x = -Math.sin(elapsed * 14 + idx) * 0.55;
-              });
-            }
-          });
+          }
         } else {
           this.externalMiningTimer += delta;
           if (this.externalMiningTimer >= 0.45) {
@@ -4304,20 +4910,17 @@ export class WorldMap {
                 this.spawnMarchingDustPuff(curPos);
               }
 
-              this.armyGroup.children.forEach((child) => {
+              const aCh = this.armyGroup.children;
+              for (let ci = 0; ci < aCh.length; ci++) {
+                const child = aCh[ci];
                 if (child.userData?.isArmyBanner) {
                   child.rotation.y = Math.sin(elapsed * 6.0) * 0.22;
+                } else if (child.userData?.idx !== undefined) {
+                  const idx = child.userData.idx;
+                  child.position.y = Math.abs(Math.sin(elapsed * 14 + idx * 0.55)) * 0.18;
+                  child.rotation.z = Math.sin(elapsed * 14 + idx * 0.55) * 0.045;
                 }
-                const w = child as THREE.Group;
-                if (w.userData?.idx !== undefined) {
-                  const idx = w.userData.idx;
-                  w.position.y = Math.abs(Math.sin(elapsed * 14 + idx * 0.5)) * 0.15;
-                  w.children.forEach((m) => {
-                    if (m.userData?.isLegLeft) m.rotation.x = Math.sin(elapsed * 14 + idx) * 0.55;
-                    else if (m.userData?.isLegRight) m.rotation.x = -Math.sin(elapsed * 14 + idx) * 0.55;
-                  });
-                }
-              });
+              }
 
               const walked = Math.max(0, this.totalMarchDist - dist);
               const pct = Math.min(48, Math.round((walked / Math.max(1, this.totalMarchDist)) * 48));
@@ -4630,6 +5233,27 @@ export class WorldMap {
     this.cameraController.panTo(x, z);
   }
 
+  public selectEntityById(entityId: string): boolean {
+    for (const obj of this.pickableObjects) {
+      const ent = obj.userData?.gameEntity as WorldEntity | undefined;
+      if (ent && ent.id === entityId && !ent.isDefeated) {
+        this.selectedEntity = ent;
+        this.selectionIndicator.visible = true;
+        this.selectionIndicator.position.set(
+          ent.position[0],
+          ent.position[1] + 0.18,
+          ent.position[2]
+        );
+        const ringScale = ent.radius * 0.95;
+        this.selectionIndicator.scale.set(ringScale, ringScale, ringScale);
+        this.cameraController.focusOn(ent.position[0], ent.position[2]);
+        this.onSelectEntity?.(ent, null);
+        return true;
+      }
+    }
+    return false;
+  }
+
   public zoomIn() {
     this.cameraController.adjustZoom(0.2);
   }
@@ -4663,6 +5287,7 @@ export class WorldMap {
       this.resourcesGroup.visible = false;
       this.atmosphereGroup.visible = false;
       this.armyGroup.visible = false;
+      this.alliedRallyGroup.visible = false;
       this.tacticalLine.visible = false;
       this.selectionIndicator.visible = false;
       this.terrainGenerator.plotMarkersGroup.visible = false;
@@ -4685,6 +5310,7 @@ export class WorldMap {
       this.resourcesGroup.visible = !this.isStrategicFilterActive;
       this.terrainGenerator.plotMarkersGroup.visible = true;
       this.armyGroup.visible = this.armyState !== 'IDLE';
+      this.alliedRallyGroup.visible = true;
 
       this.cameraController.setPickables(this.pickableObjects);
       this.cameraController.resetToHome();
@@ -4809,7 +5435,7 @@ export class WorldMap {
           const val = rec[key];
           if (val && typeof val === 'object' && 'isTexture' in val) {
             const tex = val as THREE.Texture;
-            if (!disposedTexs.has(tex)) {
+            if (!tex.userData?.preserveSharedCache && !disposedTexs.has(tex)) {
               disposedTexs.add(tex);
               tex.dispose();
             }

@@ -1078,6 +1078,18 @@ export function isCastleCoordValid(
     }
   }
 
+  // Keep away from curated monsters & resource nodes so castles never bury spawns
+  for (const mon of BASE_WORLD_MONSTERS) {
+    if (Math.hypot(x - mon.position[0], z - mon.position[2]) < 42) {
+      return false;
+    }
+  }
+  for (const res of BASE_WORLD_RESOURCES) {
+    if (Math.hypot(x - res.position[0], z - res.position[2]) < 34) {
+      return false;
+    }
+  }
+
   // Keep away from existing Castles
   for (const pos of existingPositions) {
     if (Math.hypot(x - pos[0], z - pos[2]) < minCastleDist) {
@@ -1229,33 +1241,35 @@ export function generateRandomCastles(
 
 /**
  * Curated + Deterministically Auto-Populated Monsters (Lv 1..10) across the 3200x3200 Continent
+ * Archetypes: Orc, Skeleton, Golden Goblin, Death Knight, and Drago (Lv.10 World Boss)
+ * All monsters support synchronized Alliance Rally marches.
  */
 const BASE_WORLD_MONSTERS: WorldEntity[] = [
   // Level 1 (2,000 HP | 100 ATK | 50 DEF | 500 Reward)
   {
-    id: 'm_goblin_camp',
-    name: 'Forest Marauder Pack',
+    id: 'm_orc_raider_1',
+    name: 'Orc Raider',
     category: 'monster',
     type: 'monster',
-    subtype: 'humanoid',
+    subtype: 'orc',
     level: 1,
     position: [1795, 9.5, 1180],
-    radius: 3.5,
+    radius: 3.6,
     health: 2000,
     maxHealth: 2000,
     attackDamage: 100,
     defense: 50,
     suggestedReward: 500,
     power: 1500,
-    description: 'Lv.1 Forest Raiders stalking outer timber clearings. Ideal for Lv.1 Magar & Limbu squads.',
-    actions: ['attack', 'scout'],
+    description: 'Lv.1 Orc warband prowling outer timber clearings. Rally with alliance or strike solo.',
+    actions: ['attack', 'rally', 'scout'],
   },
   {
-    id: 'm_valley_jackal',
-    name: 'Hilltop Timber Prowler',
+    id: 'm_skeleton_1',
+    name: 'Skeleton Archer',
     category: 'monster',
     type: 'monster',
-    subtype: 'beast',
+    subtype: 'skeleton',
     level: 1,
     position: [1280, 9.5, 1320],
     radius: 3.5,
@@ -1265,17 +1279,17 @@ const BASE_WORLD_MONSTERS: WorldEntity[] = [
     defense: 50,
     suggestedReward: 500,
     power: 1500,
-    description: 'Lv.1 Highland predator lurking around valley farmland trails.',
-    actions: ['attack', 'scout'],
+    description: 'Lv.1 Risen Skeleton vanguard lurking near valley ruins.',
+    actions: ['attack', 'rally', 'scout'],
   },
 
   // Level 2 (4,000 HP | 180 ATK | 100 DEF | 1,000 Reward)
   {
-    id: 'm_wild_boar_king',
-    name: 'Razorback Forest Boar',
+    id: 'm_orc_grunt_2',
+    name: 'Orc Grunt',
     category: 'monster',
     type: 'monster',
-    subtype: 'beast',
+    subtype: 'orc',
     level: 2,
     position: [980, 9.0, 1080],
     radius: 3.8,
@@ -1285,15 +1299,15 @@ const BASE_WORLD_MONSTERS: WorldEntity[] = [
     defense: 100,
     suggestedReward: 1000,
     power: 2800,
-    description: 'Lv.2 Tusked beast roaming dense bamboo & cedar woodlands.',
-    actions: ['attack', 'scout'],
+    description: 'Lv.2 Armored Orc axeman patrolling bamboo & cedar foothills.',
+    actions: ['attack', 'rally', 'scout'],
   },
   {
-    id: 'm_ruin_sentry',
-    name: 'Abandoned Outpost Sentry',
+    id: 'm_skeleton_2',
+    name: 'Skeleton Spearman',
     category: 'monster',
     type: 'monster',
-    subtype: 'humanoid',
+    subtype: 'skeleton',
     level: 2,
     position: [2040, 10.5, 1380],
     radius: 3.9,
@@ -1303,17 +1317,17 @@ const BASE_WORLD_MONSTERS: WorldEntity[] = [
     defense: 100,
     suggestedReward: 1000,
     power: 2800,
-    description: 'Lv.2 Guard stationed in shattered frontier watchtower ruins.',
-    actions: ['attack', 'scout'],
+    description: 'Lv.2 Skeletal sentry guarding shattered frontier watchtowers.',
+    actions: ['attack', 'rally', 'scout'],
   },
 
   // Level 3 (7,000 HP | 280 ATK | 180 DEF | 1,800 Reward)
   {
-    id: 'm_snow_leopard',
-    name: 'Himalayan Highland Stalker',
+    id: 'm_orc_berserker_3',
+    name: 'Orc Berserker',
     category: 'monster',
     type: 'monster',
-    subtype: 'beast',
+    subtype: 'orc',
     level: 3,
     position: [820, 16.0, 2320],
     radius: 4.1,
@@ -1323,15 +1337,15 @@ const BASE_WORLD_MONSTERS: WorldEntity[] = [
     defense: 180,
     suggestedReward: 1800,
     power: 4900,
-    description: 'Lv.3 Agile mountain predator haunting misty emerald-ridge ledges.',
-    actions: ['attack', 'scout'],
+    description: 'Lv.3 Ferocious Orc dual-axe brute holding emerald ridge passes.',
+    actions: ['attack', 'rally', 'scout'],
   },
   {
-    id: 'm_bandit_warlord',
-    name: 'Gorge Cave Brigand',
+    id: 'm_skeleton_3',
+    name: 'Skeleton Shieldbearer',
     category: 'monster',
     type: 'monster',
-    subtype: 'humanoid',
+    subtype: 'skeleton',
     level: 3,
     position: [1220, 8.8, 1040],
     radius: 4.2,
@@ -1341,17 +1355,17 @@ const BASE_WORLD_MONSTERS: WorldEntity[] = [
     defense: 180,
     suggestedReward: 1800,
     power: 4900,
-    description: 'Lv.3 Cave raider hoarding iron ingots and highland silver.',
-    actions: ['attack', 'scout'],
+    description: 'Lv.3 Iron-buckler Skeleton phalanx hoarding silver & iron spoils.',
+    actions: ['attack', 'rally', 'scout'],
   },
 
   // Level 4 (12,000 HP | 420 ATK | 280 DEF | 2,800 Reward)
   {
-    id: 'm_mountain_banshee',
-    name: 'Abandoned Castle Wraith',
+    id: 'm_goblin_4',
+    name: 'Golden Goblin Scavenger',
     category: 'monster',
     type: 'monster',
-    subtype: 'humanoid',
+    subtype: 'goblin',
     level: 4,
     position: [1980, 13.0, 2040],
     radius: 4.4,
@@ -1359,55 +1373,55 @@ const BASE_WORLD_MONSTERS: WorldEntity[] = [
     maxHealth: 12000,
     attackDamage: 420,
     defense: 280,
-    suggestedReward: 2800,
+    suggestedReward: 3800,
     power: 8200,
-    description: 'Lv.4 Spectral guardian defending an abandoned Malla hilltop keep.',
-    actions: ['attack', 'scout'],
+    description: 'Lv.4 Golden Goblin carrying stolen bullion sacks. Grants bonus Gold & Crystal on Alliance Rally.',
+    actions: ['attack', 'rally', 'scout'],
   },
   {
-    id: 'm_wolf_alpha',
-    name: 'Shadow Dire Wolf Alpha',
+    id: 'm_orc_warboss_4',
+    name: 'Orc Warboss',
     category: 'monster',
     type: 'monster',
-    subtype: 'beast',
+    subtype: 'orc',
     level: 4,
     position: [2090, 11.0, 960],
-    radius: 4.4,
+    radius: 4.5,
     health: 12000,
     maxHealth: 12000,
     attackDamage: 420,
     defense: 280,
     suggestedReward: 2800,
     power: 8200,
-    description: 'Lv.4 Deep-forest alpha ambushing resource caravans.',
-    actions: ['attack', 'scout'],
+    description: 'Lv.4 Heavy Orc chieftain leading deep-forest ambush columns.',
+    actions: ['attack', 'rally', 'scout'],
   },
 
   // Level 5 (20,000 HP | 650 ATK | 450 DEF | 4,500 Reward)
   {
-    id: 'm_treant_ancient',
-    name: 'Sacred Forest Treant',
+    id: 'm_goblin_5',
+    name: 'Golden Goblin Hoarder',
     category: 'monster',
     type: 'monster',
-    subtype: 'treant',
+    subtype: 'goblin',
     level: 5,
     position: [2420, 12.0, 1220],
-    radius: 4.8,
+    radius: 4.7,
     health: 20000,
     maxHealth: 20000,
     attackDamage: 650,
     defense: 450,
-    suggestedReward: 4500,
+    suggestedReward: 6200,
     power: 13500,
-    description: 'Lv.5 Ancient timber guardian defending rich Lv.5-6 hardwood groves.',
+    description: 'Lv.5 Crowned Golden Goblin guarding rich treasury chests & crystal veins.',
     actions: ['attack', 'rally', 'scout'],
   },
   {
-    id: 'm_river_serpent',
-    name: 'Karnali Cave Serpent',
+    id: 'm_skeleton_5',
+    name: 'Skeleton Bone Guard',
     category: 'monster',
     type: 'monster',
-    subtype: 'aquatic',
+    subtype: 'skeleton',
     level: 5,
     position: [920, 8.8, 1290],
     radius: 4.8,
@@ -1417,17 +1431,17 @@ const BASE_WORLD_MONSTERS: WorldEntity[] = [
     defense: 450,
     suggestedReward: 4500,
     power: 13500,
-    description: 'Lv.5 Cavern water drake guarding river delta resource flats.',
+    description: 'Lv.5 Ancient Skeleton regiment guarding river delta crossing flats.',
     actions: ['attack', 'rally', 'scout'],
   },
 
   // Level 6 (32,000 HP | 900 ATK | 650 DEF | 7,000 Reward)
   {
-    id: 'm_iron_golem',
-    name: 'Iron Ridge Cave Golem',
+    id: 'm_goblin_6',
+    name: 'Golden Goblin Treasure King',
     category: 'monster',
     type: 'monster',
-    subtype: 'golem',
+    subtype: 'goblin',
     level: 6,
     position: [2160, 16.0, 2460],
     radius: 5.0,
@@ -1435,37 +1449,37 @@ const BASE_WORLD_MONSTERS: WorldEntity[] = [
     maxHealth: 32000,
     attackDamage: 900,
     defense: 650,
-    suggestedReward: 7000,
+    suggestedReward: 9600,
     power: 21000,
-    description: 'Lv.6 Armored ore sentinel defending high-grade mountain iron seams.',
+    description: 'Lv.6 Gilded goblin monarch brimming with royal gold ingots and gems.',
     actions: ['attack', 'rally', 'scout'],
   },
   {
-    id: 'm_quarry_fiend',
-    name: 'Granite Crag Fiend',
+    id: 'm_death_knight_6',
+    name: 'Death Knight Vanguard',
     category: 'monster',
     type: 'monster',
-    subtype: 'golem',
+    subtype: 'death_knight',
     level: 6,
     position: [2510, 15.0, 1510],
-    radius: 5.0,
+    radius: 5.1,
     health: 32000,
     maxHealth: 32000,
     attackDamage: 900,
     defense: 650,
     suggestedReward: 7000,
     power: 21000,
-    description: 'Lv.6 Stone titan patrolling abandoned mountain quarry tunnels.',
+    description: 'Lv.6 Dread-armored Death Knight patrolling eastern mountain ridges.',
     actions: ['attack', 'rally', 'scout'],
   },
 
   // Level 7 (50,000 HP | 1,300 ATK | 900 DEF | 10,000 Reward)
   {
-    id: 'm_rock_drake',
-    name: 'Ironcrest Mountain Drake',
+    id: 'm_death_knight_7a',
+    name: 'Death Knight Dreadblade',
     category: 'monster',
     type: 'monster',
-    subtype: 'drake',
+    subtype: 'death_knight',
     level: 7,
     position: [2640, 18.5, 2580],
     radius: 5.4,
@@ -1475,15 +1489,15 @@ const BASE_WORLD_MONSTERS: WorldEntity[] = [
     defense: 900,
     suggestedReward: 10000,
     power: 32000,
-    description: 'Lv.7 Winged mountain drake nesting above southeast highland crystal veins.',
+    description: 'Lv.7 Elite Death Knight wielding a glowing obsidian rune-greatsword.',
     actions: ['attack', 'rally', 'scout'],
   },
   {
-    id: 'm_cave_troll',
-    name: 'Himalayan Cavern Troll',
+    id: 'm_death_knight_7b',
+    name: 'Death Knight Soulreaver',
     category: 'monster',
     type: 'monster',
-    subtype: 'golem',
+    subtype: 'death_knight',
     level: 7,
     position: [240, 16.0, 240],
     radius: 5.4,
@@ -1493,17 +1507,17 @@ const BASE_WORLD_MONSTERS: WorldEntity[] = [
     defense: 900,
     suggestedReward: 10000,
     power: 32000,
-    description: 'Lv.7 Monstrous northwest frontier cavern brute wielding stone pillars.',
+    description: 'Lv.7 Northwest frontier Death Knight champion. Recommended for Alliance Rally.',
     actions: ['attack', 'rally', 'scout'],
   },
 
   // Level 8 (75,000 HP | 1,800 ATK | 1,300 DEF | 15,000 Reward)
   {
-    id: 'm_stone_colossus',
-    name: 'Abandoned Citadel Colossus',
+    id: 'm_death_knight_8a',
+    name: 'Death Knight Marshal',
     category: 'monster',
     type: 'monster',
-    subtype: 'golem',
+    subtype: 'death_knight',
     level: 8,
     position: [1580, 22.0, 2940],
     radius: 5.8,
@@ -1513,15 +1527,15 @@ const BASE_WORLD_MONSTERS: WorldEntity[] = [
     defense: 1300,
     suggestedReward: 15000,
     power: 48000,
-    description: 'Lv.8 Ancient stone guardian sealed inside an abandoned southern highland fortress.',
+    description: 'Lv.8 Armored Death Knight warlord holding the southern highland citadel.',
     actions: ['attack', 'rally', 'scout'],
   },
   {
-    id: 'm_horned_chimera',
-    name: 'Highland Horned Chimera',
+    id: 'm_death_knight_8b',
+    name: 'Death Knight Doomlord',
     category: 'monster',
     type: 'monster',
-    subtype: 'beast',
+    subtype: 'death_knight',
     level: 8,
     position: [2960, 17.0, 250],
     radius: 5.7,
@@ -1531,17 +1545,17 @@ const BASE_WORLD_MONSTERS: WorldEntity[] = [
     defense: 1300,
     suggestedReward: 15000,
     power: 48000,
-    description: 'Lv.8 Tri-horned mountain beast stalking northeast emerald frontier ridges.',
+    description: 'Lv.8 Northeast frontier Death Knight commander surrounded by cursed iron runes.',
     actions: ['attack', 'rally', 'scout'],
   },
 
   // Level 9 (110,000 HP | 2,500 ATK | 1,800 DEF | 22,000 Reward)
   {
-    id: 'm_glacial_wyrm',
-    name: 'Emerald Peak Storm Wyrm',
+    id: 'm_death_knight_9',
+    name: 'Death Knight Grand Overlord',
     category: 'monster',
     type: 'monster',
-    subtype: 'drake',
+    subtype: 'death_knight',
     level: 9,
     position: [1120, 20.0, 2760],
     radius: 6.1,
@@ -1551,45 +1565,137 @@ const BASE_WORLD_MONSTERS: WorldEntity[] = [
     defense: 1800,
     suggestedReward: 22000,
     power: 72000,
-    description: 'Lv.9 Highland wyrm guarding southern frontier Crystal spires.',
-    actions: ['attack', 'rally', 'scout'],
+    description: 'Lv.9 Supreme Death Knight sovereign guarding southern Crystal spires. Assemble Alliance Rally.',
+    actions: ['rally', 'attack', 'scout'],
   },
 
-  // Level 10 (160,000 HP | 3,500 ATK | 2,500 DEF | 35,000 Reward)
+  // Level 10 World Bosses — DRAGO (160,000 HP | 3,500 ATK | 2,500 DEF | 35,000 Reward)
   {
-    id: 'm_frost_yeti',
-    name: 'Ancient Highland Yeti Sovereign',
+    id: 'm_drago_boss_sw',
+    name: 'Drago',
     category: 'monster',
     type: 'monster',
     subtype: 'boss',
     level: 10,
     position: [240, 20.0, 2960],
-    radius: 6.6,
+    radius: 6.8,
     health: 160000,
     maxHealth: 160000,
     attackDamage: 3500,
     defense: 2500,
     suggestedReward: 35000,
     power: 110000,
-    description: 'Lv.10 Apex highland sovereign in the southwest corner. Yields rare crystal spoils.',
+    description: 'Lv.10 Apex Dragon World Boss roosting in the Southwest Highlands. Requires synchronized Alliance Rally!',
     actions: ['rally', 'attack', 'scout'],
   },
   {
-    id: 'm_crimson_wyvern',
-    name: 'Crimson Himalayan Wyvern',
+    id: 'm_drago_boss_se',
+    name: 'Drago · Crimson Sovereign',
     category: 'monster',
     type: 'monster',
     subtype: 'boss',
     level: 10,
     position: [2960, 21.0, 2960],
-    radius: 6.6,
+    radius: 6.8,
     health: 160000,
     maxHealth: 160000,
     attackDamage: 3500,
     defense: 2500,
     suggestedReward: 35000,
     power: 110000,
-    description: 'Lv.10 Supreme dragon monarch roosting over southeast highland Crystal & Iron peaks.',
+    description: 'Lv.10 Apex Dragon World Boss towering over Southeast Crystal peaks. Rally all alliance columns!',
+    actions: ['rally', 'attack', 'scout'],
+  },
+
+  // Heartland Frontier Spawns (65–86 km around My Castle [1600, 1568] — visible & searchable within 100 km)
+  {
+    id: 'm_skeleton_heartland',
+    name: 'Skeleton Knight',
+    category: 'monster',
+    type: 'monster',
+    subtype: 'skeleton',
+    level: 2,
+    position: [1544, 10.0, 1524],
+    radius: 3.9,
+    health: 4000,
+    maxHealth: 4000,
+    attackDamage: 180,
+    defense: 100,
+    suggestedReward: 1000,
+    power: 2800,
+    description: 'Lv.2 Armored Skeleton Knight with glowing crimson eyes guarding the northwest heartland road.',
+    actions: ['attack', 'rally', 'scout'],
+  },
+  {
+    id: 'm_orc_heartland',
+    name: 'Orc',
+    category: 'monster',
+    type: 'monster',
+    subtype: 'orc',
+    level: 3,
+    position: [1542, 10.0, 1618],
+    radius: 4.1,
+    health: 7000,
+    maxHealth: 7000,
+    attackDamage: 280,
+    defense: 180,
+    suggestedReward: 1800,
+    power: 4900,
+    description: 'Lv.3 Fierce Orc Warrior wielding a jagged branch club southwest of My Castle.',
+    actions: ['attack', 'rally', 'scout'],
+  },
+  {
+    id: 'm_goblin_heartland',
+    name: 'Golden Goblin',
+    category: 'monster',
+    type: 'monster',
+    subtype: 'goblin',
+    level: 4,
+    position: [1646, 10.0, 1614],
+    radius: 4.4,
+    health: 12000,
+    maxHealth: 12000,
+    attackDamage: 420,
+    defense: 280,
+    suggestedReward: 3800,
+    power: 8200,
+    description: 'Lv.4 Golden Goblin carrying a overflowing bullion treasure sack southeast of My Castle.',
+    actions: ['attack', 'rally', 'scout'],
+  },
+  {
+    id: 'm_dk_heartland',
+    name: 'Death Knight',
+    category: 'monster',
+    type: 'monster',
+    subtype: 'death_knight',
+    level: 6,
+    position: [1514, 10.0, 1572],
+    radius: 5.1,
+    health: 32000,
+    maxHealth: 32000,
+    attackDamage: 900,
+    defense: 650,
+    suggestedReward: 7000,
+    power: 21000,
+    description: 'Lv.6 Icy Lich Death Knight wielding a frost runeblade west of My Castle.',
+    actions: ['attack', 'rally', 'scout'],
+  },
+  {
+    id: 'm_drago_boss_central',
+    name: 'Drago',
+    category: 'monster',
+    type: 'monster',
+    subtype: 'boss',
+    level: 10,
+    position: [1656, 10.0, 1526],
+    radius: 6.8,
+    health: 160000,
+    maxHealth: 160000,
+    attackDamage: 3500,
+    defense: 2500,
+    suggestedReward: 35000,
+    power: 110000,
+    description: 'Lv.10 Spectral Bone Dragon World Boss lurking northeast of My Castle. Assemble an Alliance Rally!',
     actions: ['rally', 'attack', 'scout'],
   },
 ];
@@ -2243,23 +2349,29 @@ export function generateAutoWorldMonsters(existing: WorldEntity[], count = 44): 
   const occupied = existing.map((e) => ({ x: e.position[0], z: e.position[2] }));
   const generated: WorldEntity[] = [];
 
-  const innerTemplates: Array<{ name: string; subtype: 'humanoid' | 'beast' | 'treant' | 'aquatic' }> = [
-    { name: 'Valley Bandit Scout', subtype: 'humanoid' },
-    { name: 'Rhododendron Wolf Pack', subtype: 'beast' },
-    { name: 'Grove Bramble Treant', subtype: 'treant' },
-    { name: 'Riverbank Lurker', subtype: 'aquatic' },
+  const innerTemplates: Array<{ name: string; subtype: 'orc' | 'skeleton' | 'goblin' }> = [
+    { name: 'Orc Scout', subtype: 'orc' },
+    { name: 'Skeleton Warrior', subtype: 'skeleton' },
+    { name: 'Golden Goblin Raider', subtype: 'goblin' },
+    { name: 'Orc Marauder', subtype: 'orc' },
   ];
-  const midTemplates: Array<{ name: string; subtype: 'beast' | 'treant' | 'golem' | 'humanoid' }> = [
-    { name: 'Highland Cave Raider', subtype: 'humanoid' },
-    { name: 'Crag Timber Guardian', subtype: 'treant' },
-    { name: 'Granite Ridge Sentinel', subtype: 'golem' },
-    { name: 'Mist Stalker Sabretooth', subtype: 'beast' },
+  const midTemplates: Array<{ name: string; subtype: 'orc' | 'skeleton' | 'goblin' | 'death_knight' }> = [
+    { name: 'Skeleton Phalanx', subtype: 'skeleton' },
+    { name: 'Golden Goblin Vault-Runner', subtype: 'goblin' },
+    { name: 'Death Knight Lancer', subtype: 'death_knight' },
+    { name: 'Orc Brute', subtype: 'orc' },
   ];
-  const highlandTemplates: Array<{ name: string; subtype: 'golem' | 'drake' | 'beast' }> = [
-    { name: 'Emerald-Peak Stone Golem', subtype: 'golem' },
-    { name: 'Highland Crest Storm Drake', subtype: 'drake' },
-    { name: 'Ridgewood Dire Chimera', subtype: 'beast' },
-    { name: 'Ancient Crag Titan', subtype: 'golem' },
+  const highlandTemplates: Array<{ name: string; subtype: 'death_knight' | 'goblin' }> = [
+    { name: 'Death Knight Paladin', subtype: 'death_knight' },
+    { name: 'Death Knight Warlord', subtype: 'death_knight' },
+    { name: 'Golden Goblin Baron', subtype: 'goblin' },
+    { name: 'Death Knight Dreadlord', subtype: 'death_knight' },
+  ];
+  const bossTitles = [
+    'Drago · Apex Dragon Boss',
+    'Drago · Emberwing Boss',
+    'Drago · Obsidian Tyrant',
+    'Drago · Skyfire Sovereign',
   ];
 
   // Anchor points spread across all 4 quadrants + all 4 outer green corners
@@ -2270,6 +2382,7 @@ export function generateAutoWorldMonsters(existing: WorldEntity[], count = 44): 
   ];
 
   let attempts = 0;
+  let bossCounter = 0;
   while (generated.length < count && attempts < 1400) {
     attempts++;
     let rx: number;
@@ -2287,8 +2400,12 @@ export function generateAutoWorldMonsters(existing: WorldEntity[], count = 44): 
     const dist = Math.hypot(rx - WORLD_BOUNDS.CENTER_X, rz - WORLD_BOUNDS.CENTER_Z);
     const level = pickRegionalLevel(dist, rng);
     const stats = AUTO_MONSTER_STATS_BY_LEVEL[level - 1];
+    const isBoss = level === 10;
     const pool = level <= 4 ? innerTemplates : level <= 7 ? midTemplates : highlandTemplates;
-    const tpl = pool[generated.length % pool.length];
+    const tpl = isBoss
+      ? { name: bossTitles[bossCounter++ % bossTitles.length], subtype: 'boss' as const }
+      : pool[generated.length % pool.length];
+    const rewardBoost = tpl.subtype === 'goblin' ? Math.round(stats.reward * 1.35) : stats.reward;
     const estY = 9.5 + (dist / 1600) * 8.5;
 
     occupied.push({ x: rx, z: rz });
@@ -2300,15 +2417,17 @@ export function generateAutoWorldMonsters(existing: WorldEntity[], count = 44): 
       subtype: tpl.subtype,
       level,
       position: [rx, Number(estY.toFixed(1)), rz],
-      radius: Number((3.5 + level * 0.28).toFixed(1)),
+      radius: Number((isBoss ? 6.8 : 3.5 + level * 0.28).toFixed(1)),
       health: stats.hp,
       maxHealth: stats.hp,
       attackDamage: stats.atk,
       defense: stats.def,
-      suggestedReward: stats.reward,
+      suggestedReward: rewardBoost,
       power: stats.power,
-      description: `Lv.${level} Himalayan wild ${tpl.name} (${stats.hp.toLocaleString()} HP · ${stats.reward.toLocaleString()} Loot).`,
-      actions: level >= 5 ? ['attack', 'rally', 'scout'] : ['attack', 'scout'],
+      description: isBoss
+        ? `Lv.10 ${tpl.name} (${stats.hp.toLocaleString()} HP · ${rewardBoost.toLocaleString()} Loot). Assemble an Alliance Rally to slay this boss!`
+        : `Lv.${level} ${tpl.name} (${stats.hp.toLocaleString()} HP · ${rewardBoost.toLocaleString()} Loot). Attack solo or launch an Alliance Rally.`,
+      actions: isBoss ? ['rally', 'attack', 'scout'] : ['attack', 'rally', 'scout'],
     });
   }
 

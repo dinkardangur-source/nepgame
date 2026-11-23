@@ -4,6 +4,8 @@
 // Calculation Formulas, Multi-Class Garrison Defense, & JSON Config Store
 // ============================================================================
 
+import { HERO_PORTRAIT_URLS } from './HeroPortraits';
+
 export type TroopClassId = 'infantry' | 'archer' | 'cavalry';
 export type TroopLevel = 1 | 2 | 3 | 4 | 5;
 export type ResourceKind = 'food' | 'wood' | 'stone' | 'iron' | 'crystal';
@@ -16,6 +18,7 @@ export interface NepaleseHeroConfig {
   title: string;
   specialty: HeroSpecialty;
   crestColor: string;
+  portraitUrl: string;
   classBonusClass: TroopClassId;
   classAttackPct: number;
   attackPct: number;
@@ -34,6 +37,7 @@ export const NEPALESE_HEROES: NepaleseHeroConfig[] = [
     title: 'Grand Mukhtiyar Vanguard',
     specialty: 'infantry',
     crestColor: '#34d399',
+    portraitUrl: HERO_PORTRAIT_URLS.hero_bhimsen_thapa,
     classBonusClass: 'infantry',
     classAttackPct: 0.18,
     attackPct: 0.08,
@@ -50,6 +54,7 @@ export const NEPALESE_HEROES: NepaleseHeroConfig[] = [
     title: 'Iron Bastion Marksman',
     specialty: 'archer',
     crestColor: '#38bdf8',
+    portraitUrl: HERO_PORTRAIT_URLS.hero_bhakti_thapa,
     classBonusClass: 'archer',
     classAttackPct: 0.22,
     attackPct: 0.1,
@@ -66,6 +71,7 @@ export const NEPALESE_HEROES: NepaleseHeroConfig[] = [
     title: 'Nalapani Mustang Rider',
     specialty: 'cavalry',
     crestColor: '#f59e0b',
+    portraitUrl: HERO_PORTRAIT_URLS.hero_balbhadra_kunwar,
     classBonusClass: 'cavalry',
     classAttackPct: 0.2,
     attackPct: 0.08,
@@ -82,6 +88,7 @@ export const NEPALESE_HEROES: NepaleseHeroConfig[] = [
     title: 'Arun Valley Steward',
     specialty: 'gather',
     crestColor: '#a7f3d0',
+    portraitUrl: HERO_PORTRAIT_URLS.hero_yogamaya_devi,
     classBonusClass: 'infantry',
     classAttackPct: 0.06,
     attackPct: 0.04,
@@ -98,6 +105,7 @@ export const NEPALESE_HEROES: NepaleseHeroConfig[] = [
     title: 'Himalayan Siege Marshal',
     specialty: 'siege',
     crestColor: '#f87171',
+    portraitUrl: HERO_PORTRAIT_URLS.hero_damodar_pande,
     classBonusClass: 'archer',
     classAttackPct: 0.12,
     attackPct: 0.15,
@@ -573,6 +581,11 @@ export interface ActiveMarch {
   targetName: string;
   targetLevel: number;
   targetPosition: [number, number, number];
+  targetSubtype?: string;
+  isRally?: boolean;
+  rallyCaptains?: string[];
+  rallyBonusPower?: number;
+  alliedOrigins?: Array<{ name: string; position: [number, number, number] }>;
   resourceType?: ResourceKind;
   heroId?: string;
   heroName?: string;
@@ -668,6 +681,139 @@ export function createEmptyTroopInventory(): TroopInventory {
   };
 }
 
+// ============================================================================
+// Magar Infantry Lv.1–5 Khukuri, Wooden Shield & Armor Progression Engine
+// ============================================================================
+
+export type InfantryGearSlot = 'weapon' | 'shield' | 'armor';
+
+export interface InfantryTierGearRank {
+  weapon: number; // 0..3 Khukuri Forge Rank
+  shield: number; // 0..3 Wooden Shield Reinforcement Rank
+  armor: number;  // 0..3 Armor Plating Rank
+}
+
+export type InfantryGearState = Record<TroopLevel, InfantryTierGearRank>;
+
+export const MAX_INFANTRY_GEAR_RANK = 3;
+
+export interface MagarTierSpec {
+  level: TroopLevel;
+  tierName: string;
+  weaponName: string;
+  shieldName: string;
+  armorName: string;
+  rarityColor: string;
+  loreNote: string;
+}
+
+export const MAGAR_PROGRESSION_SPECS: Record<TroopLevel, MagarTierSpec> = {
+  1: {
+    level: 1,
+    tierName: 'Militia',
+    weaponName: 'Khukuri (Plain)',
+    shieldName: 'Wooden Shield (Basic)',
+    armorName: 'Armor: Cloth',
+    rarityColor: '#94a3b8',
+    loreNote: 'Frontier mountain levy armed with plain forged Khukuri, oak buckler, and woven dhaka cloth.',
+  },
+  2: {
+    level: 2,
+    tierName: 'Warrior',
+    weaponName: 'Khukuri (Improved)',
+    shieldName: 'Wooden Shield (Reinforced)',
+    armorName: 'Armor: Leather',
+    rarityColor: '#34d399',
+    loreNote: 'Seasoned highland infantry with brass-riveted shield straps and cured yak-leather cuirass.',
+  },
+  3: {
+    level: 3,
+    tierName: 'Veteran',
+    weaponName: 'Khukuri (Forged)',
+    shieldName: 'Wooden Shield (Decorated)',
+    armorName: 'Armor: Scale',
+    rarityColor: '#38bdf8',
+    loreNote: 'Battle-tested vanguard wearing overlapping iron scales with gilded brass Khukuri fuller.',
+  },
+  4: {
+    level: 4,
+    tierName: 'Elite',
+    weaponName: 'Khukuri (Tempered)',
+    shieldName: 'Wooden Shield (Elite)',
+    armorName: 'Armor: Lamellar',
+    rarityColor: '#c084fc',
+    loreNote: 'Plumed royal guard clad in gilded lamellar plates and eight-pointed star buckler.',
+  },
+  5: {
+    level: 5,
+    tierName: 'Champion',
+    weaponName: 'Khukuri (Masterwork)',
+    shieldName: 'Wooden Shield (Legendary)',
+    armorName: 'Armor: Royal',
+    rarityColor: '#facc15',
+    loreNote: 'Supreme Himalayan paladin with sunburst golden buckler, fur-lined royal plate, and masterwork blade.',
+  },
+};
+
+export function createInitialInfantryGear(): InfantryGearState {
+  return {
+    1: { weapon: 0, shield: 0, armor: 0 },
+    2: { weapon: 0, shield: 0, armor: 0 },
+    3: { weapon: 0, shield: 0, armor: 0 },
+    4: { weapon: 0, shield: 0, armor: 0 },
+    5: { weapon: 0, shield: 0, armor: 0 },
+  };
+}
+
+export function normalizeInfantryGear(raw?: Partial<Record<TroopLevel, Partial<InfantryTierGearRank>>> | null): InfantryGearState {
+  const base = createInitialInfantryGear();
+  if (!raw) return base;
+  for (const lv of [1, 2, 3, 4, 5] as TroopLevel[]) {
+    const row = raw[lv];
+    if (row) {
+      base[lv] = {
+        weapon: Math.max(0, Math.min(MAX_INFANTRY_GEAR_RANK, Math.round(row.weapon || 0))),
+        shield: Math.max(0, Math.min(MAX_INFANTRY_GEAR_RANK, Math.round(row.shield || 0))),
+        armor: Math.max(0, Math.min(MAX_INFANTRY_GEAR_RANK, Math.round(row.armor || 0))),
+      };
+    }
+  }
+  return base;
+}
+
+export function getInfantryGearUpgradeCost(
+  level: TroopLevel,
+  slot: InfantryGearSlot,
+  currentRank: number
+): { wood: number; iron: number; gold: number; crystal: number } | null {
+  if (currentRank >= MAX_INFANTRY_GEAR_RANK) return null;
+  const nextRank = currentRank + 1;
+  const tierFactor = level * nextRank;
+  const woodMult = slot === 'shield' ? 1.35 : slot === 'armor' ? 0.9 : 0.75;
+  const ironMult = slot === 'weapon' ? 1.35 : slot === 'armor' ? 1.15 : 0.7;
+  return {
+    wood: Math.round(650 * tierFactor * woodMult),
+    iron: Math.round(520 * tierFactor * ironMult),
+    gold: Math.round(450 * tierFactor),
+    crystal: level >= 3 ? (level - 2) * 35 * nextRank : 0,
+  };
+}
+
+export function getInfantryTierMultipliers(
+  level: TroopLevel,
+  infantryGear?: InfantryGearState | null
+): { atkMult: number; hpMult: number; shieldMitigationPct: number; powerMult: number } {
+  const ranks = infantryGear?.[level];
+  if (!ranks) {
+    return { atkMult: 1, hpMult: 1, shieldMitigationPct: 0, powerMult: 1 };
+  }
+  const atkMult = 1 + ranks.weapon * 0.06; // +6% per Khukuri rank (up to +18%)
+  const shieldMitigationPct = ranks.shield * 0.05; // +5% incoming damage reduction & defense resilience per Shield rank
+  const hpMult = 1 + ranks.armor * 0.06 + ranks.shield * 0.03; // +6% HP per Armor + 3% resilience per Shield
+  const powerMult = 1 + (ranks.weapon * 0.06 + ranks.shield * 0.05 + ranks.armor * 0.06) * 0.55;
+  return { atkMult, hpMult, shieldMitigationPct, powerMult };
+}
+
 export function getCalculatedBonuses(
   research: ResearchState,
   equippedIds: string[],
@@ -743,7 +889,8 @@ export function calculateArmyMetrics(
   stacks: TroopStack[],
   config: GameBalanceConfig,
   bonuses?: CalculatedBonuses,
-  hero?: NepaleseHeroConfig | null
+  hero?: NepaleseHeroConfig | null,
+  infantryGear?: InfantryGearState | null
 ): ArmyMetrics {
   const b: CalculatedBonuses = bonuses || {
     attackMult: 1,
@@ -779,12 +926,17 @@ export function calculateArmyMetrics(
 
     if (s.level > highestTroopLevel) highestTroopLevel = s.level;
 
+    const gearMults =
+      s.classId === 'infantry'
+        ? getInfantryTierMultipliers(s.level, infantryGear)
+        : { atkMult: 1, hpMult: 1, shieldMitigationPct: 0, powerMult: 1 };
+
     const heroClassMult =
       b.classAttackMults?.[s.classId] ??
       (hero && hero.classBonusClass === s.classId ? 1 + hero.classAttackPct : 1);
-    const stackPower = row.power * s.count * b.powerMult * (1 + (heroClassMult - 1) * 0.45);
-    const stackHp = row.hp * s.count * b.hpMult;
-    const stackAtk = row.attack * s.count * b.attackMult * heroClassMult;
+    const stackPower = row.power * s.count * b.powerMult * (1 + (heroClassMult - 1) * 0.45) * gearMults.powerMult;
+    const stackHp = row.hp * s.count * b.hpMult * gearMults.hpMult;
+    const stackAtk = row.attack * s.count * b.attackMult * heroClassMult * gearMults.atkMult;
     const stackLoad = row.load * s.count * b.loadMult;
     const stackGather = row.gatheringSpeed * s.count * b.gatherMult;
 
@@ -863,7 +1015,9 @@ export function resolveMonsterCombat(
   monsterLevel: number,
   monsterCurrentHp: number,
   config: GameBalanceConfig,
-  bonuses: CalculatedBonuses
+  bonuses: CalculatedBonuses,
+  rallyOpts?: { isRally?: boolean; alliedColumnCount?: number; monsterSubtype?: string },
+  infantryGear?: InfantryGearState | null
 ): {
   victory: boolean;
   rounds: number;
@@ -879,15 +1033,22 @@ export function resolveMonsterCombat(
 } {
   const mCfg = config.monstersByLevel[Math.max(0, Math.min(9, monsterLevel - 1))];
   let mHp = Math.max(1, monsterCurrentHp);
+  const alliedCols = rallyOpts?.isRally ? Math.max(1, rallyOpts.alliedColumnCount ?? 3) : 0;
+  const rallyAtkMult = alliedCols > 0 ? 1 + alliedCols * 0.28 : 1;
+  const rallyAggroShare = alliedCols > 0 ? 1 / (1 + alliedCols * 0.18) : 1;
 
   // Clone mutable per-stack HP pool
   const active = stacks
     .filter((s) => s.count > 0)
     .map((s) => {
       const row = config.troops[s.classId].levels[s.level];
-      const unitHp = row.hp * bonuses.hpMult;
+      const gearMults =
+        s.classId === 'infantry'
+          ? getInfantryTierMultipliers(s.level, infantryGear)
+          : { atkMult: 1, hpMult: 1, shieldMitigationPct: 0, powerMult: 1 };
+      const unitHp = row.hp * bonuses.hpMult * gearMults.hpMult;
       const clsMult = bonuses.classAttackMults?.[s.classId] ?? 1;
-      const unitAtk = row.attack * bonuses.attackMult * clsMult;
+      const unitAtk = row.attack * bonuses.attackMult * clsMult * rallyAtkMult * gearMults.atkMult;
       return {
         classId: s.classId,
         level: s.level,
@@ -896,16 +1057,20 @@ export function resolveMonsterCombat(
         unitHp,
         totalHp: s.count * unitHp,
         unitAtk,
+        shieldMitigationPct: gearMults.shieldMitigationPct,
       };
     });
 
   let rounds = 0;
   const notes: string[] = [];
+  if (alliedCols > 0) {
+    notes.push(`Alliance Rally active: ${alliedCols} allied march column(s) boosted strike power by +${Math.round((rallyAtkMult - 1) * 100)}%.`);
+  }
 
   while (mHp > 0 && active.some((a) => a.aliveCount > 0) && rounds < 40) {
     rounds++;
 
-    // 1. Player troops attack Monster (mitigated by Monster Defense)
+    // 1. Player troops + Allied Rally columns attack Monster (mitigated by Monster Defense)
     const rawArmyAtk = active.reduce((sum, a) => sum + a.aliveCount * a.unitAtk, 0);
     const defenseMitigation = 100 / (100 + mCfg.defense * 0.28);
     const dmgToMonster = Math.max(1, Math.round(rawArmyAtk * defenseMitigation));
@@ -917,7 +1082,7 @@ export function resolveMonsterCombat(
     const totalAlive = active.reduce((s, a) => s + a.aliveCount, 0);
     if (totalAlive <= 0) break;
 
-    const counterDmg = mCfg.attack * (0.9 + Math.min(0.35, monsterLevel * 0.03));
+    const counterDmg = mCfg.attack * (0.9 + Math.min(0.35, monsterLevel * 0.03)) * rallyAggroShare;
     const priorityOrder: TroopClassId[] = ['infantry', 'cavalry', 'archer'];
     let remainingIncoming = counterDmg;
 
@@ -933,10 +1098,11 @@ export function resolveMonsterCombat(
 
       const dmgEachStack = dmgAllocated / clsStacks.length;
       for (const st of clsStacks) {
-        const applied = Math.min(st.totalHp, dmgEachStack);
+        const reduced = dmgEachStack * Math.max(0.75, 1 - st.shieldMitigationPct);
+        const applied = Math.min(st.totalHp, reduced);
         st.totalHp = Math.max(0, st.totalHp - applied);
         st.aliveCount = Math.ceil(st.totalHp / Math.max(1, st.unitHp));
-        remainingIncoming -= applied;
+        remainingIncoming -= dmgEachStack;
       }
     }
   }
@@ -969,8 +1135,9 @@ export function resolveMonsterCombat(
   };
 
   if (victory) {
+    const isGoldenGoblin = rallyOpts?.monsterSubtype === 'goblin';
     const base = mCfg.suggestedReward;
-    const crystalAmt = Math.max(15, Math.round(base * 0.04));
+    const crystalAmt = Math.max(15, Math.round(base * (isGoldenGoblin ? 0.065 : 0.04)));
     let equipmentDrop: EquipmentItem | null = null;
     if (monsterLevel >= 3) {
       const dropIdx = Math.min(INITIAL_EQUIPMENT_CATALOG.length - 1, Math.floor((monsterLevel - 3) / 2));
@@ -982,12 +1149,12 @@ export function resolveMonsterCombat(
       stone: Math.round(base * 0.30),
       iron: Math.round(base * 0.18),
       crystal: crystalAmt,
-      gold: Math.round(base * 0.25),
+      gold: Math.round(base * (isGoldenGoblin ? 0.55 : 0.25)),
       xp: mCfg.xpReward,
       equipmentDrop,
     };
     notes.push(
-      `Monster defeated in ${rounds} tactical round(s) · Defense ${mCfg.defense} absorbed incoming blows.`
+      `${isGoldenGoblin ? 'Golden Goblin treasure bonus yielded extra Gold & Crystals! ' : ''}Monster defeated in ${rounds} tactical round(s) · Defense ${mCfg.defense} absorbed incoming blows.`
     );
   } else {
     notes.push(
@@ -1019,7 +1186,8 @@ export function resolveGarrisonDefenseBattle(
   garrisonStacks: TroopStack[],
   attackerStacks: TroopStack[],
   config: GameBalanceConfig,
-  bonuses: CalculatedBonuses
+  bonuses: CalculatedBonuses,
+  infantryGear?: InfantryGearState | null
 ): {
   defenderWon: boolean;
   rounds: number;
@@ -1040,12 +1208,16 @@ export function resolveGarrisonDefenseBattle(
     unitAtk: number;
   };
 
-  const buildBuckets = (src: TroopStack[], mults: CalculatedBonuses): FighterBucket[] =>
+  const buildBuckets = (src: TroopStack[], mults: CalculatedBonuses, useGear: boolean): FighterBucket[] =>
     src
       .filter((s) => s.count > 0)
       .map((s) => {
         const row = config.troops[s.classId].levels[s.level];
-        const unitHp = row.hp * mults.hpMult;
+        const gearMults =
+          useGear && s.classId === 'infantry'
+            ? getInfantryTierMultipliers(s.level, infantryGear)
+            : { atkMult: 1, hpMult: 1, shieldMitigationPct: 0, powerMult: 1 };
+        const unitHp = row.hp * mults.hpMult * gearMults.hpMult;
         return {
           classId: s.classId,
           level: s.level,
@@ -1053,11 +1225,11 @@ export function resolveGarrisonDefenseBattle(
           alive: s.count,
           hpPool: s.count * unitHp,
           unitHp,
-          unitAtk: row.attack * mults.attackMult,
+          unitAtk: row.attack * mults.attackMult * gearMults.atkMult,
         };
       });
 
-  const defBuckets = buildBuckets(garrisonStacks, bonuses);
+  const defBuckets = buildBuckets(garrisonStacks, bonuses, true);
   const atkBuckets = buildBuckets(attackerStacks, {
     attackMult: 1,
     hpMult: 1,
@@ -1068,7 +1240,7 @@ export function resolveGarrisonDefenseBattle(
     healSpeedMult: 1,
     siegeDamageMult: 1,
     classAttackMults: { infantry: 1, archer: 1, cavalry: 1 },
-  });
+  }, false);
 
   let rounds = 0;
   const notes: string[] = [];
@@ -1190,7 +1362,8 @@ export function resolveCastleSiegeCombat(
   castlePower: number,
   config: GameBalanceConfig,
   bonuses: CalculatedBonuses,
-  hero?: NepaleseHeroConfig | null
+  hero?: NepaleseHeroConfig | null,
+  infantryGear?: InfantryGearState | null
 ): {
   breached: boolean;
   rounds: number;
@@ -1215,9 +1388,13 @@ export function resolveCastleSiegeCombat(
     .filter((s) => s.count > 0)
     .map((s) => {
       const row = config.troops[s.classId].levels[s.level];
-      const unitHp = row.hp * bonuses.hpMult;
+      const gearMults =
+        s.classId === 'infantry'
+          ? getInfantryTierMultipliers(s.level, infantryGear)
+          : { atkMult: 1, hpMult: 1, shieldMitigationPct: 0, powerMult: 1 };
+      const unitHp = row.hp * bonuses.hpMult * gearMults.hpMult;
       const clsMult = bonuses.classAttackMults?.[s.classId] ?? 1;
-      const unitAtk = row.attack * bonuses.attackMult * clsMult;
+      const unitAtk = row.attack * bonuses.attackMult * clsMult * gearMults.atkMult;
       return {
         classId: s.classId,
         level: s.level,
@@ -1226,6 +1403,7 @@ export function resolveCastleSiegeCombat(
         unitHp,
         totalHp: s.count * unitHp,
         unitAtk,
+        shieldMitigationPct: gearMults.shieldMitigationPct,
       };
     });
 
@@ -1251,10 +1429,11 @@ export function resolveCastleSiegeCombat(
       const bucketDmg = Math.min(incoming, incoming * Math.max(share, 0.45));
       const eachDmg = bucketDmg / clsStacks.length;
       for (const st of clsStacks) {
-        const applied = Math.min(st.totalHp, eachDmg);
+        const reduced = eachDmg * Math.max(0.75, 1 - st.shieldMitigationPct);
+        const applied = Math.min(st.totalHp, reduced);
         st.totalHp = Math.max(0, st.totalHp - applied);
         st.aliveCount = Math.ceil(st.totalHp / Math.max(1, st.unitHp));
-        incoming -= applied;
+        incoming -= eachDmg;
       }
     }
   }

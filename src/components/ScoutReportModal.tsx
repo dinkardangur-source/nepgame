@@ -1,5 +1,6 @@
 import React from 'react';
 import { InteractiveObject } from '../types/game';
+import { MonsterPortrait } from './MonsterPortrait';
 
 interface ScoutReportModalProps {
   isOpen: boolean;
@@ -65,15 +66,30 @@ export const ScoutReportModal: React.FC<ScoutReportModalProps> = ({
                 }}
               >
                 {isMonster
-                  ? target.subtype === 'yeti'
-                    ? '❄️ HIGH-LEVEL YETI BOSS'
-                    : 'HOSTILE MONSTER'
+                  ? target.subtype === 'boss' || targetLvl >= 10
+                    ? '🐉 DRAGO · WORLD BOSS'
+                    : target.subtype === 'goblin'
+                      ? '💰 GOLDEN GOBLIN · TREASURE'
+                      : '⚔️ HOSTILE MONSTER'
                   : isResource
                   ? 'RESOURCE DEPOSIT'
                   : 'KINGDOM TOWER FORTRESS'}
               </span>
-              <h2>{targetName}</h2>
-              <p>{desc}</p>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginTop: '8px', marginBottom: '6px' }}>
+                {isMonster && (
+                  <MonsterPortrait
+                    subtype={target.subtype}
+                    level={targetLvl}
+                    name={targetName}
+                    size={58}
+                    rounded={10}
+                  />
+                )}
+                <div>
+                  <h2 style={{ margin: 0 }}>{targetName}</h2>
+                  <p style={{ marginTop: '4px' }}>{desc}</p>
+                </div>
+              </div>
               <div className="scout-metrics">
                 <div>
                   <small>TARGET LEVEL</small>
@@ -177,7 +193,7 @@ export const ScoutReportModal: React.FC<ScoutReportModalProps> = ({
                   <b>Deploy Assault Squad (+30% DMG)</b>
                 </button>
 
-                {(targetLvl >= 3 || target.subtype === 'yeti') && onLaunchRally && (
+                {onLaunchRally && (
                   <button
                     className="btn-primary-dispatch"
                     style={{ background: 'linear-gradient(135deg, #d97706, #78350f)', borderColor: '#fbbf24' }}
