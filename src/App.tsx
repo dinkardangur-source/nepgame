@@ -909,6 +909,16 @@ export const App: React.FC = () => {
       );
       const now = Date.now();
       const heroLabel = selectedHero ? `${selectedHero.name} + ` : '';
+      const dispatchTier = cleanStacks.reduce<TroopLevel>(
+        (best, s) => (s.level > best ? s.level : best),
+        cleanStacks.find((s) => s.classId === 'infantry')?.level || 1
+      );
+      worldMapRef.current?.setArmyEquipmentTier(
+        dispatchTier,
+        infantryGear[dispatchTier] || { weapon: 0, shield: 0, armor: 0 },
+        selectedHero?.crestColor,
+        selectedHero?.id ?? null
+      );
 
       if (target.category === 'resource' || action === 'mine') {
         const live = nodeStates[target.id];
@@ -2339,7 +2349,8 @@ export const App: React.FC = () => {
           worldMapRef.current?.setArmyEquipmentTier(
             leadTierFromAll,
             snap.infantryGear[leadTierFromAll] || { weapon: 0, shield: 0, armor: 0 },
-            leadHero?.crestColor
+            leadHero?.crestColor,
+            lead.heroId ?? null
           );
           const frac = Math.max(0, Math.min(1, (now - lead.phaseStartedAt) / Math.max(500, lead.phaseDurationMs)));
           if (lead.status === 'marching') {

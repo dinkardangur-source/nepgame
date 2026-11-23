@@ -87,7 +87,7 @@ define(['./workbox-afac4cd2'], (function (workbox) { 'use strict';
     "revision": "baee7932c47b483452047731c7d9d990"
   }, {
     "url": "index.html",
-    "revision": "a2ee758d9088d9b4e4c645c2b16beec1"
+    "revision": "00780e48a9ca21d3b20058f1bce6f1fb"
   }, {
     "url": "favicon.ico",
     "revision": "bced82f6fc61f49f97449e34128d81fa"
@@ -104,19 +104,19 @@ define(['./workbox-afac4cd2'], (function (workbox) { 'use strict';
     "url": "assets/three-vendor-BDIn3zjl.js",
     "revision": null
   }, {
-    "url": "assets/index-CymDt8gw.js",
+    "url": "assets/index-Bto2pHRJ.js",
     "revision": null
   }, {
     "url": "assets/index-BRYu6DSd.css",
     "revision": null
   }, {
-    "url": "assets/StrategicWorldMapModal-DhCkv3jx.js",
+    "url": "assets/StrategicWorldMapModal-BvQ-Fd81.js",
     "revision": null
   }, {
-    "url": "assets/InsideKingdomView-DRPX0UX9.js",
+    "url": "assets/InsideKingdomView-BbDkZWWP.js",
     "revision": null
   }, {
-    "url": "assets/CommandHubDrawer-BnAcx-PP.js",
+    "url": "assets/CommandHubDrawer-UkLfYiEZ.js",
     "revision": null
   }, {
     "url": "assets/aistudio/screenshot_1_2be6e62f.png",
@@ -126,6 +126,9 @@ define(['./workbox-afac4cd2'], (function (workbox) { 'use strict';
     "revision": null
   }, {
     "url": "assets/aistudio/image_3cae993f.png",
+    "revision": null
+  }, {
+    "url": "assets/aistudio/image_2d5be945.png",
     "revision": null
   }, {
     "url": "assets/aistudio/image_250842e5.png",

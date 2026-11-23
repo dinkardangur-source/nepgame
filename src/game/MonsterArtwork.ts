@@ -129,11 +129,28 @@ const cutoutResolvedCache = new Map<MonsterArchetypeKey, ProcessedMonsterCutout>
 const threeTextureCache = new Map<
   MonsterArchetypeKey,
   {
-    texture: THREE.CanvasTexture | null;
+    westTexture: THREE.CanvasTexture | null;
+    eastTexture: THREE.CanvasTexture | null;
     aspectRatio: number;
-    listeners: Array<(aspectRatio: number, texture: THREE.CanvasTexture) => void>;
+    listeners: Array<(aspectRatio: number, westTexture: THREE.CanvasTexture, eastTexture: THREE.CanvasTexture) => void>;
   }
 >();
+
+function createMirroredHorizontalCanvas(src: HTMLCanvasElement): HTMLCanvasElement {
+  const flipped = document.createElement('canvas');
+  flipped.width = Math.max(2, src.width);
+  flipped.height = Math.max(2, src.height);
+  const ctx = flipped.getContext('2d');
+  if (ctx) {
+    ctx.clearRect(0, 0, flipped.width, flipped.height);
+    ctx.save();
+    ctx.translate(flipped.width, 0);
+    ctx.scale(-1, 1);
+    ctx.drawImage(src, 0, 0);
+    ctx.restore();
+  }
+  return flipped;
+}
 
 /**
  * Removes solid white background from uploaded monster PNGs using an edge-connected
@@ -389,50 +406,66 @@ export function prewarmMonsterCutouts(): void {
   });
 }
 
-export function getSharedMonsterSpriteTexture(
+export function getSharedMonsterDirectionalTextures(
   key: MonsterArchetypeKey,
   maxAnisotropy = 4,
-  onReady?: (aspectRatio: number, texture: THREE.CanvasTexture) => void
-): { texture: THREE.CanvasTexture | null; aspectRatio: number } {
+  onReady?: (aspectRatio: number, westTexture: THREE.CanvasTexture, eastTexture: THREE.CanvasTexture) => void
+): { westTexture: THREE.CanvasTexture | null; eastTexture: THREE.CanvasTexture | null; aspectRatio: number } {
   const resolvedCutout = cutoutResolvedCache.get(key);
   const existing = threeTextureCache.get(key);
 
   if (existing) {
-    if (existing.texture) {
-      onReady?.(existing.aspectRatio, existing.texture);
-      return { texture: existing.texture, aspectRatio: existing.aspectRatio };
+    if (existing.westTexture && existing.eastTexture) {
+      onReady?.(existing.aspectRatio, existing.westTexture, existing.eastTexture);
+      return {
+        westTexture: existing.westTexture,
+        eastTexture: existing.eastTexture,
+        aspectRatio: existing.aspectRatio,
+      };
     }
     if (resolvedCutout) {
-      const readyTex = createMonsterSpriteCanvasTexture(resolvedCutout.canvas, maxAnisotropy);
-      existing.texture = readyTex;
+      const westTex = createMonsterSpriteCanvasTexture(resolvedCutout.canvas, maxAnisotropy);
+      const eastTex = createMonsterSpriteCanvasTexture(
+        createMirroredHorizontalCanvas(resolvedCutout.canvas),
+        maxAnisotropy
+      );
+      existing.westTexture = westTex;
+      existing.eastTexture = eastTex;
       existing.aspectRatio = resolvedCutout.aspectRatio;
-      onReady?.(existing.aspectRatio, readyTex);
-      return { texture: readyTex, aspectRatio: existing.aspectRatio };
+      onReady?.(existing.aspectRatio, westTex, eastTex);
+      return { westTexture: westTex, eastTexture: eastTex, aspectRatio: existing.aspectRatio };
     }
     if (onReady) {
       existing.listeners.push(onReady);
     }
-    return { texture: null, aspectRatio: existing.aspectRatio };
+    return { westTexture: null, eastTexture: null, aspectRatio: existing.aspectRatio };
   }
 
   const cfg = MONSTER_ART_CONFIGS[key];
   if (resolvedCutout) {
-    const readyTex = createMonsterSpriteCanvasTexture(resolvedCutout.canvas, maxAnisotropy);
+    const westTex = createMonsterSpriteCanvasTexture(resolvedCutout.canvas, maxAnisotropy);
+    const eastTex = createMonsterSpriteCanvasTexture(
+      createMirroredHorizontalCanvas(resolvedCutout.canvas),
+      maxAnisotropy
+    );
     threeTextureCache.set(key, {
-      texture: readyTex,
+      westTexture: westTex,
+      eastTexture: eastTex,
       aspectRatio: resolvedCutout.aspectRatio,
       listeners: [],
     });
-    onReady?.(resolvedCutout.aspectRatio, readyTex);
-    return { texture: readyTex, aspectRatio: resolvedCutout.aspectRatio };
+    onReady?.(resolvedCutout.aspectRatio, westTex, eastTex);
+    return { westTexture: westTex, eastTexture: eastTex, aspectRatio: resolvedCutout.aspectRatio };
   }
 
   const entry: {
-    texture: THREE.CanvasTexture | null;
+    westTexture: THREE.CanvasTexture | null;
+    eastTexture: THREE.CanvasTexture | null;
     aspectRatio: number;
-    listeners: Array<(aspectRatio: number, texture: THREE.CanvasTexture) => void>;
+    listeners: Array<(aspectRatio: number, westTexture: THREE.CanvasTexture, eastTexture: THREE.CanvasTexture) => void>;
   } = {
-    texture: null,
+    westTexture: null,
+    eastTexture: null,
     aspectRatio: cfg.initialAspect,
     listeners: onReady ? [onReady] : [],
   };
@@ -440,15 +473,35 @@ export function getSharedMonsterSpriteTexture(
 
   loadProcessedMonsterCutout(key).then((cutout) => {
     entry.aspectRatio = cutout.aspectRatio;
-    if (!entry.texture) {
-      entry.texture = createMonsterSpriteCanvasTexture(cutout.canvas, maxAnisotropy);
+    if (!entry.westTexture) {
+      entry.westTexture = createMonsterSpriteCanvasTexture(cutout.canvas, maxAnisotropy);
+    }
+    if (!entry.eastTexture) {
+      entry.eastTexture = createMonsterSpriteCanvasTexture(
+        createMirroredHorizontalCanvas(cutout.canvas),
+        maxAnisotropy
+      );
     }
     const listeners = entry.listeners.splice(0, entry.listeners.length);
     for (let i = 0; i < listeners.length; i++) {
-      listeners[i](cutout.aspectRatio, entry.texture);
+      listeners[i](cutout.aspectRatio, entry.westTexture, entry.eastTexture);
     }
   });
 
-  return { texture: null, aspectRatio: entry.aspectRatio };
+  return { westTexture: null, eastTexture: null, aspectRatio: entry.aspectRatio };
 }
+
+export function getSharedMonsterSpriteTexture(
+  key: MonsterArchetypeKey,
+  maxAnisotropy = 4,
+  onReady?: (aspectRatio: number, texture: THREE.CanvasTexture) => void
+): { texture: THREE.CanvasTexture | null; aspectRatio: number } {
+  const { westTexture, aspectRatio } = getSharedMonsterDirectionalTextures(
+    key,
+    maxAnisotropy,
+    onReady ? (ratio, west) => onReady(ratio, west) : undefined
+  );
+  return { texture: westTexture, aspectRatio };
+}
+
 

@@ -38,11 +38,28 @@ let loadingPromise: Promise<MagarChartCropMap> | null = null;
 const threeWarriorTextureCache = new Map<
   TroopLevel,
   {
-    texture: THREE.CanvasTexture | null;
+    westTexture: THREE.CanvasTexture | null;
+    eastTexture: THREE.CanvasTexture | null;
     aspectRatio: number;
-    listeners: Array<(aspectRatio: number, texture: THREE.CanvasTexture) => void>;
+    listeners: Array<(aspectRatio: number, westTexture: THREE.CanvasTexture, eastTexture: THREE.CanvasTexture) => void>;
   }
 >();
+
+function createMirroredHorizontalWarriorCanvas(src: HTMLCanvasElement): HTMLCanvasElement {
+  const flipped = document.createElement('canvas');
+  flipped.width = Math.max(2, src.width);
+  flipped.height = Math.max(2, src.height);
+  const ctx = flipped.getContext('2d');
+  if (ctx) {
+    ctx.clearRect(0, 0, flipped.width, flipped.height);
+    ctx.save();
+    ctx.translate(flipped.width, 0);
+    ctx.scale(-1, 1);
+    ctx.drawImage(src, 0, 0);
+    ctx.restore();
+  }
+  return flipped;
+}
 
 function createWarriorCanvasTexture(canvas: HTMLCanvasElement, maxAnisotropy: number): THREE.CanvasTexture {
   const texture = new THREE.CanvasTexture(canvas);
@@ -363,50 +380,66 @@ export function loadMagarChartCrops(): Promise<MagarChartCropMap> {
   return loadingPromise;
 }
 
-export function getSharedMagarWarriorTexture(
+export function getSharedMagarWarriorDirectionalTextures(
   level: TroopLevel,
   maxAnisotropy = 4,
-  onReady?: (aspectRatio: number, texture: THREE.CanvasTexture) => void
-): { texture: THREE.CanvasTexture | null; aspectRatio: number } {
+  onReady?: (aspectRatio: number, westTexture: THREE.CanvasTexture, eastTexture: THREE.CanvasTexture) => void
+): { westTexture: THREE.CanvasTexture | null; eastTexture: THREE.CanvasTexture | null; aspectRatio: number } {
   const cachedCanvas = cachedCropMap?.[level]?.warriorCanvas;
   const cachedAspect = cachedCropMap?.[level]?.warriorAspect || 0.44;
   const existing = threeWarriorTextureCache.get(level);
 
   if (existing) {
-    if (existing.texture) {
-      onReady?.(existing.aspectRatio, existing.texture);
-      return { texture: existing.texture, aspectRatio: existing.aspectRatio };
+    if (existing.westTexture && existing.eastTexture) {
+      onReady?.(existing.aspectRatio, existing.westTexture, existing.eastTexture);
+      return {
+        westTexture: existing.westTexture,
+        eastTexture: existing.eastTexture,
+        aspectRatio: existing.aspectRatio,
+      };
     }
     if (cachedCanvas) {
-      const readyTex = createWarriorCanvasTexture(cachedCanvas, maxAnisotropy);
-      existing.texture = readyTex;
+      const westTex = createWarriorCanvasTexture(cachedCanvas, maxAnisotropy);
+      const eastTex = createWarriorCanvasTexture(
+        createMirroredHorizontalWarriorCanvas(cachedCanvas),
+        maxAnisotropy
+      );
+      existing.westTexture = westTex;
+      existing.eastTexture = eastTex;
       existing.aspectRatio = cachedAspect;
-      onReady?.(existing.aspectRatio, readyTex);
-      return { texture: readyTex, aspectRatio: existing.aspectRatio };
+      onReady?.(existing.aspectRatio, westTex, eastTex);
+      return { westTexture: westTex, eastTexture: eastTex, aspectRatio: existing.aspectRatio };
     }
     if (onReady) {
       existing.listeners.push(onReady);
     }
-    return { texture: null, aspectRatio: existing.aspectRatio };
+    return { westTexture: null, eastTexture: null, aspectRatio: existing.aspectRatio };
   }
 
   if (cachedCanvas) {
-    const readyTex = createWarriorCanvasTexture(cachedCanvas, maxAnisotropy);
+    const westTex = createWarriorCanvasTexture(cachedCanvas, maxAnisotropy);
+    const eastTex = createWarriorCanvasTexture(
+      createMirroredHorizontalWarriorCanvas(cachedCanvas),
+      maxAnisotropy
+    );
     threeWarriorTextureCache.set(level, {
-      texture: readyTex,
+      westTexture: westTex,
+      eastTexture: eastTex,
       aspectRatio: cachedAspect,
       listeners: [],
     });
-    onReady?.(cachedAspect, readyTex);
-    return { texture: readyTex, aspectRatio: cachedAspect };
+    onReady?.(cachedAspect, westTex, eastTex);
+    return { westTexture: westTex, eastTexture: eastTex, aspectRatio: cachedAspect };
   }
 
   const entry: {
-    texture: THREE.CanvasTexture | null;
+    westTexture: THREE.CanvasTexture | null;
+    eastTexture: THREE.CanvasTexture | null;
     aspectRatio: number;
-    listeners: Array<(aspectRatio: number, texture: THREE.CanvasTexture) => void>;
+    listeners: Array<(aspectRatio: number, westTexture: THREE.CanvasTexture, eastTexture: THREE.CanvasTexture) => void>;
   } = {
-    texture: null,
+    westTexture: null,
+    eastTexture: null,
     aspectRatio: 0.44,
     listeners: onReady ? [onReady] : [],
   };
@@ -416,19 +449,39 @@ export function getSharedMagarWarriorTexture(
     const tierData = crops[level];
     if (tierData?.warriorCanvas) {
       entry.aspectRatio = tierData.warriorAspect || 0.44;
-      if (!entry.texture) {
-        entry.texture = createWarriorCanvasTexture(tierData.warriorCanvas, maxAnisotropy);
+      if (!entry.westTexture) {
+        entry.westTexture = createWarriorCanvasTexture(tierData.warriorCanvas, maxAnisotropy);
+      }
+      if (!entry.eastTexture) {
+        entry.eastTexture = createWarriorCanvasTexture(
+          createMirroredHorizontalWarriorCanvas(tierData.warriorCanvas),
+          maxAnisotropy
+        );
       }
     }
-    if (entry.texture) {
+    if (entry.westTexture && entry.eastTexture) {
       const listeners = entry.listeners.splice(0, entry.listeners.length);
       for (let i = 0; i < listeners.length; i++) {
-        listeners[i](entry.aspectRatio, entry.texture);
+        listeners[i](entry.aspectRatio, entry.westTexture, entry.eastTexture);
       }
     }
   });
 
-  return { texture: null, aspectRatio: entry.aspectRatio };
+  return { westTexture: null, eastTexture: null, aspectRatio: entry.aspectRatio };
 }
+
+export function getSharedMagarWarriorTexture(
+  level: TroopLevel,
+  maxAnisotropy = 4,
+  onReady?: (aspectRatio: number, texture: THREE.CanvasTexture) => void
+): { texture: THREE.CanvasTexture | null; aspectRatio: number } {
+  const { westTexture, aspectRatio } = getSharedMagarWarriorDirectionalTextures(
+    level,
+    maxAnisotropy,
+    onReady ? (ratio, west) => onReady(ratio, west) : undefined
+  );
+  return { texture: westTexture, aspectRatio };
+}
+
 
 

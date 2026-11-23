@@ -4,14 +4,17 @@ on:
   workflow_dispatch:
   push:
     branches:
-      - main
+      - '**'
+    paths-ignore:
+      - 'android-apk/**'
+      - 'apk-version.json'
 
 permissions:
   contents: write
 
 concurrency:
   group: android-apk-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   build-apk:
@@ -19,6 +22,8 @@ jobs:
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -31,13 +36,46 @@ jobs:
           distribution: 'temurin'
           java-version: '21'
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Install Android SDK Platform 36 & Build Tools
+      - name: Setup Android SDK & Install API 36 Tools
         run: |
-          yes | sdkmanager --licenses >/dev/null || true
-          sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.0.0"
+          set -euo pipefail
+          SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          if [ ! -d "$SDK_ROOT" ]; then
+            SDK_ROOT="$HOME/android-sdk"
+            mkdir -p "$SDK_ROOT"
+          fi
+          echo "ANDROID_HOME=$SDK_ROOT" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK_ROOT" >> "$GITHUB_ENV"
+
+          SDKMANAGER=""
+          for candidate in \
+            "$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" \
+            "$SDK_ROOT/cmdline-tools/bin/sdkmanager" \
+            "$(command -v sdkmanager 2>/dev/null || true)"; do
+            if [ -n "$candidate" ] && [ -x "$candidate" ]; then
+              SDKMANAGER="$candidate"
+              break
+            fi
+          done
+
+          if [ -z "$SDKMANAGER" ]; then
+            echo "Downloading Android command-line tools..."
+            mkdir -p "$SDK_ROOT/cmdline-tools"
+            curl -fsSL "https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip" -o /tmp/cmdline-tools.zip
+            unzip -q /tmp/cmdline-tools.zip -d /tmp/cmdline-tools-unpack
+            rm -rf "$SDK_ROOT/cmdline-tools/latest"
+            mv /tmp/cmdline-tools-unpack/cmdline-tools "$SDK_ROOT/cmdline-tools/latest"
+            rm -rf /tmp/cmdline-tools.zip /tmp/cmdline-tools-unpack
+            SDKMANAGER="$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
+          fi
+
+          echo "$(dirname "$SDKMANAGER")" >> "$GITHUB_PATH"
+          echo "$SDK_ROOT/platform-tools" >> "$GITHUB_PATH"
+
+          set +o pipefail
+          yes | "$SDKMANAGER" --sdk_root="$SDK_ROOT" --licenses >/dev/null || true
+          set -o pipefail
+          "$SDKMANAGER" --sdk_root="$SDK_ROOT" "platform-tools" "platforms;android-36" "build-tools;36.0.0"
 
       - name: Install Dependencies, Version APK & Sync Capacitor
         id: apk_version
@@ -54,22 +92,43 @@ jobs:
           cd android
           ./gradlew assembleDebug --no-daemon
 
-      - name: Package Android APK
+      - name: Package & Overwrite Android APK
         run: |
-          mkdir -p android-apk
+          mkdir -p android-apk /tmp/release-apks
+          # Keep only the latest overwritten APK inside the repository directory
+          rm -f android-apk/*.apk
           cp android/app/build/outputs/apk/debug/app-debug.apk android-apk/Himalayan-Realms-debug.apk
-          cp android/app/build/outputs/apk/debug/app-debug.apk "android-apk/Himalayan-Realms-v${{ steps.apk_version.outputs.version_name }}-b${{ steps.apk_version.outputs.version_code }}-debug.apk"
+          cp android/app/build/outputs/apk/debug/app-debug.apk /tmp/release-apks/Himalayan-Realms-debug.apk
+          cp android/app/build/outputs/apk/debug/app-debug.apk "/tmp/release-apks/Himalayan-Realms-v${{ steps.apk_version.outputs.version_name }}-b${{ steps.apk_version.outputs.version_code }}-debug.apk"
+
+      - name: Commit & Push Overwritten APK to Repository
+        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -f android-apk/Himalayan-Realms-debug.apk apk-version.json package.json android/app/build.gradle
+          if ! git diff --cached --quiet; then
+            git commit -m "chore(apk): update Himalayan-Realms-debug.apk to v${{ steps.apk_version.outputs.version_name }} (b${{ steps.apk_version.outputs.version_code }}) [skip ci]"
+            git pull --rebase origin "${{ github.ref_name }}" || true
+            git push origin "HEAD:${{ github.ref_name }}"
+          else
+            echo "No APK or version changes to commit."
+          fi
 
       - name: Upload Android APK Artifact
         uses: actions/upload-artifact@v4
         with:
           name: HimalayanRealms-debug-apk-v${{ steps.apk_version.outputs.version_name }}-b${{ steps.apk_version.outputs.version_code }}
-          path: android-apk/*.apk
+          path: /tmp/release-apks/*.apk
 
-      - name: Publish GitHub Release with APK
+      - name: Overwrite Rolling Latest GitHub Release with APK
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v${{ steps.apk_version.outputs.version_name }}-b${{ steps.apk_version.outputs.version_code }}
-          name: Himalayan Realms v${{ steps.apk_version.outputs.version_name }} (Build ${{ steps.apk_version.outputs.version_code }})
-          generate_release_notes: true
-          files: android-apk/*.apk
+          tag_name: latest
+          name: Himalayan Realms Latest (v${{ steps.apk_version.outputs.version_name }} Build ${{ steps.apk_version.outputs.version_code }})
+          body: |
+            Automated latest Android APK build (`v${{ steps.apk_version.outputs.version_name }}`, build `${{ steps.apk_version.outputs.version_code }}`) from commit `${{ github.sha }}`.
+            Download `Himalayan-Realms-debug.apk` below (automatically overwritten on every push).
+          overwrite_files: true
+          make_latest: true
+          files: /tmp/release-apks/*.apk
