@@ -5,7 +5,17 @@ import {
   createRoofTileTexture,
   createDragonBannerTexture,
   createPrayerFlagTexture,
+  createTerrainDetailAlbedoTexture,
+  createTerrainSurfaceNormalMap,
 } from './proceduralTextures';
+import { applyDualScaleGrassShader } from './TerrainGenerator';
+import {
+  ContactShadowEntry,
+  ShadowProjectionState,
+  createContactShadowMaterial,
+  createFlatContactShadow,
+  syncContactShadowEntries,
+} from './shadows';
 
 export type MergeBuildingCategory = 'barracks' | 'tower' | 'mill' | 'shrine';
 
@@ -228,6 +238,10 @@ export class InsideKingdom3D {
   private plotBuildingMeshesMap = new Map<string, THREE.Group>();
   private plotHighlightRingsMap = new Map<string, THREE.Mesh>();
   private plotLabelSpritesMap = new Map<string, THREE.Sprite>();
+  private radialShadowMat: THREE.MeshBasicMaterial;
+  private octagonalShadowMat: THREE.MeshBasicMaterial;
+  private contactShadowEntries: ContactShadowEntry[] = [];
+  private plotShadowEntriesMap = new Map<string, ContactShadowEntry>();
 
   private keepGroup = new THREE.Group();
   private keepLevel = 20;
@@ -315,6 +329,8 @@ export class InsideKingdom3D {
       side: THREE.DoubleSide,
       roughness: 0.6,
     });
+    this.radialShadowMat = createContactShadowMaterial('radial', 0.7);
+    this.octagonalShadowMat = createContactShadowMaterial('octagonal', 0.72);
 
     this.initWalledCourtyardEnvironment();
     this.initCentralImperialKeep();
@@ -359,8 +375,8 @@ export class InsideKingdom3D {
   ): THREE.Mesh {
     const m = new THREE.Mesh(geo, mat);
     m.position.set(x, y, z);
-    m.castShadow = castShadow;
-    m.receiveShadow = true;
+    m.castShadow = castShadow && mat !== this.lanternMat;
+    m.receiveShadow = mat !== this.lanternMat;
     parent.add(m);
     return m;
   }
@@ -371,22 +387,156 @@ export class InsideKingdom3D {
   private initWalledCourtyardEnvironment() {
     const center = new THREE.Vector3(1600, 10.0, 1600);
 
-    // Outer Grass & Forest Floor Meadow Base under the surrounding forest (168m x 146m)
-    const meadowMat = new THREE.MeshStandardMaterial({
-      color: 0x284e2a,
-      roughness: 0.92,
-      metalness: 0.04,
+    // Seamless Contoured Himalayan Highland Grass Valley surrounding the Citadel (1800m x 1800m)
+    // Eliminates flat rectangular meadow edges and matches World Map dual-scale PBR turf quality
+    const grassValleyMat = new THREE.MeshStandardMaterial({
+      vertexColors: true,
+      map: createTerrainDetailAlbedoTexture(),
+      normalMap: createTerrainSurfaceNormalMap(),
+      normalScale: new THREE.Vector2(1.15, 1.15),
+      roughness: 0.89,
+      metalness: 0.02,
+      flatShading: false,
     });
-    const meadowSlab = this.addMesh(
+    applyDualScaleGrassShader(grassValleyMat);
+
+    const buildValleyAxis = (halfExtent: number, halfSteps: number): number[] => {
+      const vals: number[] = [];
+      for (let i = -halfSteps; i <= halfSteps; i++) {
+        const s = i / halfSteps;
+        const absS = Math.abs(s);
+        // Dense spacing (~5-8m) near courtyard & forest belt, stretching smoothly to horizon
+        const eased = Math.sign(s) * (absS * 0.14 + Math.pow(absS, 2.7) * 0.86);
+        vals.push(eased * halfExtent);
+      }
+      return vals;
+    };
+
+    const valleyXs = buildValleyAxis(920, 32);
+    const valleyZs = buildValleyAxis(920, 32);
+    const vCols = valleyXs.length;
+    const vRows = valleyZs.length;
+    const vCount = vCols * vRows;
+
+    const evalValleyHeight = (dx: number, dz: number): number => {
+      // Distance outside the Citadel + forest belt box (kept calm & flat where trees/lanterns stand)
+      const boxDx = Math.max(0, Math.abs(dx) - 78);
+      const boxDz = Math.max(0, Math.abs(dz - 4) - 70);
+      const outBox = Math.hypot(boxDx, boxDz);
+      // Keep southern Main Gate approach corridor gently graded
+      const inSouthGateRoad = dz > 50 && Math.abs(dx) < 16;
+      const roadFlatten = inSouthGateRoad ? 1 - THREE.MathUtils.smoothstep(Math.abs(dx), 7, 16) : 0;
+
+      if (outBox <= 0.01) {
+        return center.y - 0.04;
+      }
+
+      const hillT = THREE.MathUtils.smoothstep(outBox, 0, 260);
+      const farT = THREE.MathUtils.smoothstep(outBox, 120, 760);
+      const wave =
+        Math.sin((1600 + dx) * 0.016 + (1600 + dz) * 0.013) * 4.8 +
+        Math.cos((1600 + dx) * 0.031 - (1600 + dz) * 0.027) * 2.4 +
+        Math.sin(outBox * 0.019) * 2.6;
+      const lift = farT * 34.0 + hillT * (7.5 + wave);
+      return center.y - 0.04 + lift * (1 - roadFlatten * 0.85);
+    };
+
+    const vPositions = new Float32Array(vCount * 3);
+    const vNormals = new Float32Array(vCount * 3);
+    const vUvs = new Float32Array(vCount * 2);
+    const vColors = new Float32Array(vCount * 3);
+    const vIndices: number[] = [];
+
+    const forestLoamCol = new THREE.Color('#2d5a2b');
+    const meadowGrassCol = new THREE.Color('#47833a');
+    const sunlitHillCol = new THREE.Color('#5a9240');
+    const highlandRidgeCol = new THREE.Color('#3b6e37');
+    const tempValleyCol = new THREE.Color();
+    const uvScale = 0.044;
+
+    let vIdx = 0;
+    for (let iz = 0; iz < vRows; iz++) {
+      const dz = valleyZs[iz];
+      const wz = 1600 + dz;
+      for (let ix = 0; ix < vCols; ix++) {
+        const dx = valleyXs[ix];
+        const wx = 1600 + dx;
+        const wy = evalValleyHeight(dx, dz);
+
+        vPositions[vIdx * 3] = wx;
+        vPositions[vIdx * 3 + 1] = wy;
+        vPositions[vIdx * 3 + 2] = wz;
+
+        const eps = 3.5;
+        const hL = evalValleyHeight(dx - eps, dz);
+        const hR = evalValleyHeight(dx + eps, dz);
+        const hD = evalValleyHeight(dx, dz - eps);
+        const hU = evalValleyHeight(dx, dz + eps);
+        const nx = hL - hR;
+        const ny = 2.0 * eps;
+        const nz = hD - hU;
+        const invLen = 1.0 / (Math.hypot(nx, ny, nz) || 1.0);
+        vNormals[vIdx * 3] = nx * invLen;
+        vNormals[vIdx * 3 + 1] = ny * invLen;
+        vNormals[vIdx * 3 + 2] = nz * invLen;
+
+        vUvs[vIdx * 2] = wx * uvScale;
+        vUvs[vIdx * 2 + 1] = wz * uvScale;
+
+        const boxDx = Math.max(0, Math.abs(dx) - 54);
+        const boxDz = Math.max(0, Math.abs(dz) - 48);
+        const wallDist = Math.hypot(boxDx, boxDz);
+        const forestBand = wallDist < 34 ? 1 - THREE.MathUtils.smoothstep(wallDist, 6, 34) : 0;
+        const macroWave = Math.sin(wx * 0.011 + wz * 0.009) * 0.5 + 0.5;
+        const elevGain = Math.max(0, wy - center.y);
+
+        tempValleyCol.copy(meadowGrassCol).lerp(sunlitHillCol, macroWave * 0.45);
+        tempValleyCol.lerp(forestLoamCol, forestBand * 0.62);
+        if (elevGain > 6) {
+          tempValleyCol.lerp(highlandRidgeCol, THREE.MathUtils.clamp((elevGain - 6) / 28, 0, 0.55));
+        }
+
+        vColors[vIdx * 3] = tempValleyCol.r;
+        vColors[vIdx * 3 + 1] = tempValleyCol.g;
+        vColors[vIdx * 3 + 2] = tempValleyCol.b;
+        vIdx++;
+      }
+    }
+
+    for (let iz = 0; iz < vRows - 1; iz++) {
+      for (let ix = 0; ix < vCols - 1; ix++) {
+        const a = iz * vCols + ix;
+        const b = iz * vCols + (ix + 1);
+        const c = (iz + 1) * vCols + ix;
+        const d = (iz + 1) * vCols + (ix + 1);
+        vIndices.push(a, c, b);
+        vIndices.push(b, c, d);
+      }
+    }
+
+    const valleyGeo = new THREE.BufferGeometry();
+    valleyGeo.setIndex(vIndices);
+    valleyGeo.setAttribute('position', new THREE.BufferAttribute(vPositions, 3));
+    valleyGeo.setAttribute('normal', new THREE.BufferAttribute(vNormals, 3));
+    valleyGeo.setAttribute('uv', new THREE.BufferAttribute(vUvs, 2));
+    valleyGeo.setAttribute('color', new THREE.BufferAttribute(vColors, 3));
+
+    const valleyMesh = new THREE.Mesh(valleyGeo, grassValleyMat);
+    valleyMesh.receiveShadow = true;
+    valleyMesh.name = 'InsideKingdomGrassValley';
+    this.rootGroup.add(valleyMesh);
+
+    // Dressed Outer Granite Footing Plinth anchoring the Citadel walls & corners cleanly into grass
+    const outerWallCurb = this.addMesh(
       this.rootGroup,
-      new THREE.BoxGeometry(168, 0.36, 146),
-      meadowMat,
+      new THREE.BoxGeometry(108.8, 0.44, 96.8),
+      this.stoneMat,
       1600,
-      center.y - 0.25,
-      1604,
+      center.y - 0.14,
+      1600,
       false
     );
-    meadowSlab.receiveShadow = true;
+    outerWallCurb.receiveShadow = true;
 
     // Grand Paved Royal Granite Courtyard Foundation Slab inside the Wall Border (104m x 92m: X=1548..1652, Z=1554..1646)
     const courtyardSlab = this.addMesh(
@@ -400,34 +550,57 @@ export class InsideKingdom3D {
     );
     courtyardSlab.receiveShadow = true;
 
-    // Inner Courtyard Golden Border Inlay framing all inside buildings just inside the walls
+    // Inner Courtyard Golden Border Inlay with non-overlapping mitered corners & corner medallions
     const borderFrameMat = new THREE.MeshBasicMaterial({
       color: 0xdfba6e,
       transparent: true,
-      opacity: 0.55,
+      opacity: 0.62,
+      depthWrite: false,
     });
-    this.addMesh(this.rootGroup, new THREE.BoxGeometry(96, 0.53, 0.8), borderFrameMat, 1600, center.y - 0.13, 1558, false);
-    this.addMesh(this.rootGroup, new THREE.BoxGeometry(0.8, 0.53, 84), borderFrameMat, 1552, center.y - 0.13, 1600, false);
-    this.addMesh(this.rootGroup, new THREE.BoxGeometry(0.8, 0.53, 84), borderFrameMat, 1648, center.y - 0.13, 1600, false);
-    this.addMesh(this.rootGroup, new THREE.BoxGeometry(36, 0.53, 0.8), borderFrameMat, 1570, center.y - 0.13, 1642, false);
-    this.addMesh(this.rootGroup, new THREE.BoxGeometry(36, 0.53, 0.8), borderFrameMat, 1630, center.y - 0.13, 1642, false);
+    const addInlay = (w: number, h: number, d: number, x: number, y: number, z: number, mat: THREE.Material) => {
+      const m = this.addMesh(this.rootGroup, new THREE.BoxGeometry(w, h, d), mat, x, y, z, false);
+      m.renderOrder = 3;
+      return m;
+    };
+    addInlay(95.2, 0.04, 0.8, 1600, center.y + 0.125, 1558, borderFrameMat);
+    addInlay(0.8, 0.04, 83.2, 1552, center.y + 0.125, 1600, borderFrameMat);
+    addInlay(0.8, 0.04, 83.2, 1648, center.y + 0.125, 1600, borderFrameMat);
+    addInlay(37.2, 0.04, 0.8, 1571, center.y + 0.125, 1642, borderFrameMat);
+    addInlay(37.2, 0.04, 0.8, 1629, center.y + 0.125, 1642, borderFrameMat);
+
+    for (const [mx, mz] of [
+      [1552, 1558],
+      [1648, 1558],
+      [1552, 1642],
+      [1648, 1642],
+    ]) {
+      this.addMesh(
+        this.rootGroup,
+        new THREE.CylinderGeometry(1.15, 1.35, 0.12, 8),
+        this.goldMat,
+        mx,
+        center.y + 0.14,
+        mz,
+        false
+      );
+    }
 
     // Central Golden Processional Avenue (North-South & East-West Crossways + Open Main Gate Road)
     this.addMesh(
       this.rootGroup,
-      new THREE.BoxGeometry(12.5, 0.56, 118),
+      new THREE.BoxGeometry(12.5, 0.36, 118),
       this.stoneMat,
       1600,
-      center.y - 0.12,
+      center.y - 0.02,
       1624,
       false
     );
     this.addMesh(
       this.rootGroup,
-      new THREE.BoxGeometry(92, 0.56, 8.5),
+      new THREE.BoxGeometry(92, 0.36, 8.5),
       this.stoneMat,
       1600,
-      center.y - 0.12,
+      center.y - 0.02,
       1598,
       false
     );
@@ -436,10 +609,11 @@ export class InsideKingdom3D {
     const leylineMat = new THREE.MeshBasicMaterial({
       color: 0xfacc15,
       transparent: true,
-      opacity: 0.76,
+      opacity: 0.78,
+      depthWrite: false,
     });
-    this.addMesh(this.rootGroup, new THREE.BoxGeometry(0.5, 0.6, 114), leylineMat, 1594.5, center.y - 0.1, 1624, false);
-    this.addMesh(this.rootGroup, new THREE.BoxGeometry(0.5, 0.6, 114), leylineMat, 1605.5, center.y - 0.1, 1624, false);
+    addInlay(0.5, 0.06, 114, 1594.5, center.y + 0.17, 1624, leylineMat);
+    addInlay(0.5, 0.06, 114, 1605.5, center.y + 0.17, 1624, leylineMat);
 
     // =========================================================================
     // FORTIFIED PERIMETER WALL BORDER ENCLOSING ALL INSIDE BUILDINGS
@@ -579,6 +753,18 @@ export class InsideKingdom3D {
     for (const [cx, cz] of bastionCoords) {
       const cGroup = new THREE.Group();
       cGroup.position.set(cx, center.y, cz);
+      const towerShadow = createFlatContactShadow({
+        width: 15.6,
+        depth: 15.6,
+        y: 0.09,
+        material: this.radialShadowMat,
+        shiftAmount: 1.45,
+        renderOrder: 2,
+      });
+      cGroup.add(towerShadow.mesh);
+      this.contactShadowEntries.push(towerShadow.entry);
+
+      this.addMesh(cGroup, new THREE.CylinderGeometry(5.7, 6.3, 0.75, 8), this.darkStoneMat, 0, 0.35, 0);
       this.addMesh(cGroup, new THREE.CylinderGeometry(4.5, 5.4, 11.5, 8), this.stoneMat, 0, 5.75, 0);
       this.addMesh(cGroup, new THREE.ConeGeometry(6.6, 3.8, 8), this.crimsonRoofMat, 0, 12.8, 0);
       this.addMesh(cGroup, new THREE.CylinderGeometry(3.0, 3.4, 3.0, 8), this.woodMat, 0, 15.0, 0);
@@ -591,6 +777,17 @@ export class InsideKingdom3D {
     // Southern Imperial Main Gatehouse Archway (Z = 1646, X = 1600)
     const gateGroup = new THREE.Group();
     gateGroup.position.set(1600, center.y, 1646);
+    const gateShadow = createFlatContactShadow({
+      width: 32,
+      depth: 14,
+      y: 0.14,
+      material: this.octagonalShadowMat,
+      shiftAmount: 1.35,
+      renderOrder: 2,
+    });
+    gateGroup.add(gateShadow.mesh);
+    this.contactShadowEntries.push(gateShadow.entry);
+
     this.addMesh(gateGroup, new THREE.BoxGeometry(6.0, 12.0, 6.2), this.stoneMat, -10.5, 6.0, 0);
     this.addMesh(gateGroup, new THREE.BoxGeometry(6.0, 12.0, 6.2), this.stoneMat, 10.5, 6.0, 0);
     // Overhead Pagoda Bridge Arch
@@ -670,6 +867,7 @@ export class InsideKingdom3D {
     const bushSideGeo = new THREE.DodecahedronGeometry(0.95, 1);
     const flowerGeo = new THREE.SphereGeometry(0.26, 6, 6);
 
+    const pineShadowGeo = new THREE.PlaneGeometry(6.8, 6.8);
     const spawnPineTree = (x: number, z: number, scale: number, seed: number) => {
       const tree = new THREE.Group();
       tree.position.set(x, baseY, z);
@@ -677,6 +875,14 @@ export class InsideKingdom3D {
       tree.rotation.y = (seed * 1.7) % (Math.PI * 2);
 
       const leafMat = seed % 3 === 0 ? pineDarkMat : seed % 3 === 1 ? pineMidMat : pineBrightMat;
+      const pShadow = new THREE.Mesh(pineShadowGeo, this.radialShadowMat);
+      pShadow.rotation.x = -Math.PI / 2;
+      pShadow.position.y = 0.04;
+      pShadow.castShadow = false;
+      pShadow.receiveShadow = false;
+      pShadow.renderOrder = 2;
+      tree.add(pShadow);
+
       this.addMesh(tree, trunkGeo, trunkMat, 0, 1.6, 0, true);
       this.addMesh(tree, coneBotGeo, leafMat, 0, 3.9, 0, true);
       this.addMesh(tree, coneMidGeo, leafMat, 0, 6.2, 0, true);
@@ -802,6 +1008,17 @@ export class InsideKingdom3D {
     this.keepGroup.position.set(1600, 10.0, 1569);
     this.keepGroup.userData = { insidePlotId: 'keep' };
 
+    const keepShadow = createFlatContactShadow({
+      width: 29,
+      depth: 25,
+      y: 0.14,
+      material: this.octagonalShadowMat,
+      shiftAmount: 1.9,
+      renderOrder: 2,
+    });
+    this.keepGroup.add(keepShadow.mesh);
+    this.contactShadowEntries.push(keepShadow.entry);
+
     // Stepped Imperial Marble & Granite Terrace Plinth
     this.addMesh(this.keepGroup, new THREE.BoxGeometry(22, 2.2, 18), this.stoneMat, 0, 1.1, 0);
     this.addMesh(this.keepGroup, new THREE.BoxGeometry(22.6, 0.35, 18.6), this.goldMat, 0, 2.25, 0);
@@ -880,6 +1097,19 @@ export class InsideKingdom3D {
       plotGroup.position.set(coords[0], coords[1], coords[2]);
       plotGroup.userData = { insidePlotId: plotId };
 
+      // Grounded soft contact shadow anchored under the plot plinth (scaled dynamically by building tier)
+      const plotShadow = createFlatContactShadow({
+        width: 11.4,
+        depth: 11.4,
+        y: 0.13,
+        material: this.radialShadowMat,
+        shiftAmount: 0.9,
+        renderOrder: 2,
+      });
+      plotGroup.add(plotShadow.mesh);
+      this.contactShadowEntries.push(plotShadow.entry);
+      this.plotShadowEntriesMap.set(plotId, plotShadow.entry);
+
       // Octagonal Carved Himalayan Granite Plinth Base
       const plinth = this.addMesh(
         plotGroup,
@@ -911,10 +1141,12 @@ export class InsideKingdom3D {
         side: THREE.DoubleSide,
         transparent: true,
         opacity: 0.85,
+        depthWrite: false,
       });
       const highlightRing = new THREE.Mesh(ringGeo, ringMat);
       highlightRing.rotation.x = -Math.PI / 2;
       highlightRing.position.y = 0.16;
+      highlightRing.renderOrder = 4;
       highlightRing.visible = false;
       plotGroup.add(highlightRing);
       this.plotHighlightRingsMap.set(plotId, highlightRing);
@@ -958,7 +1190,14 @@ export class InsideKingdom3D {
       this.plotLabelSpritesMap.delete(plot.plotId);
     }
 
+    const plotShadowEntry = this.plotShadowEntriesMap.get(plot.plotId);
+
     if (!plot.building) {
+      if (plotShadowEntry) {
+        plotShadowEntry.baseScaleX = 0.92;
+        plotShadowEntry.baseScaleZ = 0.92;
+        plotShadowEntry.shiftAmount = 0.45;
+      }
       // Empty plot marker: subtle holographic construction anvil plinth
       const emptyGroup = new THREE.Group();
       emptyGroup.position.y = 0.8;
@@ -992,6 +1231,11 @@ export class InsideKingdom3D {
     // Scale increases subtly with each merged tier + extra stories/ornaments
     const tierScale = 1.0 + Math.min(level - 1, 6) * 0.085;
     bGroup.scale.setScalar(tierScale);
+    if (plotShadowEntry) {
+      plotShadowEntry.baseScaleX = 1.04 * tierScale;
+      plotShadowEntry.baseScaleZ = 1.04 * tierScale;
+      plotShadowEntry.shiftAmount = (category === 'tower' ? 1.35 : 1.05) * tierScale;
+    }
 
     if (category === 'barracks') {
       // GURKHA WAR BARRACKS: Fortified timber & granite drill hall with multi-tier pagoda roofs
@@ -1568,9 +1812,14 @@ export class InsideKingdom3D {
   }
 
   /**
-   * Frame animation update for 3D courtyard buildings (waterwheels, rings, banners, pop-in scale)
+   * Frame animation update for 3D courtyard buildings (waterwheels, rings, banners, shadows, pop-in scale)
    */
-  public update(delta: number, elapsed: number) {
+  public update(delta: number, elapsed: number, shadowState?: ShadowProjectionState) {
+    if (shadowState) {
+      this.radialShadowMat.opacity = shadowState.contactOpacity;
+      this.octagonalShadowMat.opacity = Math.min(0.84, shadowState.contactOpacity * 1.06);
+      syncContactShadowEntries(this.contactShadowEntries, shadowState);
+    }
     // Animate pulsing rings on selected & merge-candidate plots
     this.plotHighlightRingsMap.forEach((ring) => {
       if (ring.visible) {

@@ -158,11 +158,18 @@ export class CameraController {
   /**
    * Focus inside the 3D Walled Imperial Citadel Kingdom courtyard (frames full wall border + surrounding forest)
    */
-  public focusInsideKingdom() {
+  public focusInsideKingdom(snapImmediately = false) {
     this.desiredTarget.set(1600, 10.0, 1602);
     this.desiredZoom = 0.5016;
     this.desiredYaw = 0.0;
     this.desiredPitch = 0.78;
+    if (snapImmediately) {
+      this.target.copy(this.desiredTarget);
+      this.zoom = this.desiredZoom;
+      this.yaw = this.desiredYaw;
+      this.pitch = this.desiredPitch;
+      this.updateCameraTransform();
+    }
   }
 
   /**

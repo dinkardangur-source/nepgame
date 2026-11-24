@@ -16,6 +16,14 @@ import type {
   LiveMonsterStatus,
   LiveNodeStatus,
 } from './components/CommandHubDrawer';
+import { AuthErrorBoundary } from './components/AuthErrorBoundary';
+import { AuthProvider, useAuth } from './context/AuthContext';
+import { AuthGatewayScreen } from './components/AuthGatewayScreen';
+import { AccountModalController } from './components/AccountMenusAndModals';
+import {
+  loadKingdomProgressFromCloud,
+  saveKingdomProgressToCloud,
+} from './services/playerAuthService';
 
 const InsideKingdomView = lazy(() =>
   import('./components/InsideKingdomView').then((m) => ({ default: m.InsideKingdomView }))
@@ -28,6 +36,9 @@ const CommandHubDrawer = lazy(() =>
 );
 const WorldMapTestMode = lazy(() =>
   import('./components/WorldMapTestMode').then((m) => ({ default: m.WorldMapTestMode }))
+);
+const AnimationTestModeModal = lazy(() =>
+  import('./components/AnimationTestModeModal').then((m) => ({ default: m.AnimationTestModeModal }))
 );
 import {
   ActiveMarch,
@@ -251,9 +262,15 @@ function buildInitialShrineGarrisons(
   return out;
 }
 
-function loadInitialSimState(cfg: GameBalanceConfig): PersistedSimState {
+function getUserSimStorageKey(uid: string): string {
+  return `${KINGDOM_SIM_STORAGE_KEY}_${uid}`;
+}
+
+function loadInitialSimState(cfg: GameBalanceConfig, uid: string): PersistedSimState {
   try {
-    const raw = localStorage.getItem(KINGDOM_SIM_STORAGE_KEY);
+    const raw =
+      localStorage.getItem(getUserSimStorageKey(uid)) ??
+      localStorage.getItem(KINGDOM_SIM_STORAGE_KEY);
     if (raw) {
       const parsed = JSON.parse(raw) as Partial<PersistedSimState>;
       return {
@@ -301,12 +318,23 @@ function loadInitialSimState(cfg: GameBalanceConfig): PersistedSimState {
   };
 }
 
-export const App: React.FC = () => {
+interface ProtectedGameShellProps {
+  uid: string;
+  initialViewMode: 'world' | 'kingdom';
+  commanderUsername?: string;
+}
+
+const ProtectedGameShell: React.FC<ProtectedGameShellProps> = ({
+  uid,
+  initialViewMode,
+  commanderUsername,
+}) => {
+  const { registerBeforeSignOutHook, welcomeBanner, clearWelcomeBanner } = useAuth();
   const mapContainerRef = useRef<HTMLDivElement | null>(null);
   const worldMapRef = useRef<WorldMap | null>(null);
 
   const [balanceConfig, setBalanceConfig] = useState<GameBalanceConfig>(() => loadBalanceConfig());
-  const initialSim = useMemo(() => loadInitialSimState(balanceConfig), []); // eslint-disable-line react-hooks/exhaustive-deps
+  const initialSim = useMemo(() => loadInitialSimState(balanceConfig, uid), [uid]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Core Nepalese Strategy State
   const [resources, setResources] = useState<PlayerResources>(initialSim.resources);
@@ -337,7 +365,7 @@ export const App: React.FC = () => {
   const [selectedStructureId, setSelectedStructureId] = useState<string>('plot-shrine-c1');
 
   // View Mode & Map States
-  const [viewMode, setViewMode] = useState<'world' | 'kingdom'>('world');
+  const [viewMode, setViewMode] = useState<'world' | 'kingdom'>(initialViewMode);
   const [kingdomState, setKingdomState] = useState<InsideKingdomState | null>(null);
   const [castles, setCastles] = useState<CastleSpawnData[]>([]);
   const [conqueredPlots, setConqueredPlots] = useState<Record<string, 'neutral' | 'enemy' | 'alliance'>>(() => {
@@ -349,6 +377,14 @@ export const App: React.FC = () => {
   });
   const [isStrategicWorldMapOpen, setIsStrategicWorldMapOpen] = useState<boolean>(false);
   const [isStrategicFilterActive, setIsStrategicFilterActive] = useState<boolean>(false);
+  const [isCollisionDebugVisible, setIsCollisionDebugVisible] = useState<boolean>(false);
+  const [isAnimationLabOpen, setIsAnimationLabOpen] = useState<boolean>(false);
+  const [worldTimeOfDay, setWorldTimeOfDay] = useState<'day' | 'dusk' | 'night'>('day');
+  const [collisionDebugLayers, setCollisionDebugLayers] = useState<{
+    building: boolean;
+    monster: boolean;
+    resource: boolean;
+  }>({ building: true, monster: true, resource: true });
   const [isTestModeOpen, setIsTestModeOpen] = useState<boolean>(false);
 
   const [cameraInfo, setCameraInfo] = useState<{ x: number; y: number; z: number; zoom: number }>({
@@ -424,31 +460,25 @@ export const App: React.FC = () => {
     return mine ? mine.position : [1600, 10, 1568];
   }, [castles]);
 
-  // Persist simulation state cleanly
-  useEffect(() => {
-    try {
-      const payload: PersistedSimState = {
-        resources,
-        troopInventory,
-        woundedInventory,
-        trainingQueue,
-        hospitalQueue,
-        research,
-        equipmentBag,
-        equippedIds,
-        shrineGarrisons,
-        activeMarches,
-        battleReports: battleReports.slice(0, 40),
-        nodeStates,
-        monsterStates,
-        castleStates,
-        infantryGear,
-        commanderXp,
-      };
-      localStorage.setItem(KINGDOM_SIM_STORAGE_KEY, JSON.stringify(payload));
-    } catch {
-      // Ignore quota errors
-    }
+  const buildSimPayload = useCallback((): PersistedSimState => {
+    return {
+      resources,
+      troopInventory,
+      woundedInventory,
+      trainingQueue,
+      hospitalQueue,
+      research,
+      equipmentBag,
+      equippedIds,
+      shrineGarrisons,
+      activeMarches,
+      battleReports: battleReports.slice(0, 40),
+      nodeStates,
+      monsterStates,
+      castleStates,
+      infantryGear,
+      commanderXp,
+    };
   }, [
     resources,
     troopInventory,
@@ -467,6 +497,81 @@ export const App: React.FC = () => {
     infantryGear,
     commanderXp,
   ]);
+
+  const flushCloudSave = useCallback(async () => {
+    try {
+      const payload = buildSimPayload();
+      localStorage.setItem(getUserSimStorageKey(uid), JSON.stringify(payload));
+      await saveKingdomProgressToCloud(uid, payload.commanderXp, payload as unknown as Record<string, unknown>);
+    } catch {
+      // Non-fatal offline or quota error
+    }
+  }, [buildSimPayload, uid]);
+
+  useEffect(() => {
+    registerBeforeSignOutHook(flushCloudSave);
+    return () => registerBeforeSignOutHook(null);
+  }, [flushCloudSave, registerBeforeSignOutHook]);
+
+  // Hydrate cloud kingdom state on mount for the signed-in commander
+  useEffect(() => {
+    let cancelled = false;
+    void loadKingdomProgressFromCloud(uid)
+      .then((cloudState) => {
+        if (cancelled || !cloudState) return;
+        const parsed = cloudState as Partial<PersistedSimState>;
+        if (parsed.resources) setResources((prev) => ({ ...prev, ...parsed.resources }));
+        if (parsed.troopInventory) setTroopInventory(parsed.troopInventory);
+        if (parsed.woundedInventory) setWoundedInventory(parsed.woundedInventory);
+        if (Array.isArray(parsed.trainingQueue)) setTrainingQueue(parsed.trainingQueue);
+        if (Array.isArray(parsed.hospitalQueue)) setHospitalQueue(parsed.hospitalQueue);
+        if (parsed.research) setResearch((prev) => ({ ...prev, ...parsed.research }));
+        if (Array.isArray(parsed.equipmentBag) && parsed.equipmentBag.length > 0) {
+          setEquipmentBag(parsed.equipmentBag);
+        }
+        if (Array.isArray(parsed.equippedIds)) setEquippedIds(parsed.equippedIds);
+        if (parsed.shrineGarrisons) {
+          const built = buildInitialShrineGarrisons(balanceConfig, parsed.shrineGarrisons);
+          setShrineGarrisons(built);
+          const nextPlots: Record<string, 'neutral' | 'enemy' | 'alliance'> = {};
+          for (const [id, gar] of Object.entries(built)) {
+            nextPlots[id] = gar.ownerFaction;
+            if (gar.barrierActive) worldMapRef.current?.setStructureBarrierActive(id, true);
+            if (gar.ownerFaction === 'alliance') worldMapRef.current?.conquerStructureById(id, true);
+          }
+          setConqueredPlots(nextPlots);
+        }
+        if (Array.isArray(parsed.activeMarches)) setActiveMarches(parsed.activeMarches);
+        if (Array.isArray(parsed.battleReports)) setBattleReports(parsed.battleReports);
+        if (parsed.infantryGear) setInfantryGear(normalizeInfantryGear(parsed.infantryGear));
+        if (typeof parsed.commanderXp === 'number') setCommanderXp(parsed.commanderXp);
+      })
+      .catch(() => {
+        // Offline fallback uses per-UID localStorage
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [uid]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Persist simulation state cleanly (local per-UID + debounced Firestore sync)
+  useEffect(() => {
+    try {
+      const payload = buildSimPayload();
+      localStorage.setItem(getUserSimStorageKey(uid), JSON.stringify(payload));
+    } catch {
+      // Ignore quota errors
+    }
+    const cloudTimer = window.setTimeout(() => {
+      const payload = buildSimPayload();
+      void saveKingdomProgressToCloud(
+        uid,
+        payload.commanderXp,
+        payload as unknown as Record<string, unknown>
+      ).catch(() => {});
+    }, 8000);
+    return () => window.clearTimeout(cloudTimer);
+  }, [buildSimPayload, uid]);
 
   const tryLockLandscape = useCallback(async (withFullscreen = false) => {
     try {
@@ -520,6 +625,12 @@ export const App: React.FC = () => {
       setToastText((prev) => (prev === msg ? null : prev));
     }, 3600);
   }, []);
+
+  useEffect(() => {
+    if (!welcomeBanner) return;
+    showToast(welcomeBanner);
+    clearWelcomeBanner();
+  }, [welcomeBanner, showToast, clearWelcomeBanner]);
 
   const handlePushBullet = useCallback(
     (msg: { text: string; category: 'attack' | 'conquest' | 'monster' | 'rally' }) => {
@@ -576,6 +687,45 @@ export const App: React.FC = () => {
     },
     [showToast]
   );
+
+  const handleToggleCollisionDebug = useCallback(
+    (enabled?: boolean) => {
+      setIsCollisionDebugVisible((prev) => {
+        const next = typeof enabled === 'boolean' ? enabled : !prev;
+        worldMapRef.current?.setDebugCollisionBoxes(next);
+        showToast(
+          next
+            ? '📦 Collision Debug Wireframes ON (Yellow: Building · Red: Monster · Green: Resource)'
+            : '📦 Collision Debug Wireframes OFF'
+        );
+        return next;
+      });
+    },
+    [showToast]
+  );
+
+  const handleToggleCollisionLayer = useCallback(
+    (layer: 'building' | 'monster' | 'resource') => {
+      setCollisionDebugLayers((prev) => {
+        const nextVal = !prev[layer];
+        worldMapRef.current?.setDebugCollisionLayerVisible(layer, nextVal);
+        return { ...prev, [layer]: nextVal };
+      });
+    },
+    []
+  );
+
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement | null)?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+      if (e.code === 'KeyB' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        handleToggleCollisionDebug();
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [handleToggleCollisionDebug]);
 
   const handleRelocateCastles = useCallback(() => {
     if (!worldMapRef.current) return;
@@ -2536,6 +2686,7 @@ export const App: React.FC = () => {
         onCastlesUpdated: (updatedCastles) => {
           setCastles([...updatedCastles]);
         },
+        initialSceneMode: initialViewMode,
         onSceneReady: () => {
           dismissBootSplash();
         },
@@ -2765,7 +2916,19 @@ export const App: React.FC = () => {
         shrineGarrisons={shrineGarrisons}
         onRelinquishStructure={handleRelinquishStructure}
         infantryGear={infantryGear}
+        isCollisionDebugVisible={isCollisionDebugVisible}
+        collisionDebugLayers={collisionDebugLayers}
+        onToggleCollisionDebug={handleToggleCollisionDebug}
+        onToggleCollisionLayer={handleToggleCollisionLayer}
         onOpenTestMode={() => setIsTestModeOpen(true)}
+        onOpenAnimationLab={() => setIsAnimationLabOpen(true)}
+        timeOfDay={worldTimeOfDay}
+        onCycleTimeOfDay={() => {
+          const next = worldMapRef.current?.cycleTimeOfDay() ?? (worldTimeOfDay === 'day' ? 'dusk' : worldTimeOfDay === 'dusk' ? 'night' : 'day');
+          setWorldTimeOfDay(next);
+          showToast(`World Lighting: ${next.toUpperCase()}`);
+        }}
+        commanderNameOverride={commanderUsername ? commanderUsername.toUpperCase() : undefined}
       />
 
       {/* 3B. Unified 8-Panel Kingdom Command Hub Drawer */}
@@ -2832,6 +2995,13 @@ export const App: React.FC = () => {
       {isTestModeOpen && (
         <Suspense fallback={null}>
           <WorldMapTestMode isOpen={isTestModeOpen} onClose={() => setIsTestModeOpen(false)} />
+        </Suspense>
+      )}
+
+      {/* 3D. Interactive 3D Animation & VFX Test Lab (Section 13) */}
+      {isAnimationLabOpen && (
+        <Suspense fallback={null}>
+          <AnimationTestModeModal onClose={() => setIsAnimationLabOpen(false)} />
         </Suspense>
       )}
 
@@ -3050,6 +3220,55 @@ export const App: React.FC = () => {
   );
 };
 
+const AppGate: React.FC = () => {
+  const { authStatus, user, profile } = useAuth();
+
+  if (authStatus === 'loading') {
+    return (
+      <div
+        className="kg-scroll-root"
+        style={{
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          justifyContent: 'center',
+          gap: '14px',
+        }}
+      >
+        <span className="kg-spinner" style={{ width: '32px', height: '32px', color: '#facc15' }} />
+        <div style={{ fontFamily: "'Cinzel', serif", fontSize: '18px', color: '#fef08a', letterSpacing: '0.08em' }}>
+          EMPIRE OF THE RISING TOWERS
+        </div>
+        <div style={{ fontSize: '13px', color: '#94a3b8' }}>Verifying Royal Seal...</div>
+      </div>
+    );
+  }
+
+  if (authStatus === 'unauthenticated' || !user) {
+    return <AuthGatewayScreen />;
+  }
+
+  return (
+    <>
+      <ProtectedGameShell
+        key={user.uid}
+        uid={user.uid}
+        initialViewMode="kingdom"
+        commanderUsername={profile?.username}
+      />
+      <AccountModalController />
+    </>
+  );
+};
+
+export const App: React.FC = () => {
+  return (
+    <AuthErrorBoundary>
+      <AuthProvider>
+        <AppGate />
+      </AuthProvider>
+    </AuthErrorBoundary>
+  );
+};
+
 export default App;
-
-

@@ -1,0 +1,216 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global Default-Deny Safety Net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isValidUsernameLower(slug) {
+      return slug is string && slug.size() >= 3 && slug.size() <= 24 && slug.matches('^[a-z0-9_]+$');
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isValidPlayerProfile(data, userId) {
+      return data.keys().hasAll([
+          'uid',
+          'username',
+          'usernameLower',
+          'avatarId',
+          'kingdomName',
+          'level',
+          'provider',
+          'emailVerified',
+          'createdAt',
+          'lastLoginAt'
+        ])
+        && data.keys().hasOnly([
+          'uid',
+          'username',
+          'usernameLower',
+          'avatarId',
+          'kingdomName',
+          'level',
+          'provider',
+          'emailVerified',
+          'createdAt',
+          'lastLoginAt'
+        ])
+        && data.uid == userId
+        && isValidId(data.uid)
+        && data.username is string && data.username.size() >= 3 && data.username.size() <= 24
+        && isValidUsernameLower(data.usernameLower)
+        && data.avatarId is string && data.avatarId.size() >= 1 && data.avatarId.size() <= 64
+        && data.kingdomName is string && data.kingdomName.size() >= 2 && data.kingdomName.size() <= 40
+        && data.level is number && data.level >= 1 && data.level <= 999
+        && data.provider in ['password', 'google.com']
+        && data.emailVerified is bool
+        && data.createdAt is timestamp
+        && data.lastLoginAt is timestamp;
+    }
+
+    function isValidPrivateAccount(data, userId) {
+      return data.keys().hasAll([
+          'uid',
+          'email',
+          'allowFriendRequests',
+          'showOnlineStatus',
+          'showKingdomStats',
+          'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'uid',
+          'email',
+          'allowFriendRequests',
+          'showOnlineStatus',
+          'showKingdomStats',
+          'updatedAt'
+        ])
+        && data.uid == userId
+        && isValidId(data.uid)
+        && data.email is string && data.email.size() >= 3 && data.email.size() <= 254
+        && data.allowFriendRequests is bool
+        && data.showOnlineStatus is bool
+        && data.showKingdomStats is bool
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidUsernameIndex(data, slug) {
+      return data.keys().hasAll(['uid', 'username', 'createdAt'])
+        && data.keys().hasOnly(['uid', 'username', 'createdAt'])
+        && data.uid == request.auth.uid
+        && isValidId(data.uid)
+        && data.username is string && data.username.size() >= 3 && data.username.size() <= 24
+        && isValidUsernameLower(slug)
+        && data.createdAt is timestamp;
+    }
+
+    function isValidKingdomProgress(data, userId) {
+      return data.keys().hasAll(['uid', 'commanderXp', 'snapshotVersion', 'state', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'commanderXp', 'snapshotVersion', 'state', 'updatedAt'])
+        && data.uid == userId
+        && isValidId(data.uid)
+        && data.commanderXp is number && data.commanderXp >= 0
+        && data.snapshotVersion is number && data.snapshotVersion >= 1
+        && data.state is map
+        && data.updatedAt is timestamp;
+    }
+
+    // Connection probe document for startup health verification
+    match /test/{docId} {
+      allow get: if docId == 'connection';
+      allow list, write: if false;
+    }
+
+    // Public uniqueness lookup for usernames (point get allowed for availability check; owner-bound writes)
+    match /usernames/{usernameLower} {
+      allow get: if isValidUsernameLower(usernameLower);
+      allow list: if false;
+      allow create: if isSignedIn()
+        && isValidUsernameLower(usernameLower)
+        && isValidUsernameIndex(incoming(), usernameLower)
+        && incoming().createdAt == request.time;
+      allow update: if false;
+      allow delete: if isSignedIn()
+        && isValidUsernameLower(usernameLower)
+        && existing().uid == request.auth.uid;
+    }
+
+    // Owner-only Player Profile + isolated PII & Kingdom Progress
+    match /users/{userId} {
+      allow get: if isValidId(userId) && isOwner(userId);
+      allow list: if false;
+      allow create: if isValidId(userId)
+        && isOwner(userId)
+        && isValidPlayerProfile(incoming(), userId)
+        && incoming().createdAt == request.time
+        && incoming().lastLoginAt == request.time;
+      allow update: if isValidId(userId)
+        && isOwner(userId)
+        && isValidPlayerProfile(incoming(), userId)
+        && incoming().uid == existing().uid
+        && incoming().createdAt == existing().createdAt
+        && incoming().lastLoginAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly([
+          'username',
+          'usernameLower',
+          'avatarId',
+          'kingdomName',
+          'level',
+          'emailVerified',
+          'lastLoginAt'
+        ]);
+      allow delete: if false;
+
+      match /private/{docId} {
+        allow get: if isValidId(userId) && isValidId(docId) && docId == 'account' && isOwner(userId);
+        allow list: if false;
+        allow create: if isValidId(userId)
+          && isValidId(docId)
+          && docId == 'account'
+          && isOwner(userId)
+          && isValidPrivateAccount(incoming(), userId)
+          && incoming().updatedAt == request.time;
+        allow update: if isValidId(userId)
+          && isValidId(docId)
+          && docId == 'account'
+          && isOwner(userId)
+          && isValidPrivateAccount(incoming(), userId)
+          && incoming().uid == existing().uid
+          && incoming().updatedAt == request.time
+          && incoming().diff(existing()).affectedKeys().hasOnly([
+            'email',
+            'allowFriendRequests',
+            'showOnlineStatus',
+            'showKingdomStats',
+            'updatedAt'
+          ]);
+        allow delete: if false;
+      }
+
+      match /kingdom/{docId} {
+        allow get: if isValidId(userId) && isValidId(docId) && docId == 'progress' && isOwner(userId);
+        allow list: if false;
+        allow create: if isValidId(userId)
+          && isValidId(docId)
+          && docId == 'progress'
+          && isOwner(userId)
+          && isValidKingdomProgress(incoming(), userId)
+          && incoming().updatedAt == request.time;
+        allow update: if isValidId(userId)
+          && isValidId(docId)
+          && docId == 'progress'
+          && isOwner(userId)
+          && isValidKingdomProgress(incoming(), userId)
+          && incoming().uid == existing().uid
+          && incoming().updatedAt == request.time
+          && incoming().diff(existing()).affectedKeys().hasOnly([
+            'commanderXp',
+            'snapshotVersion',
+            'state',
+            'updatedAt'
+          ]);
+        allow delete: if false;
+      }
+    }
+  }
+}

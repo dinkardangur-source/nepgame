@@ -50,6 +50,27 @@ import {
   MergeBuildingCategory,
   KingdomMergePlot,
 } from './InsideKingdom3D';
+import { VFXManager } from './vfx/VFXManager';
+import { EnvironmentAnimationManager, TimeOfDayMode } from './vfx/EnvironmentAnimationManager';
+import {
+  BarrierFactionColorKey,
+  ProtectionBarrierInstance,
+  createProtectionBarrier,
+  disposeProtectionBarrier,
+  setBarrierFaction,
+  triggerBarrierImpact,
+  updateProtectionBarrier,
+} from './vfx/ProtectionBarrierShader';
+import { BuiltUnitRig, createProceduralUnitRig } from './vfx/ProceduralRigLibrary';
+import type { ZoomLodLevel } from './vfx/AnimationController';
+import {
+  ContactShadowEntry,
+  ShadowProjectionState,
+  createContactShadowMaterial,
+  createFlatContactShadow,
+  createTerrainConformedContactShadow,
+  syncContactShadowEntries,
+} from './shadows';
 
 export interface WorldMapOptions {
   container: HTMLElement;
@@ -66,6 +87,7 @@ export interface WorldMapOptions {
   onInsideKingdomStateChange?: (state: InsideKingdomState) => void;
   onCastlesUpdated?: (castles: CastleSpawnData[]) => void;
   onSceneReady?: () => void;
+  initialSceneMode?: 'world' | 'kingdom';
 }
 
 let cachedSoftwareWebGL: boolean | null = null;
@@ -240,6 +262,40 @@ export class WorldMap {
   private resourceMeshesMap = new Map<string, THREE.Group>();
   private buildingMeshesMap = new Map<string, THREE.Group>();
   private barrierMeshesMap = new Map<string, THREE.Mesh>();
+  private shaderBarrierMap = new Map<string, ProtectionBarrierInstance>();
+  public vfxManager!: VFXManager;
+  public environmentManager!: EnvironmentAnimationManager;
+  private vanguard3DRig: BuiltUnitRig | null = null;
+  private lastVanguardState: 'IDLE' | 'MARCH' | 'ATTACK' | 'MINE' = 'IDLE';
+
+  // Synchronized Real-Time + Ground Contact Shadow System
+  private worldRadialShadowMat: THREE.MeshBasicMaterial = createContactShadowMaterial('radial', 0.7);
+  private worldOctagonalShadowMat: THREE.MeshBasicMaterial = createContactShadowMaterial('octagonal', 0.72);
+  private monsterContactShadowMat: THREE.MeshBasicMaterial | null = null;
+  private monsterDirectionalShadowMat: THREE.MeshBasicMaterial | null = null;
+  private unitShadowMat: THREE.MeshBasicMaterial | null = null;
+  private worldBuildingShadowEntries: ContactShadowEntry[] = [];
+  private castleShadowEntries: ContactShadowEntry[] = [];
+  private currentShadowHalfExtent = 136;
+  private readonly _shadowDir = new THREE.Vector3();
+  private readonly _shadowSnapVec = new THREE.Vector3();
+  private readonly _shadowSnapInv = new THREE.Matrix4();
+  private readonly _shadowDummyCam = new THREE.Object3D();
+
+  // Debug Collision Box Wireframe Visualizer (building / monster / resource layers)
+  public isDebugCollisionBoxesVisible = false;
+  private debugCollisionLayerVisibility: Record<'building' | 'monster' | 'resource', boolean> = {
+    building: true,
+    monster: true,
+    resource: true,
+  };
+  private debugCollisionBoxes: Array<{
+    entityId: string;
+    layer: 'building' | 'monster' | 'resource';
+    box: THREE.LineSegments;
+  }> = [];
+  private debugCollisionMats: Record<'building' | 'monster' | 'resource', THREE.LineBasicMaterial> | null = null;
+  private debugCollisionGeos = new Map<string, THREE.EdgesGeometry>();
 
   // External App-driven march visual override (when Nepalese Balance Simulation drives marches)
   private externalMarchVisual: {
@@ -531,6 +587,10 @@ export class WorldMap {
 
     this.initScene();
     this.initLighting();
+    const isMobileEnv = typeof window !== 'undefined' && window.innerWidth < 768;
+    this.vfxManager = new VFXManager(this.scene, isMobileEnv);
+    this.environmentManager = new EnvironmentAnimationManager();
+    this.environmentManager.attachLights(this.scene, this.sunLight, this.hemiLight, null, this.vfxManager);
     this.initTerrain();
     this.initAtmosphere();
     this.initKingdomBuildings();
@@ -538,6 +598,7 @@ export class WorldMap {
     this.initRandomCastles();
     this.initMonsters();
     this.initResources();
+    this.rebuildDebugCollisionBoxes();
     this.initArmyBattalion();
     this.initTacticalLine();
     this.initSelectionIndicator();
@@ -546,6 +607,10 @@ export class WorldMap {
     const myCastle = this.castlesList.find((c) => c.isMyCastle);
     if (myCastle) {
       this.cameraController.setHomeCoordinates(myCastle.position[0], myCastle.position[2], true);
+    }
+
+    if (options.initialSceneMode === 'kingdom') {
+      this.setSceneMode('kingdom', true);
     }
 
     this.startLoop();
@@ -648,22 +713,29 @@ export class WorldMap {
   }
 
   private initLighting() {
-    this.hemiLight = new THREE.HemisphereLight(0xbae6fd, 0x1c2e22, 1.45);
+    this.hemiLight = new THREE.HemisphereLight(0xbae6fd, 0x3a4d34, 1.05);
     this.scene.add(this.hemiLight);
 
-    this.sunLight = new THREE.DirectionalLight(0xffedd5, 3.4);
+    const isMobileShadow = typeof window !== 'undefined' && window.innerWidth < 768;
+    const shadowRes = isMobileShadow ? 1024 : 2048;
+
+    this.sunLight = new THREE.DirectionalLight(0xfff5dc, 2.35);
     this.sunLight.castShadow = !this.isSoftwareGl;
-    this.sunLight.shadow.mapSize.set(1024, 1024);
-    this.sunLight.shadow.camera.left = -135;
-    this.sunLight.shadow.camera.right = 135;
-    this.sunLight.shadow.camera.top = 135;
-    this.sunLight.shadow.camera.bottom = -135;
-    this.sunLight.shadow.camera.near = 5;
-    this.sunLight.shadow.camera.far = 450;
-    this.sunLight.shadow.bias = -0.0005;
-    this.sunLight.shadow.normalBias = 0.02;
+    this.sunLight.shadow.mapSize.set(shadowRes, shadowRes);
+    this.sunLight.shadow.camera.left = -this.currentShadowHalfExtent;
+    this.sunLight.shadow.camera.right = this.currentShadowHalfExtent;
+    this.sunLight.shadow.camera.top = this.currentShadowHalfExtent;
+    this.sunLight.shadow.camera.bottom = -this.currentShadowHalfExtent;
+    this.sunLight.shadow.camera.near = 10;
+    this.sunLight.shadow.camera.far = 520;
+    this.sunLight.shadow.bias = -0.0004;
+    this.sunLight.shadow.normalBias = 0.035;
+    this.sunLight.shadow.radius = 2.4;
+    this.sunLight.target.position.set(WORLD_BOUNDS.CENTER_X, 10, WORLD_BOUNDS.CENTER_Z);
+    this.sunLight.position.set(WORLD_BOUNDS.CENTER_X - 85, 148, WORLD_BOUNDS.CENTER_Z + 72);
     this.scene.add(this.sunLight);
     this.scene.add(this.sunLight.target);
+    this.sunLight.target.updateMatrixWorld();
   }
 
   private initTerrain() {
@@ -1101,6 +1173,21 @@ export class WorldMap {
       congressPlot.position[1] = cY;
       citadelGroup.position.set(congressPlot.position[0], cY, congressPlot.position[2]);
 
+      const congressShadow = createTerrainConformedContactShadow({
+        width: 52,
+        depth: 52,
+        worldX: congressPlot.position[0],
+        worldZ: congressPlot.position[2],
+        baseGroundY: cY,
+        yOffset: 0.08,
+        getHeightAt: (x, z) => this.terrainGenerator.getHeightAt(x, z),
+        material: this.worldOctagonalShadowMat,
+        shiftAmount: 2.35,
+        renderOrder: 2,
+      });
+      citadelGroup.add(congressShadow.mesh);
+      this.worldBuildingShadowEntries.push(congressShadow.entry);
+
       // Grand Octagonal White-Marble & Gold Congress Podium
       addMesh(citadelGroup, new THREE.CylinderGeometry(18.5, 20.5, 3.2, 8), stoneMat, 0, 1.6, 0);
       addMesh(citadelGroup, new THREE.CylinderGeometry(19.2, 19.2, 0.55, 8), goldMat, 0, 3.3, 0);
@@ -1177,6 +1264,7 @@ export class WorldMap {
       const citadelGroundRing = new THREE.Mesh(new THREE.RingGeometry(19.5, 21.5, 32), goldRingMat);
       citadelGroundRing.rotation.x = -Math.PI / 2;
       citadelGroundRing.position.y = 0.22;
+      citadelGroundRing.renderOrder = 4;
       citadelGroundRing.userData = { isBlessingRing: true };
       citadelGroup.add(citadelGroundRing);
 
@@ -1577,6 +1665,21 @@ export class WorldMap {
       const rootGroup = new THREE.Group();
       rootGroup.position.set(site.position[0], groundY, site.position[2]);
 
+      const shrineShadow = createTerrainConformedContactShadow({
+        width: 19.4 * preset.scale,
+        depth: 19.4 * preset.scale,
+        worldX: site.position[0],
+        worldZ: site.position[2],
+        baseGroundY: groundY,
+        yOffset: 0.06,
+        getHeightAt: (x, z) => this.terrainGenerator.getHeightAt(x, z),
+        material: this.worldRadialShadowMat,
+        shiftAmount: 1.2 * preset.scale,
+        renderOrder: 2,
+      });
+      rootGroup.add(shrineShadow.mesh);
+      this.worldBuildingShadowEntries.push(shrineShadow.entry);
+
       // Scaled architectural container matching reference proportions
       const archGroup = new THREE.Group();
       archGroup.scale.setScalar(preset.scale);
@@ -1709,9 +1812,9 @@ export class WorldMap {
       addMesh(crystalGroup, shHeroCrystalGeo, mats.crystalMat, 0, 0, 0);
       addMesh(crystalGroup, shHeroCoreGeo, mats.coreMat, 0, 0, 0, false);
 
-      const orbitRing1 = addMesh(crystalGroup, shGoldOrbitGeo1, goldMat, 0, -0.35, 0, false);
+      const orbitRing1 = addMesh(crystalGroup, shGoldOrbitGeo1, goldMat, 0, -0.35, 0, true);
       orbitRing1.rotation.set(Math.PI / 2 + 0.38, 0.25, 0);
-      const orbitRing2 = addMesh(crystalGroup, shGoldOrbitGeo2, goldMat, 0, 0.3, 0, false);
+      const orbitRing2 = addMesh(crystalGroup, shGoldOrbitGeo2, goldMat, 0, 0.3, 0, true);
       orbitRing2.rotation.set(Math.PI / 2 - 0.42, -0.3, 0);
       archGroup.add(crystalGroup);
 
@@ -1811,6 +1914,7 @@ export class WorldMap {
       const outerRing = new THREE.Mesh(mats.wardGeo, mats.ringMat);
       outerRing.rotation.x = -Math.PI / 2;
       outerRing.position.y = 0.22;
+      outerRing.renderOrder = 4;
       outerRing.userData = { isWardRing: true };
       rootGroup.add(outerRing);
 
@@ -2176,6 +2280,7 @@ export class WorldMap {
       this.castleBadgeRefs.delete(c.id);
       this.castleBurningMap.delete(c.id);
     }
+    this.castleShadowEntries.length = 0;
 
     while (this.castlesGroup.children.length > 0) {
       const child = this.castlesGroup.children[0];
@@ -2217,6 +2322,22 @@ export class WorldMap {
       const s = isMine ? 1.18 : isEnemy ? 1.0 : 0.92;
       const roofMat = isMine ? mats.myCastleRoof : isEnemy ? mats.enemyRoof : mats.allianceRoof;
       const bannerMat = isMine ? mats.dragonBanner : isEnemy ? mats.enemyBanner : mats.allianceBanner;
+
+      // Ground contact shadow conformed to castle terrain slope
+      const castleShadow = createTerrainConformedContactShadow({
+        width: 31 * s,
+        depth: 31 * s,
+        worldX: castle.position[0],
+        worldZ: castle.position[2],
+        baseGroundY: groundY,
+        yOffset: 0.07,
+        getHeightAt: (x, z) => this.terrainGenerator.getHeightAt(x, z),
+        material: this.worldOctagonalShadowMat,
+        shiftAmount: 1.65 * s,
+        renderOrder: 2,
+      });
+      cGroup.add(castleShadow.mesh);
+      this.castleShadowEntries.push(castleShadow.entry);
 
       // 1. Terrain-flush stepped stone foundation plinth + courtyard cobble deck
       addPart(cGroup, new THREE.CylinderGeometry(12.2 * s, 13.8 * s, 2.2 * s, 8), mats.castleDarkStone, 0, 0.1 * s, 0);
@@ -2274,6 +2395,7 @@ export class WorldMap {
         addPart(cGroup, new THREE.CylinderGeometry(0.35 * s, 0.45 * s, 1.2 * s, 6), mats.castleDarkStone, bx, 1.4 * s, 9.6 * s);
         addPart(cGroup, new THREE.CylinderGeometry(0.45 * s, 0.25 * s, 0.35 * s, 8), mats.wroughtIron, bx, 2.1 * s, 9.6 * s);
         const flame = addPart(cGroup, new THREE.ConeGeometry(0.28 * s, 0.75 * s, 6), mats.flameEmber, bx, 2.55 * s, 9.6 * s);
+        flame.castShadow = false;
         flame.userData = { isBrazierFlame: true, phase: bx };
       }
 
@@ -2372,6 +2494,7 @@ export class WorldMap {
       );
       ring.rotation.x = -Math.PI / 2;
       ring.position.y = 0.25;
+      ring.renderOrder = 4;
       cGroup.add(ring);
 
       // Floating 3D Identification Badge (displays 4-char Tag + 4-word Alliance Alias)
@@ -2491,6 +2614,7 @@ export class WorldMap {
       this.spawnStarterResourcesAroundMyCastle(myCastle);
     }
 
+    this.rebuildDebugCollisionBoxes();
     this.onCastlesUpdated?.(this.castlesList);
 
     if (focusMyCastle && this.cameraController && myCastle) {
@@ -2516,6 +2640,7 @@ export class WorldMap {
 
     for (const id of this.starterResourceIds) {
       this.entitiesMap.delete(id);
+      this.resourceMeshesMap.delete(id);
     }
     this.starterResourceIds = [];
 
@@ -2686,26 +2811,11 @@ export class WorldMap {
     this.scene.add(this.monstersGroup);
     prewarmMonsterCutouts();
 
-    // Soft radial contact shadow texture shared across all monster spawns
-    const shadowCanvas = document.createElement('canvas');
-    shadowCanvas.width = 128;
-    shadowCanvas.height = 128;
-    const sCtx = shadowCanvas.getContext('2d');
-    if (sCtx) {
-      const grad = sCtx.createRadialGradient(64, 64, 6, 64, 64, 60);
-      grad.addColorStop(0, 'rgba(4, 7, 15, 0.72)');
-      grad.addColorStop(0.55, 'rgba(4, 7, 15, 0.38)');
-      grad.addColorStop(1, 'rgba(4, 7, 15, 0)');
-      sCtx.fillStyle = grad;
-      sCtx.fillRect(0, 0, 128, 128);
-    }
-    const contactShadowTex = new THREE.CanvasTexture(shadowCanvas);
-    const contactShadowMat = new THREE.MeshBasicMaterial({
-      map: contactShadowTex,
-      transparent: true,
-      depthWrite: false,
-      side: THREE.DoubleSide,
-    });
+    // Shared soft radial contact & directional cast shadow materials across all monsters
+    const contactShadowMat = createContactShadowMaterial('radial', 0.72);
+    const directionalShadowMat = createContactShadowMaterial('radial', 0.42);
+    this.monsterContactShadowMat = contactShadowMat;
+    this.monsterDirectionalShadowMat = directionalShadowMat;
 
     const maxAniso = Math.min(8, this.renderer.capabilities.getMaxAnisotropy());
     const spriteMatCache = new Map<
@@ -2855,17 +2965,29 @@ export class WorldMap {
       const initialFacingYaw = toCenterYaw + spreadOffset;
       const initialFacingEast = Math.sin(initialFacingYaw) >= 0;
 
-      // 1. Soft radial contact shadow grounded beneath monster feet
+      // 1. Soft radial contact shadow grounded beneath monster feet + sun-synced directional shadow oval
       let sGeo = shadowGeoCache.get(artCfg.key);
       if (!sGeo) {
-        sGeo = new THREE.CircleGeometry(artCfg.shadowRadius, 24);
+        sGeo = new THREE.CircleGeometry(artCfg.shadowRadius * 1.15, 24);
         shadowGeoCache.set(artCfg.key, sGeo);
       }
       const contactShadow = new THREE.Mesh(sGeo, contactShadowMat);
       contactShadow.rotation.x = -Math.PI / 2;
       contactShadow.position.y = 0.08;
+      contactShadow.renderOrder = 2;
       contactShadow.userData = { isContactShadow: true };
       mGroup.add(contactShadow);
+
+      const dirShadow = new THREE.Mesh(sGeo, directionalShadowMat);
+      dirShadow.rotation.order = 'YXZ';
+      dirShadow.rotation.x = -Math.PI / 2;
+      dirShadow.position.y = 0.07;
+      dirShadow.renderOrder = 2;
+      dirShadow.userData = {
+        isDirectionalMonsterShadow: true,
+        spriteHeight: artCfg.spriteHeight,
+      };
+      mGroup.add(dirShadow);
 
       // 2. Archetype elemental ground aura ring + directional facing chevron (+Z in auraDirGroup)
       const auraDirGroup = new THREE.Group();
@@ -2891,6 +3013,7 @@ export class WorldMap {
       const auraRing = new THREE.Mesh(aGeo, aMat);
       auraRing.rotation.x = -Math.PI / 2;
       auraRing.position.y = 0.13;
+      auraRing.renderOrder = 4;
       auraRing.userData = { isMonsterAuraRing: true };
       auraDirGroup.add(auraRing);
 
@@ -2915,12 +3038,14 @@ export class WorldMap {
       facingChevron.rotation.x = Math.PI / 2; // +Y tip maps strictly to +Z forward
       facingChevron.scale.set(1, 1, 0.14);
       facingChevron.position.set(0, 0.15, (artCfg.key === 'boss' ? 8.15 : artCfg.ringOuter) + 0.65);
+      facingChevron.renderOrder = 4;
       auraDirGroup.add(facingChevron);
 
       if (artCfg.key === 'boss') {
         const outerBossRing = new THREE.Mesh(bossOuterGeo, bossOuterMat);
         outerBossRing.rotation.x = -Math.PI / 2;
         outerBossRing.position.y = 0.16;
+        outerBossRing.renderOrder = 4;
         outerBossRing.userData = { isBossAuraRing: true };
         auraDirGroup.add(outerBossRing);
       }
@@ -3301,6 +3426,29 @@ export class WorldMap {
       addPart(rGroup, new THREE.BoxGeometry(0.5, 0.18, 0.28), mats.sawSteel, -0.5, 0.64, 1.7);
     }
 
+    const footprint =
+      sub === 'farm'
+        ? 14.8
+        : sub === 'wood'
+          ? 14.0
+          : sub === 'crystal'
+            ? 12.8
+            : 13.6;
+    const resShadow = createTerrainConformedContactShadow({
+      width: footprint,
+      depth: footprint,
+      worldX: rData.position[0],
+      worldZ: rData.position[2],
+      baseGroundY: groundY,
+      yOffset: 0.05,
+      getHeightAt: (x, z) => this.terrainGenerator.getHeightAt(x, z),
+      material: this.worldRadialShadowMat,
+      shiftAmount: sub === 'crystal' ? 1.15 : 0.95,
+      renderOrder: 2,
+    });
+    rGroup.add(resShadow.mesh);
+    this.worldBuildingShadowEntries.push(resShadow.entry);
+
     return rGroup;
   }
 
@@ -3339,6 +3487,28 @@ export class WorldMap {
     this.armyGroup.position.copy(this.armyHomePos);
     this.armyGroup.visible = false;
     this.scene.add(this.armyGroup);
+
+    // Live procedural 3D vanguard officer driven by Three.js AnimationMixer
+    this.vanguard3DRig = createProceduralUnitRig('magar_infantry');
+    this.vanguard3DRig.rootGroup.scale.setScalar(1.65);
+    this.vanguard3DRig.rootGroup.position.set(0, 0, 2.35);
+    this.vanguard3DRig.rootGroup.traverse((ch) => {
+      const m = ch as THREE.Mesh;
+      if (m.isMesh) {
+        m.castShadow = true;
+        m.receiveShadow = true;
+      }
+    });
+    const vanguardContact = createFlatContactShadow({
+      width: 1.65,
+      depth: 1.65,
+      y: 0.05,
+      material: this.ensureUnitShadowMat(),
+      shiftAmount: 0.25,
+      renderOrder: 2,
+    });
+    this.vanguard3DRig.rootGroup.add(vanguardContact.mesh);
+    this.armyGroup.add(this.vanguard3DRig.rootGroup);
 
     const maxAniso = Math.min(8, this.renderer.capabilities.getMaxAnisotropy());
     const initTex = getSharedMagarWarriorDirectionalTextures(3, maxAniso, (readyAspect, readyWest, readyEast) => {
@@ -3390,14 +3560,8 @@ export class WorldMap {
       emissiveIntensity: 3.0,
     });
 
-    const unitShadowGeo = new THREE.CircleGeometry(0.55, 14);
-    const unitShadowMat = new THREE.MeshBasicMaterial({
-      color: 0x050811,
-      transparent: true,
-      opacity: 0.44,
-      depthWrite: false,
-      side: THREE.DoubleSide,
-    });
+    const unitShadowGeo = new THREE.PlaneGeometry(1.35, 1.35);
+    const unitShadowMat = this.ensureUnitShadowMat();
     const dragonBannerTex = createDragonBannerTexture();
     const dragonBannerMat = new THREE.MeshStandardMaterial({
       map: dragonBannerTex,
@@ -3876,29 +4040,43 @@ export class WorldMap {
     }
   }
 
+  public setTimeOfDay(mode: TimeOfDayMode): void {
+    this.environmentManager?.setTimeOfDay(mode);
+  }
+
+  public cycleTimeOfDay(): TimeOfDayMode {
+    return this.environmentManager ? this.environmentManager.cycleTimeOfDay() : 'day';
+  }
+
+  public getTimeOfDay(): TimeOfDayMode {
+    return this.environmentManager ? this.environmentManager.getTimeOfDay() : 'day';
+  }
+
   public setStructureBarrierActive(structureId: string, active: boolean) {
     const group = this.buildingMeshesMap.get(structureId);
     const entity = this.entitiesMap.get(structureId);
     if (!group || !entity) return;
 
-    let dome = this.barrierMeshesMap.get(structureId);
-    if (!dome && active) {
-      const radius = Math.max(6.5, (entity.radius || 8) * 1.15);
-      const geo = new THREE.SphereGeometry(radius, 20, 14, 0, Math.PI * 2, 0, Math.PI * 0.56);
-      const mat = new THREE.MeshBasicMaterial({
-        color: entity.type === 'congress' ? 0xfacc15 : 0x38bdf8,
-        transparent: true,
-        opacity: 0.22,
-        wireframe: true,
-        depthWrite: false,
-      });
-      dome = new THREE.Mesh(geo, mat);
-      dome.position.y = 0.2;
-      group.add(dome);
-      this.barrierMeshesMap.set(structureId, dome);
+    const factionKey: BarrierFactionColorKey =
+      entity.type === 'my_castle'
+        ? 'player'
+        : entity.ownerFaction === 'enemy'
+          ? 'enemy'
+          : entity.ownerFaction === 'alliance' || entity.type === 'congress'
+            ? 'alliance'
+            : 'neutral';
+
+    let shaderBarrier = this.shaderBarrierMap.get(structureId);
+    if (!shaderBarrier && active) {
+      const radius = Math.max(6.8, (entity.radius || 8) * 1.15);
+      shaderBarrier = createProtectionBarrier(radius, factionKey);
+      shaderBarrier.group.position.y = 0.2;
+      group.add(shaderBarrier.group);
+      this.shaderBarrierMap.set(structureId, shaderBarrier);
     }
-    if (dome) {
-      dome.visible = active;
+    if (shaderBarrier) {
+      setBarrierFaction(shaderBarrier, factionKey);
+      shaderBarrier.targetActivation = active ? 1.0 : 0.0;
     }
   }
 
@@ -3953,6 +4131,14 @@ export class WorldMap {
       burnEntry.intensity = 0.65 + (1 - ratio) * 0.85;
     } else {
       burnEntry.intensity = 1.0;
+    }
+
+    if (isBurning) {
+      const sb = this.shaderBarrierMap.get(castleId);
+      if (sb) {
+        triggerBarrierImpact(sb);
+        sb.damageCracks = Math.min(1, sb.damageCracks + 0.25);
+      }
     }
 
     if (isBurning && !wasBurning) {
@@ -4079,17 +4265,59 @@ export class WorldMap {
     this.tacticalLine.geometry.setFromPoints(this._linePts);
   }
 
+  private ensureUnitShadowMat(): THREE.MeshBasicMaterial {
+    if (!this.unitShadowMat) {
+      this.unitShadowMat = createContactShadowMaterial('radial', 0.58);
+    }
+    return this.unitShadowMat;
+  }
+
+  private syncSunLightAndShadows(camZoom: number, shadowState: ShadowProjectionState) {
+    const target = this.cameraController.target;
+    const sCam = this.sunLight.shadow.camera;
+
+    // Quantized zoom-aware frustum sizing (prevents shadow edge shimmering while zooming smoothly)
+    const rawHalf = THREE.MathUtils.clamp(84 / Math.max(0.22, camZoom), 78, 224);
+    const desiredHalf = Math.round(rawHalf / 4) * 4;
+    if (Math.abs(desiredHalf - this.currentShadowHalfExtent) >= 4) {
+      this.currentShadowHalfExtent = desiredHalf;
+      sCam.left = -desiredHalf;
+      sCam.right = desiredHalf;
+      sCam.top = desiredHalf;
+      sCam.bottom = -desiredHalf;
+      sCam.updateProjectionMatrix();
+    }
+
+    this._shadowDir.copy(shadowState.sunOffset).normalize();
+
+    if (!this.isSoftwareGl && this.sunLight.castShadow) {
+      this._shadowDummyCam.position.copy(target).addScaledVector(this._shadowDir, 230);
+      this._shadowDummyCam.up.set(0, 1, 0);
+      this._shadowDummyCam.lookAt(target);
+      this._shadowDummyCam.updateMatrix();
+      this._shadowSnapInv.copy(this._shadowDummyCam.matrix).invert();
+
+      const mapW = Math.max(512, this.sunLight.shadow.mapSize.x);
+      const texelSize = (this.currentShadowHalfExtent * 2) / mapW;
+      this._shadowSnapVec.copy(target).applyMatrix4(this._shadowSnapInv);
+      this._shadowSnapVec.x = Math.round(this._shadowSnapVec.x / texelSize) * texelSize;
+      this._shadowSnapVec.y = Math.round(this._shadowSnapVec.y / texelSize) * texelSize;
+      this._shadowSnapVec.applyMatrix4(this._shadowDummyCam.matrix);
+
+      this.sunLight.target.position.copy(this._shadowSnapVec);
+      this.sunLight.position.copy(this._shadowSnapVec).addScaledVector(this._shadowDir, 230);
+    } else {
+      this.sunLight.target.position.copy(target);
+      this.sunLight.position.copy(target).addScaledVector(this._shadowDir, 230);
+    }
+    this.sunLight.target.updateMatrixWorld();
+  }
+
   private createAlliedColumnGroup(): { group: THREE.Group; sprites: THREE.Sprite[] } {
     const colGroup = new THREE.Group();
     const goldMat = new THREE.MeshStandardMaterial({ color: 0xfacc15, roughness: 0.35, metalness: 0.82 });
-    const unitShadowGeo = new THREE.CircleGeometry(0.5, 12);
-    const unitShadowMat = new THREE.MeshBasicMaterial({
-      color: 0x050811,
-      transparent: true,
-      opacity: 0.4,
-      depthWrite: false,
-      side: THREE.DoubleSide,
-    });
+    const unitShadowGeo = new THREE.PlaneGeometry(1.25, 1.25);
+    const unitShadowMat = this.ensureUnitShadowMat();
 
     if (!this.alliedWarriorSpriteMatWest || !this.alliedWarriorSpriteMatEast) {
       const maxAniso = Math.min(8, this.renderer.capabilities.getMaxAnisotropy());
@@ -4342,6 +4570,7 @@ export class WorldMap {
   }
 
   private spawnImpactSparks(pos: THREE.Vector3) {
+    this.vfxManager?.spawnBurst(pos, 'spark', 8, { speed: 5.5, gravity: -11, life: 0.45 });
     for (let i = 0; i < 10; i++) {
       const spark = new THREE.Mesh(this.sharedSparkGeo, this.sharedSparkMat);
       spark.position.set(
@@ -4899,11 +5128,7 @@ export class WorldMap {
         }
       }
 
-      const target = this.cameraController.target;
-      this.sunLight.position.set(target.x - 70, target.y + 130, target.z + 65);
-      this.sunLight.target.position.copy(target);
-      this.sunLight.target.updateMatrixWorld();
-
+      const shadowState = this.environmentManager.getShadowState();
       const camYaw = this.cameraController.getYaw();
       const sinYaw = Math.sin(camYaw);
       const cosYaw = Math.cos(camYaw);
@@ -4965,6 +5190,17 @@ export class WorldMap {
           } else if (ud.isContactShadow) {
             const sPulse = 1.0 - breath * 0.025;
             child.scale.set(sPulse, sPulse, 1);
+          } else if (ud.isDirectionalMonsterShadow) {
+            const sPulse = 1.0 - breath * 0.02;
+            const spriteH = typeof ud.spriteHeight === 'number' ? ud.spriteHeight : 5.0;
+            const shift = spriteH * 0.16 * shadowState.contactOffsetFactor;
+            child.position.set(
+              shadowState.fallDirX * shift,
+              0.07,
+              shadowState.fallDirZ * shift
+            );
+            child.rotation.y = shadowState.shadowYaw;
+            child.scale.set(sPulse * 0.92, sPulse * shadowState.elongation * 1.15, 1);
           } else if (ud.isMonsterFacingRing) {
             const rCh = child.children;
             for (let ri = 0; ri < rCh.length; ri++) {
@@ -5605,9 +5841,53 @@ export class WorldMap {
         }
       }
 
-      // 5. Update 3D Inside Kingdom Courtyard & Merge Buildings when active
+      // 5. Update Time-of-Day Environment Lighting, Real-Time Sun Shadow Camera & Ground Contact Shadows
+      const camZoom = this.cameraController.zoom;
+      const worldLod: ZoomLodLevel = camZoom >= 0.42 ? 'Close' : camZoom >= 0.14 ? 'Medium' : 'Far';
+      this.environmentManager.update(delta, elapsed);
+      const activeShadowState = this.environmentManager.getShadowState();
+      this.syncSunLightAndShadows(camZoom, activeShadowState);
+
+      this.worldRadialShadowMat.opacity = activeShadowState.contactOpacity;
+      this.worldOctagonalShadowMat.opacity = Math.min(0.84, activeShadowState.contactOpacity * 1.06);
+      if (this.monsterContactShadowMat) {
+        this.monsterContactShadowMat.opacity = activeShadowState.contactOpacity;
+      }
+      if (this.monsterDirectionalShadowMat) {
+        this.monsterDirectionalShadowMat.opacity = activeShadowState.contactOpacity * 0.56;
+      }
+      if (this.unitShadowMat) {
+        this.unitShadowMat.opacity = activeShadowState.contactOpacity * 0.85;
+      }
+
       if (this.currentSceneMode === 'kingdom' && this.insideKingdom3D) {
-        this.insideKingdom3D.update(delta, elapsed);
+        this.insideKingdom3D.update(delta, elapsed, activeShadowState);
+      } else {
+        syncContactShadowEntries(this.worldBuildingShadowEntries, activeShadowState);
+        syncContactShadowEntries(this.castleShadowEntries, activeShadowState);
+      }
+
+      // 6. Section 13 Live VFX, Shader Barriers & 3D Vanguard AnimationMixer
+      this.vfxManager.setZoomLod(worldLod);
+      this.vfxManager.update(delta);
+      this.shaderBarrierMap.forEach((b) => updateProtectionBarrier(b, delta, elapsed));
+
+      if (this.vanguard3DRig && this.armyGroup.visible) {
+        this.vanguard3DRig.controller.setZoomLod(worldLod);
+        const desiredState: 'IDLE' | 'MARCH' | 'ATTACK' | 'MINE' = this.externalMarchVisual?.inCombatOrGathering
+          ? this.externalMarchVisual.resourceType
+            ? 'MINE'
+            : 'ATTACK'
+          : this.armyState === 'ATTACKING' || this.armyState === 'RETURNING' || this.externalMarchVisual
+            ? 'MARCH'
+            : this.armyState === 'GATHERING'
+              ? 'MINE'
+              : 'IDLE';
+        if (desiredState !== this.lastVanguardState) {
+          this.lastVanguardState = desiredState;
+          this.vanguard3DRig.controller.playState(desiredState, { force: true, fadeDuration: 0.2 });
+        }
+        this.vanguard3DRig.controller.update(delta);
       }
 
       this.renderer.render(this.scene, this.cameraController.camera);
@@ -5693,7 +5973,7 @@ export class WorldMap {
   /**
    * Switch between the 3D World Map and the 3D Walled Inside Kingdom Merge Courtyard
    */
-  public setSceneMode(mode: 'world' | 'kingdom') {
+  public setSceneMode(mode: 'world' | 'kingdom', snapImmediately = false) {
     this.currentSceneMode = mode;
     if (mode === 'kingdom') {
       this.buildingsGroup.visible = false;
@@ -5707,17 +5987,27 @@ export class WorldMap {
       this.tacticalLine.visible = false;
       this.selectionIndicator.visible = false;
       this.terrainGenerator.plotMarkersGroup.visible = false;
+      this.terrainGenerator.mesh.visible = false;
+      this.terrainGenerator.vegetationGroup.visible = false;
+      this.terrainGenerator.waterfallsGroup.visible = false;
+      this.terrainGenerator.mistPuffsGroup.visible = false;
+      this.terrainGenerator.leylineStreamsGroup.visible = false;
 
       const inside3D = this.ensureInsideKingdom3D();
       inside3D.rootGroup.visible = true;
       this.cameraController.setPickables(inside3D.pickableObjects);
-      this.cameraController.focusInsideKingdom();
+      this.cameraController.focusInsideKingdom(snapImmediately);
       this.onInsideKingdomStateChange?.(inside3D.getState());
     } else {
       if (this.insideKingdom3D) {
         this.insideKingdom3D.rootGroup.visible = false;
       }
 
+      this.terrainGenerator.mesh.visible = true;
+      this.terrainGenerator.vegetationGroup.visible = true;
+      this.terrainGenerator.waterfallsGroup.visible = true;
+      this.terrainGenerator.mistPuffsGroup.visible = true;
+      this.terrainGenerator.leylineStreamsGroup.visible = true;
       this.buildingsGroup.visible = true;
       this.castlesGroup.visible = true;
       this.strategicLinesGroup.visible = true;
@@ -5819,6 +6109,158 @@ export class WorldMap {
     };
   }
 
+  private ensureDebugCollisionMaterials() {
+    if (this.debugCollisionMats) return this.debugCollisionMats;
+    this.debugCollisionMats = {
+      building: new THREE.LineBasicMaterial({
+        color: 0xfacc15, // Gold/Amber for Buildings (Congress, Shrines, Castles)
+        transparent: true,
+        opacity: 0.92,
+        depthWrite: false,
+      }),
+      monster: new THREE.LineBasicMaterial({
+        color: 0xf43f5e, // Crimson/Red for Monsters
+        transparent: true,
+        opacity: 0.92,
+        depthWrite: false,
+      }),
+      resource: new THREE.LineBasicMaterial({
+        color: 0x22c55e, // Emerald/Green for Resource Nodes
+        transparent: true,
+        opacity: 0.92,
+        depthWrite: false,
+      }),
+    };
+    return this.debugCollisionMats;
+  }
+
+  private getDebugCollisionBoxGeometry(width: number, height: number, depth: number): THREE.EdgesGeometry {
+    const key = `${width.toFixed(2)}x${height.toFixed(2)}x${depth.toFixed(2)}`;
+    const existing = this.debugCollisionGeos.get(key);
+    if (existing) return existing;
+    const boxGeo = new THREE.BoxGeometry(width, height, depth);
+    const edges = new THREE.EdgesGeometry(boxGeo);
+    boxGeo.dispose();
+    this.debugCollisionGeos.set(key, edges);
+    return edges;
+  }
+
+  private attachDebugCollisionBox(
+    entity: WorldEntity,
+    group: THREE.Group,
+    layer: 'building' | 'monster' | 'resource'
+  ) {
+    const mats = this.ensureDebugCollisionMaterials();
+    const width = Math.max(2, Number((entity.radius * 2).toFixed(2)));
+    const depth = width;
+    const height =
+      layer === 'building'
+        ? entity.type === 'congress'
+          ? 26
+          : 20
+        : layer === 'monster'
+          ? entity.subtype === 'boss' || (entity.level ?? 1) >= 10
+            ? 14
+            : 10
+          : 9;
+
+    const geo = this.getDebugCollisionBoxGeometry(width, height, depth);
+    const wireframe = new THREE.LineSegments(geo, mats[layer]);
+    wireframe.position.set(0, height * 0.5, 0);
+    wireframe.renderOrder = 25;
+    wireframe.visible =
+      this.isDebugCollisionBoxesVisible && this.debugCollisionLayerVisibility[layer];
+    wireframe.userData = {
+      isDebugCollisionBox: true,
+      debugLayer: layer,
+      entityId: entity.id,
+    };
+    group.add(wireframe);
+
+    this.debugCollisionBoxes.push({
+      entityId: entity.id,
+      layer,
+      box: wireframe,
+    });
+  }
+
+  public rebuildDebugCollisionBoxes() {
+    for (const entry of this.debugCollisionBoxes) {
+      entry.box.parent?.remove(entry.box);
+    }
+    this.debugCollisionBoxes = [];
+
+    this.buildingMeshesMap.forEach((group, entityId) => {
+      const entity = this.entitiesMap.get(entityId);
+      if (entity) this.attachDebugCollisionBox(entity, group, 'building');
+    });
+
+    this.monsterMeshesMap.forEach((group, entityId) => {
+      const entity = this.entitiesMap.get(entityId);
+      if (entity) this.attachDebugCollisionBox(entity, group, 'monster');
+    });
+
+    this.resourceMeshesMap.forEach((group, entityId) => {
+      const entity = this.entitiesMap.get(entityId);
+      if (entity) this.attachDebugCollisionBox(entity, group, 'resource');
+    });
+  }
+
+  private syncDebugCollisionBoxVisibility() {
+    for (const entry of this.debugCollisionBoxes) {
+      entry.box.visible =
+        this.isDebugCollisionBoxesVisible && this.debugCollisionLayerVisibility[entry.layer];
+    }
+  }
+
+  public setDebugCollisionBoxes(enabled: boolean): boolean {
+    this.isDebugCollisionBoxesVisible = enabled;
+    if (enabled && this.debugCollisionBoxes.length === 0) {
+      this.rebuildDebugCollisionBoxes();
+    } else {
+      this.syncDebugCollisionBoxVisibility();
+    }
+    return this.isDebugCollisionBoxesVisible;
+  }
+
+  public toggleDebugCollisionBoxes(): boolean {
+    return this.setDebugCollisionBoxes(!this.isDebugCollisionBoxesVisible);
+  }
+
+  public setDebugCollisionLayerVisible(
+    layer: 'building' | 'monster' | 'resource',
+    enabled: boolean
+  ) {
+    this.debugCollisionLayerVisibility[layer] = enabled;
+    this.syncDebugCollisionBoxVisibility();
+  }
+
+  public getDebugCollisionState() {
+    let building = 0;
+    let monster = 0;
+    let resource = 0;
+    for (const entry of this.debugCollisionBoxes) {
+      if (entry.layer === 'building') building++;
+      else if (entry.layer === 'monster') monster++;
+      else if (entry.layer === 'resource') resource++;
+    }
+    return {
+      visible: this.isDebugCollisionBoxesVisible,
+      layers: { ...this.debugCollisionLayerVisibility },
+      counts: {
+        building,
+        monster,
+        resource,
+        total: this.debugCollisionBoxes.length,
+      },
+      colors: {
+        building: '#facc15',
+        monster: '#f43f5e',
+        resource: '#22c55e',
+      },
+    };
+  }
+
   public dispose() {
     this.isDisposed = true;
     cancelAnimationFrame(this.animFrameId);
@@ -5828,6 +6270,23 @@ export class WorldMap {
     this.resizeObserver?.disconnect();
     this.resizeObserver = null;
     this.cameraController.dispose();
+
+    this.vanguard3DRig?.controller.dispose();
+    this.vanguard3DRig = null;
+    this.shaderBarrierMap.forEach((b) => disposeProtectionBarrier(b));
+    this.shaderBarrierMap.clear();
+    this.vfxManager?.dispose();
+    this.environmentManager?.dispose();
+
+    this.debugCollisionGeos.forEach((geo) => geo.dispose());
+    this.debugCollisionGeos.clear();
+    if (this.debugCollisionMats) {
+      this.debugCollisionMats.building.dispose();
+      this.debugCollisionMats.monster.dispose();
+      this.debugCollisionMats.resource.dispose();
+      this.debugCollisionMats = null;
+    }
+    this.debugCollisionBoxes = [];
 
     const domEl = this.renderer?.domElement;
     if (domEl) {

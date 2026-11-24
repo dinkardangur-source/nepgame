@@ -87,7 +87,7 @@ define(['./workbox-afac4cd2'], (function (workbox) { 'use strict';
     "revision": "baee7932c47b483452047731c7d9d990"
   }, {
     "url": "index.html",
-    "revision": "11712336e61b8e836948c0c2f4b802e6"
+    "revision": "bba66139f6aeb5a1b2873de9c16c8a50"
   }, {
     "url": "favicon.ico",
     "revision": "bced82f6fc61f49f97449e34128d81fa"
@@ -101,25 +101,28 @@ define(['./workbox-afac4cd2'], (function (workbox) { 'use strict';
     "url": "assets/workbox-window.prod.es5-Bd17z0YL.js",
     "revision": null
   }, {
-    "url": "assets/three-vendor-CZEm4HN2.js",
+    "url": "assets/three-vendor-CBESww-1.js",
     "revision": null
   }, {
-    "url": "assets/index-BZOpJWQ8.js",
+    "url": "assets/index-DY077MRE.css",
     "revision": null
   }, {
-    "url": "assets/index-BRYu6DSd.css",
+    "url": "assets/index-BxOObend.js",
     "revision": null
   }, {
-    "url": "assets/WorldMapTestMode-DpWdVaQn.js",
+    "url": "assets/WorldMapTestMode-yfPdW8sj.js",
     "revision": null
   }, {
-    "url": "assets/StrategicWorldMapModal-ZFPcCekj.js",
+    "url": "assets/StrategicWorldMapModal-Q8_FtOjU.js",
     "revision": null
   }, {
-    "url": "assets/InsideKingdomView-CAP0Vgeg.js",
+    "url": "assets/InsideKingdomView-4gyvYZlz.js",
     "revision": null
   }, {
-    "url": "assets/CommandHubDrawer-Bqqk8Ixe.js",
+    "url": "assets/CommandHubDrawer-CQwl-Dwx.js",
+    "revision": null
+  }, {
+    "url": "assets/AnimationTestModeModal-CTbPu01S.js",
     "revision": null
   }, {
     "url": "assets/aistudio/screenshot_1_2be6e62f.png",

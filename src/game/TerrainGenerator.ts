@@ -206,6 +206,113 @@ export const MODULAR_BIOME_SPECS: Record<TerrainBiomeType, BiomeTileSpec> = {
   },
 };
 
+/**
+ * Extends MeshStandardMaterial with world-space dual-scale rotated texture mixing,
+ * non-repeating organic meadow micro-variation, and slope-aware shading while preserving
+ * full Three.js PBR sunlight, shadows, fog, and normal mapping.
+ */
+export function applyDualScaleGrassShader(material: THREE.MeshStandardMaterial): void {
+  material.customProgramCacheKey = () => 'kg-dual-scale-grass-v1';
+  material.onBeforeCompile = (shader) => {
+    shader.vertexShader = shader.vertexShader
+      .replace(
+        '#include <common>',
+        `#include <common>
+varying vec3 vTerrainWorldPos;
+varying float vTerrainSlopeY;`
+      )
+      .replace(
+        '#include <begin_vertex>',
+        `#include <begin_vertex>
+vec4 kgTerrainWp = modelMatrix * vec4(transformed, 1.0);
+vTerrainWorldPos = kgTerrainWp.xyz;
+vTerrainSlopeY = normalize(mat3(modelMatrix) * objectNormal).y;`
+      );
+
+    shader.fragmentShader = shader.fragmentShader
+      .replace(
+        '#include <common>',
+        `#include <common>
+varying vec3 vTerrainWorldPos;
+varying float vTerrainSlopeY;
+
+float kgTerrainHash(vec2 p) {
+  return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
+}
+
+float kgTerrainNoise(vec2 p) {
+  vec2 i = floor(p);
+  vec2 f = fract(p);
+  vec2 u = f * f * (3.0 - 2.0 * f);
+  float a = kgTerrainHash(i);
+  float b = kgTerrainHash(i + vec2(1.0, 0.0));
+  float c = kgTerrainHash(i + vec2(0.0, 1.0));
+  float d = kgTerrainHash(i + vec2(1.0, 1.0));
+  return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+}`
+      )
+      .replace(
+        '#include <map_fragment>',
+        `#ifdef USE_MAP
+  vec2 wp = vTerrainWorldPos.xz;
+  vec2 uvNear = vMapUv;
+  vec2 uvMacro = vec2(
+    wp.x * 0.0086 - wp.y * 0.0052,
+    wp.x * 0.0052 + wp.y * 0.0086
+  );
+  vec2 uvFine = vec2(
+    wp.x * 0.105 + wp.y * 0.062,
+    -wp.x * 0.062 + wp.y * 0.105
+  );
+
+  float nMacro = kgTerrainNoise(wp * 0.024);
+  float nMid = kgTerrainNoise(wp * 0.095 + vec2(11.3, 4.7));
+  float nMicro = kgTerrainNoise(wp * 0.42 + vec2(3.1, 17.9));
+
+  vec4 colNear = texture2D(map, uvNear);
+  vec4 colMacro = texture2D(map, uvMacro);
+  vec4 colFine = texture2D(map, uvFine);
+  vec4 sampledDiffuseColor = mix(mix(colNear, colFine, 0.36), colMacro, 0.32 + nMacro * 0.22);
+
+  float meadowVar = (nMacro - 0.5) * 0.13 + (nMid - 0.5) * 0.09 + (nMicro - 0.5) * 0.06;
+  sampledDiffuseColor.rgb *= vec3(1.0 + meadowVar * 0.72, 1.0 + meadowVar * 1.05, 1.0 + meadowVar * 0.55);
+
+  float slopeMask = smoothstep(0.92, 0.62, clamp(vTerrainSlopeY, 0.0, 1.0));
+  sampledDiffuseColor.rgb = mix(sampledDiffuseColor.rgb, sampledDiffuseColor.rgb * vec3(0.84, 0.85, 0.88), slopeMask * 0.50);
+
+  diffuseColor *= sampledDiffuseColor;
+#endif`
+      )
+      .replace(
+        '#include <normal_fragment_maps>',
+        `#ifdef USE_NORMALMAP_OBJECTSPACE
+  normal = texture2D( normalMap, vNormalMapUv ).xyz * 2.0 - 1.0;
+  #ifdef FLIP_SIDED
+    normal = - normal;
+  #endif
+  #ifdef DOUBLE_SIDED
+    normal = normal * faceDirection;
+  #endif
+  normal = normalize( normalMatrix * normal );
+#elif defined( USE_NORMALMAP_TANGENTSPACE )
+  vec2 wpN = vTerrainWorldPos.xz;
+  vec2 uvNormMacro = vec2(
+    wpN.x * 0.011 - wpN.y * 0.0065,
+    wpN.x * 0.0065 + wpN.y * 0.011
+  );
+  vec3 mapN1 = texture2D( normalMap, vNormalMapUv ).xyz * 2.0 - 1.0;
+  vec3 mapN2 = texture2D( normalMap, uvNormMacro ).xyz * 2.0 - 1.0;
+  vec3 mapN = normalize( mix( mapN1, mapN2, 0.38 ) );
+  mapN.xy *= normalScale;
+  normal = normalize( tbn * mapN );
+#elif defined( USE_BUMPMAP )
+  normal = perturbNormalArb( - vViewPosition, normal, dHdxy_fwd(), faceDirection );
+#endif`
+      );
+  };
+  material.needsUpdate = true;
+}
+
 export class TerrainGenerator {
   // Primary root object added to scene (contains seamless LOD chunks + natural rivers + collision proxy)
   public mesh!: THREE.Group;
@@ -601,9 +708,9 @@ export class TerrainGenerator {
 
   /**
    * Builds the Seamless High-Performance Modular Terrain with:
-   * - 8x8 Regional Indexed THREE.LOD Chunks (LOD0: 26x26, LOD1: 13x13, LOD2: 7x7)
-   * - Shared edge vertices + analytical global normals for 100% seam-free shading
-   * - 10 Biome Tile Metadata & Optional Tactical Seam Grid Overlay
+   * - 8x8 Regional Indexed THREE.LOD Chunks (LOD0: 24x24, LOD1: 12x12, LOD2: 6x6 exact divisors)
+   * - Perimeter downward skirts + analytical global normals for zero border/corner T-junction cracks
+   * - Dual-scale world-space PBR grass shader eliminating tiling seams
    */
   private createSeamlessModularTerrain() {
     this.mesh = new THREE.Group();
@@ -616,11 +723,12 @@ export class TerrainGenerator {
       vertexColors: true,
       map: detailAlbedo,
       normalMap: normalMap,
-      normalScale: new THREE.Vector2(1.15, 1.15),
-      roughness: 0.90,
+      normalScale: new THREE.Vector2(1.18, 1.18),
+      roughness: 0.89,
       metalness: 0.02,
       flatShading: false,
     });
+    applyDualScaleGrassShader(this.terrainMaterial);
 
     // Step 1: Populate Tactical Tile Registry for Inspector & Pathfinding
     const R = TerrainGenerator.HEX_RADIUS;
@@ -694,7 +802,10 @@ export class TerrainGenerator {
       const originZ = startZ + chunkSize * 0.5;
 
       const vertCountPerRow = segments + 1;
-      const totalVerts = vertCountPerRow * vertCountPerRow;
+      const topVertCount = vertCountPerRow * vertCountPerRow;
+      // Add perimeter downward skirt vertices along all 4 chunk edges to seal LOD T-junctions & corners
+      const perimeterCount = vertCountPerRow * 4;
+      const totalVerts = topVertCount + perimeterCount;
 
       const positions = new Float32Array(totalVerts * 3);
       const normals = new Float32Array(totalVerts * 3);
@@ -712,10 +823,12 @@ export class TerrainGenerator {
           const wx = THREE.MathUtils.clamp(startX + ix * step, 0.5, 3199.5);
           const wy = this.getHeightAt(wx, wz);
 
-          // Local gradient for slope shading & biome classification
-          const hR = this.getHeightAt(Math.min(3199.5, wx + 4), wz);
-          const hU = this.getHeightAt(wx, Math.min(3199.5, wz + 4));
-          const slope = Math.hypot(wy - hR, wy - hU);
+          // Centered gradient evaluation so East/South borders & all 4 corners share identical slopes
+          const hL = this.getHeightAt(wx - 4, wz);
+          const hR = this.getHeightAt(wx + 4, wz);
+          const hD = this.getHeightAt(wx, wz - 4);
+          const hU = this.getHeightAt(wx, wz + 4);
+          const slope = Math.hypot((hR - hL) * 0.5, (hU - hD) * 0.5);
 
           positions[vIdx * 3] = wx - originX;
           positions[vIdx * 3 + 1] = wy;
@@ -747,6 +860,63 @@ export class TerrainGenerator {
         }
       }
 
+      // Build downward 4.5m perimeter skirts on all 4 sides of the chunk
+      const skirtDrop = 4.5;
+      const pushSkirtVert = (topIdx: number): number => {
+        const sIdx = vIdx++;
+        positions[sIdx * 3] = positions[topIdx * 3];
+        positions[sIdx * 3 + 1] = positions[topIdx * 3 + 1] - skirtDrop;
+        positions[sIdx * 3 + 2] = positions[topIdx * 3 + 2];
+
+        normals[sIdx * 3] = normals[topIdx * 3];
+        normals[sIdx * 3 + 1] = normals[topIdx * 3 + 1];
+        normals[sIdx * 3 + 2] = normals[topIdx * 3 + 2];
+
+        uvs[sIdx * 2] = uvs[topIdx * 2];
+        uvs[sIdx * 2 + 1] = uvs[topIdx * 2 + 1];
+
+        colors[sIdx * 3] = colors[topIdx * 3];
+        colors[sIdx * 3 + 1] = colors[topIdx * 3 + 1];
+        colors[sIdx * 3 + 2] = colors[topIdx * 3 + 2];
+        return sIdx;
+      };
+
+      // North edge (iz = 0, outward -Z)
+      const northSkirt: number[] = [];
+      for (let ix = 0; ix <= segments; ix++) northSkirt.push(pushSkirtVert(ix));
+      for (let ix = 0; ix < segments; ix++) {
+        const e0 = ix;
+        const e1 = ix + 1;
+        indices.push(e0, e1, northSkirt[ix], e1, northSkirt[ix + 1], northSkirt[ix]);
+      }
+
+      // South edge (iz = segments, outward +Z)
+      const southSkirt: number[] = [];
+      for (let ix = 0; ix <= segments; ix++) southSkirt.push(pushSkirtVert(segments * vertCountPerRow + ix));
+      for (let ix = 0; ix < segments; ix++) {
+        const e0 = segments * vertCountPerRow + ix;
+        const e1 = e0 + 1;
+        indices.push(e0, southSkirt[ix], e1, e1, southSkirt[ix], southSkirt[ix + 1]);
+      }
+
+      // West edge (ix = 0, outward -X)
+      const westSkirt: number[] = [];
+      for (let iz = 0; iz <= segments; iz++) westSkirt.push(pushSkirtVert(iz * vertCountPerRow));
+      for (let iz = 0; iz < segments; iz++) {
+        const e0 = iz * vertCountPerRow;
+        const e1 = (iz + 1) * vertCountPerRow;
+        indices.push(e0, westSkirt[iz], e1, e1, westSkirt[iz], westSkirt[iz + 1]);
+      }
+
+      // East edge (ix = segments, outward +X)
+      const eastSkirt: number[] = [];
+      for (let iz = 0; iz <= segments; iz++) eastSkirt.push(pushSkirtVert(iz * vertCountPerRow + segments));
+      for (let iz = 0; iz < segments; iz++) {
+        const e0 = iz * vertCountPerRow + segments;
+        const e1 = (iz + 1) * vertCountPerRow + segments;
+        indices.push(e0, e1, eastSkirt[iz], e1, eastSkirt[iz + 1], eastSkirt[iz]);
+      }
+
       const geo = new THREE.BufferGeometry();
       geo.setIndex(indices);
       geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
@@ -754,7 +924,7 @@ export class TerrainGenerator {
       geo.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
       geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
 
-      const triCount = segments * segments * 2;
+      const triCount = segments * segments * 2 + segments * 8;
       if (lodLevel === 0) this.totalTrianglesByLod.lod0 += triCount;
       else if (lodLevel === 1) this.totalTrianglesByLod.lod1 += triCount;
       else this.totalTrianglesByLod.lod2 += triCount;
@@ -771,9 +941,9 @@ export class TerrainGenerator {
         lod.position.set(originX, 0, originZ);
         lod.name = `TerrainChunk_${cx}_${cz}`;
 
-        const geo0 = buildIndexedChunkGeometry(cx, cz, 26, 0);
-        const geo1 = buildIndexedChunkGeometry(cx, cz, 13, 1);
-        const geo2 = buildIndexedChunkGeometry(cx, cz, 7, 2);
+        const geo0 = buildIndexedChunkGeometry(cx, cz, 24, 0);
+        const geo1 = buildIndexedChunkGeometry(cx, cz, 12, 1);
+        const geo2 = buildIndexedChunkGeometry(cx, cz, 6, 2);
 
         const mesh0 = new THREE.Mesh(geo0, this.terrainMaterial);
         mesh0.receiveShadow = true;
@@ -842,9 +1012,9 @@ export class TerrainGenerator {
     const forestCol = new THREE.Color('#2b522a');
     const hillCol = new THREE.Color('#5a7a42');
 
-    // Exact 1-to-1 vertex grid matching the 8x26 LOD0 chunk perimeter (209 samples across 0.5..3199.5)
+    // Exact 1-to-1 vertex grid matching the 8x24 LOD0 chunk perimeter (193 samples across 0.5..3199.5)
     const innerEdgeCoords: number[] = [];
-    const totalInnerSegs = 8 * 26;
+    const totalInnerSegs = 8 * 24;
     for (let i = 0; i <= totalInnerSegs; i++) {
       innerEdgeCoords.push(THREE.MathUtils.clamp((i * 3200) / totalInnerSegs, 0.5, 3199.5));
     }
@@ -881,9 +1051,12 @@ export class TerrainGenerator {
       const edgeH = this.getHeightAt(cx, cz);
       const outDist = Math.hypot(wx - cx, wz - cz);
 
-      const hR = this.getHeightAt(Math.min(3199.5, cx + 4), cz);
-      const hU = this.getHeightAt(cx, Math.min(3199.5, cz + 4));
-      const edgeSlope = Math.hypot(edgeH - hR, edgeH - hU);
+      // Centered slope calculation matches chunk vertices at every border and corner
+      const hL = this.getHeightAt(cx - 4, cz);
+      const hR = this.getHeightAt(cx + 4, cz);
+      const hD = this.getHeightAt(cx, cz - 4);
+      const hU = this.getHeightAt(cx, cz + 4);
+      const edgeSlope = Math.hypot((hR - hL) * 0.5, (hU - hD) * 0.5);
       this.sampleBlendedTerrainColor(cx, cz, edgeH, edgeSlope, edgeColor);
 
       if (outDist <= 0.01) {
@@ -893,7 +1066,7 @@ export class TerrainGenerator {
 
       const wy = this.getHeightAt(wx, wz);
 
-      // Compute outer lush green hill palette, then smoothly blend from exact edgeColor over 0..240m
+      // Compute outer lush green hill palette, then smoothly blend from exact edgeColor over 0..380m
       const nile = getDistanceToNile(wx, wz);
       if (outDist < 120 && nile.distBeyondWater < 28) {
         if (nile.distBeyondWater < 5) {
@@ -914,7 +1087,7 @@ export class TerrainGenerator {
         outColor.offsetHSL(0, 0, Math.sin(wx * 0.014 + wz * 0.011) * 0.015);
       }
 
-      const borderColorFade = THREE.MathUtils.smoothstep(outDist, 0, 240);
+      const borderColorFade = THREE.MathUtils.smoothstep(outDist, 0, 380);
       tempColor.copy(edgeColor).lerp(outColor, borderColorFade);
       outColor.copy(tempColor);
 

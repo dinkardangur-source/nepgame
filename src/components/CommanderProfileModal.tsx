@@ -13,6 +13,7 @@ import { CastleSpawnData } from '../game/WorldCoordinates';
 import type { CommandHubTab } from './CommandHubDrawer';
 import { Profile3DBadge, Profile3DCrestViewport } from './Profile3DEmblems';
 import type { Profile3DIconKey } from '../game/Profile3DModels';
+import { useAuth } from '../context/AuthContext';
 
 type ProfileTopTab = 'profile' | 'kingdom' | 'nft' | 'account' | 'option';
 type ProfileFooterPanel = 'none' | 'history' | 'mastery' | 'ranking';
@@ -82,6 +83,12 @@ export const CommanderProfileModal: React.FC<CommanderProfileModalProps> = ({
   onOpenCommandHub,
   onShowToast,
 }) => {
+  const {
+    user,
+    profile,
+    openAccountModal,
+    openSignOutConfirm,
+  } = useAuth();
   const [topTab, setTopTab] = useState<ProfileTopTab>('profile');
   const [footerPanel, setFooterPanel] = useState<ProfileFooterPanel>('none');
   const [showcaseMode, setShowcaseMode] = useState<'portrait' | '3d_crest' | 'avatar_picker'>('portrait');
@@ -528,12 +535,221 @@ export const CommanderProfileModal: React.FC<CommanderProfileModalProps> = ({
     }
 
     if (topTab === 'account') {
+      const accountDisplayName = profile?.username || user?.displayName || commanderName;
+      const accountKingdom = profile?.kingdomName || 'Royal Bastion';
+      const accountLevel = profile?.level || commanderLevel;
+      const accountAvatarUrl = profile?.avatarId
+        ? getHeroPortraitUrl(profile.avatarId)
+        : activeHero.portraitUrl || getHeroPortraitUrl(activeHero.id);
+
       return (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-          <div style={{ font: "800 15px 'Cinzel', serif", color: '#fde047' }}>
-            COMMANDER ACCOUNT &amp; HERO AVATAR
+        <div
+          style={{
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '9px',
+            maxHeight: '296px',
+            overflowY: 'auto',
+            paddingRight: '4px',
+          }}
+        >
+          {/* Royal Account Identity Summary */}
+          {user && (
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: '10px',
+                padding: '8px 10px',
+                borderRadius: '8px',
+                background: 'linear-gradient(180deg, #1b365d 0%, #112544 100%)',
+                border: '1px solid rgba(250, 204, 21, 0.38)',
+                boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.1)',
+                flexWrap: 'wrap',
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px', minWidth: 0 }}>
+                <img
+                  src={accountAvatarUrl}
+                  alt={accountDisplayName}
+                  referrerPolicy="no-referrer"
+                  style={{
+                    width: '40px',
+                    height: '40px',
+                    borderRadius: '7px',
+                    objectFit: 'cover',
+                    objectPosition: 'center 20%',
+                    border: '1.5px solid #facc15',
+                    flexShrink: 0,
+                  }}
+                />
+                <div style={{ minWidth: 0 }}>
+                  <div
+                    style={{
+                      font: "800 14px 'Cinzel', serif",
+                      color: '#fef08a',
+                      whiteSpace: 'nowrap',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                    }}
+                  >
+                    {accountDisplayName}
+                  </div>
+                  <div
+                    style={{
+                      fontSize: '11.5px',
+                      color: '#bae6fd',
+                      whiteSpace: 'nowrap',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                    }}
+                  >
+                    {accountKingdom} · Lv.{accountLevel}
+                  </div>
+                </div>
+              </div>
+
+              <div
+                style={{
+                  display: 'flex',
+                  flexDirection: 'column',
+                  alignItems: 'flex-end',
+                  gap: '2px',
+                  fontSize: '10.5px',
+                }}
+              >
+                <span style={{ color: '#fde68a', fontWeight: 700 }}>
+                  {profile?.provider === 'google.com' ? 'Google Account' : 'Email & Password'}
+                </span>
+                <span style={{ color: user.emailVerified ? '#34d399' : '#fbbf24', fontWeight: 700 }}>
+                  {user.emailVerified ? 'Verified Seal' : 'Pending Verification'}
+                </span>
+              </div>
+            </div>
+          )}
+
+          {/* Account Actions: My Profile, Account Settings, Change Password, Privacy Settings, Sign Out */}
+          {user && (
+            <div
+              style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))',
+                gap: '6px',
+              }}
+            >
+              <button
+                type="button"
+                onClick={() => openAccountModal('profile')}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px',
+                  padding: '8px 10px',
+                  borderRadius: '7px',
+                  background: 'rgba(11, 23, 44, 0.94)',
+                  border: '1px solid rgba(250, 204, 21, 0.34)',
+                  color: '#f8fafc',
+                  font: "700 12.5px 'Plus Jakarta Sans', sans-serif",
+                  cursor: 'pointer',
+                  textAlign: 'left',
+                }}
+              >
+                <span aria-hidden="true">👑</span>
+                <span>My Profile</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => openAccountModal('settings')}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px',
+                  padding: '8px 10px',
+                  borderRadius: '7px',
+                  background: 'rgba(11, 23, 44, 0.94)',
+                  border: '1px solid rgba(59, 130, 246, 0.34)',
+                  color: '#f8fafc',
+                  font: "700 12.5px 'Plus Jakarta Sans', sans-serif",
+                  cursor: 'pointer',
+                  textAlign: 'left',
+                }}
+              >
+                <span aria-hidden="true">⚙️</span>
+                <span>Account Settings</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => openAccountModal('password')}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px',
+                  padding: '8px 10px',
+                  borderRadius: '7px',
+                  background: 'rgba(11, 23, 44, 0.94)',
+                  border: '1px solid rgba(59, 130, 246, 0.34)',
+                  color: '#f8fafc',
+                  font: "700 12.5px 'Plus Jakarta Sans', sans-serif",
+                  cursor: 'pointer',
+                  textAlign: 'left',
+                }}
+              >
+                <span aria-hidden="true">🔑</span>
+                <span>Change Password</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => openAccountModal('privacy')}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px',
+                  padding: '8px 10px',
+                  borderRadius: '7px',
+                  background: 'rgba(11, 23, 44, 0.94)',
+                  border: '1px solid rgba(59, 130, 246, 0.34)',
+                  color: '#f8fafc',
+                  font: "700 12.5px 'Plus Jakarta Sans', sans-serif",
+                  cursor: 'pointer',
+                  textAlign: 'left',
+                }}
+              >
+                <span aria-hidden="true">🛡️</span>
+                <span>Privacy Settings</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => openSignOutConfirm()}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px',
+                  padding: '8px 10px',
+                  borderRadius: '7px',
+                  background: 'rgba(127, 29, 29, 0.52)',
+                  border: '1px solid rgba(248, 113, 113, 0.45)',
+                  color: '#fecaca',
+                  font: "700 12.5px 'Plus Jakarta Sans', sans-serif",
+                  cursor: 'pointer',
+                  textAlign: 'left',
+                }}
+              >
+                <span aria-hidden="true">🚪</span>
+                <span>Sign Out</span>
+              </button>
+            </div>
+          )}
+
+          {/* Field Hero Avatar Switcher */}
+          <div style={{ font: "800 13px 'Cinzel', serif", color: '#fde047', marginTop: '2px' }}>
+            ACTIVE FIELD HERO AVATAR
           </div>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(175px, 1fr))', gap: '6px', maxHeight: '190px', overflowY: 'auto' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(165px, 1fr))', gap: '6px' }}>
             {NEPALESE_HEROES.map((hero) => {
               const selected = hero.id === activeHero.id;
               return (
@@ -564,8 +780,8 @@ export const CommanderProfileModal: React.FC<CommanderProfileModalProps> = ({
                     alt={hero.name}
                     referrerPolicy="no-referrer"
                     style={{
-                      width: '36px',
-                      height: '36px',
+                      width: '32px',
+                      height: '32px',
                       borderRadius: '6px',
                       objectFit: 'cover',
                       objectPosition: 'center 20%',
@@ -573,7 +789,7 @@ export const CommanderProfileModal: React.FC<CommanderProfileModalProps> = ({
                     }}
                   />
                   <div style={{ minWidth: 0 }}>
-                    <div style={{ font: "700 12px 'Plus Jakarta Sans', sans-serif", color: '#fef08a', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                    <div style={{ font: "700 11.5px 'Plus Jakarta Sans', sans-serif", color: '#fef08a', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                       {hero.name}
                     </div>
                     <div style={{ fontSize: '10px', color: '#cbd5e1', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
@@ -584,7 +800,7 @@ export const CommanderProfileModal: React.FC<CommanderProfileModalProps> = ({
               );
             })}
           </div>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '11.5px', color: '#cbd5e1', paddingTop: '4px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '11.5px', color: '#cbd5e1', paddingTop: '2px' }}>
             <span>Commander UID: HR-C1-{commanderName.replace(/\s+/g, '').slice(0, 8)}</span>
             <button
               type="button"

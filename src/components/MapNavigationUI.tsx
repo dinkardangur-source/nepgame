@@ -107,7 +107,15 @@ interface MapNavigationUIProps {
   nowMs?: number;
   onRecallMarch?: (marchId: string) => void;
   onSelectWorldTarget?: (entityId: string, x: number, z: number) => void;
+  isCollisionDebugVisible?: boolean;
+  collisionDebugLayers?: { building: boolean; monster: boolean; resource: boolean };
+  onToggleCollisionDebug?: (enabled?: boolean) => void;
+  onToggleCollisionLayer?: (layer: 'building' | 'monster' | 'resource') => void;
   onOpenTestMode?: () => void;
+  onOpenAnimationLab?: () => void;
+  timeOfDay?: 'day' | 'dusk' | 'night';
+  onCycleTimeOfDay?: () => void;
+  commanderNameOverride?: string;
 }
 
 interface BookmarkPin {
@@ -200,7 +208,15 @@ export const MapNavigationUI: React.FC<MapNavigationUIProps> = ({
   nowMs,
   onRecallMarch,
   onSelectWorldTarget,
+  isCollisionDebugVisible,
+  collisionDebugLayers,
+  onToggleCollisionDebug,
+  onToggleCollisionLayer,
   onOpenTestMode,
+  onOpenAnimationLab,
+  timeOfDay = 'day',
+  onCycleTimeOfDay,
+  commanderNameOverride,
 }) => {
   const minimapCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const isMinimapDraggingRef = useRef<boolean>(false);
@@ -1657,7 +1673,7 @@ export const MapNavigationUI: React.FC<MapNavigationUIProps> = ({
             <button
               type="button"
               onClick={() => setIsProfileOpen(true)}
-              title="Open Commander Profile & Hero Mastery"
+              title="Open Commander Profile, Account & Hero Mastery"
               style={{
                 position: 'relative',
                 zIndex: 2,
@@ -1697,7 +1713,7 @@ export const MapNavigationUI: React.FC<MapNavigationUIProps> = ({
                     display: 'block',
                   }}
                 >
-                  {commanderName}
+                  {commanderNameOverride || commanderName}
                 </span>
               </div>
 
@@ -2521,64 +2537,66 @@ export const MapNavigationUI: React.FC<MapNavigationUIProps> = ({
           pointerEvents: 'auto',
         }}
       >
-        {/* Row 1: Resource Amounts (Right Upward Corner) */}
-        <div
-          className="hud-resource-bar"
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: '8px',
-            background: 'rgba(12, 17, 26, 0.96)',
-            borderTop: '1px solid rgba(218, 165, 32, 0.5)',
-            borderLeft: '1px solid rgba(218, 165, 32, 0.5)',
-            borderRight: '1px solid rgba(218, 165, 32, 0.5)',
-            borderBottom: '3px solid #78350f',
-            borderRadius: '8px',
-            padding: '5px 10px',
-            boxShadow: '0 4px 16px rgba(0, 0, 0, 0.7)',
-            fontVariantNumeric: 'tabular-nums',
-            flexWrap: 'nowrap',
-          }}
-        >
-          <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }} title="Wood Reserves">
-            {renderResourceSvg('wood')}
-            <span style={{ font: "700 11.5px 'Barlow Condensed'", color: '#86efac' }}>{resources.wood.toLocaleString()}</span>
-          </div>
-          <div style={{ width: '1px', height: '13px', background: 'rgba(255,255,255,0.14)' }} />
+        {/* Row 1: Resource Amounts */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+          <div
+            className="hud-resource-bar"
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '8px',
+              background: 'rgba(12, 17, 26, 0.96)',
+              borderTop: '1px solid rgba(218, 165, 32, 0.5)',
+              borderLeft: '1px solid rgba(218, 165, 32, 0.5)',
+              borderRight: '1px solid rgba(218, 165, 32, 0.5)',
+              borderBottom: '3px solid #78350f',
+              borderRadius: '8px',
+              padding: '5px 10px',
+              boxShadow: '0 4px 16px rgba(0, 0, 0, 0.7)',
+              fontVariantNumeric: 'tabular-nums',
+              flexWrap: 'nowrap',
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }} title="Wood Reserves">
+              {renderResourceSvg('wood')}
+              <span style={{ font: "700 11.5px 'Barlow Condensed'", color: '#86efac' }}>{resources.wood.toLocaleString()}</span>
+            </div>
+            <div style={{ width: '1px', height: '13px', background: 'rgba(255,255,255,0.14)' }} />
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }} title="Stone Reserves">
-            {renderResourceSvg('stone')}
-            <span style={{ font: "700 11.5px 'Barlow Condensed'", color: '#cbd5e1' }}>{resources.stone.toLocaleString()}</span>
-          </div>
-          <div style={{ width: '1px', height: '13px', background: 'rgba(255,255,255,0.14)' }} />
+            <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }} title="Stone Reserves">
+              {renderResourceSvg('stone')}
+              <span style={{ font: "700 11.5px 'Barlow Condensed'", color: '#cbd5e1' }}>{resources.stone.toLocaleString()}</span>
+            </div>
+            <div style={{ width: '1px', height: '13px', background: 'rgba(255,255,255,0.14)' }} />
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }} title="Iron Reserves">
-            {renderResourceSvg('iron')}
-            <span style={{ font: "700 11.5px 'Barlow Condensed'", color: '#93c5fd' }}>{resources.iron.toLocaleString()}</span>
-          </div>
-          <div style={{ width: '1px', height: '13px', background: 'rgba(255,255,255,0.14)' }} />
+            <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }} title="Iron Reserves">
+              {renderResourceSvg('iron')}
+              <span style={{ font: "700 11.5px 'Barlow Condensed'", color: '#93c5fd' }}>{resources.iron.toLocaleString()}</span>
+            </div>
+            <div style={{ width: '1px', height: '13px', background: 'rgba(255,255,255,0.14)' }} />
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }} title="Food Reserves">
-            {renderResourceSvg('food')}
-            <span style={{ font: "700 11.5px 'Barlow Condensed'", color: '#fde68a' }}>{resources.food.toLocaleString()}</span>
-          </div>
-          <div style={{ width: '1px', height: '13px', background: 'rgba(255,255,255,0.14)' }} />
+            <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }} title="Food Reserves">
+              {renderResourceSvg('food')}
+              <span style={{ font: "700 11.5px 'Barlow Condensed'", color: '#fde68a' }}>{resources.food.toLocaleString()}</span>
+            </div>
+            <div style={{ width: '1px', height: '13px', background: 'rgba(255,255,255,0.14)' }} />
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }} title="Himalayan Crystal Reserves">
-            {renderResourceSvg('crystal')}
-            <span style={{ font: "700 11.5px 'Barlow Condensed'", color: '#22d3ee' }}>{resources.crystal.toLocaleString()}</span>
-          </div>
-          <div style={{ width: '1px', height: '13px', background: 'rgba(255,255,255,0.14)' }} />
+            <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }} title="Himalayan Crystal Reserves">
+              {renderResourceSvg('crystal')}
+              <span style={{ font: "700 11.5px 'Barlow Condensed'", color: '#22d3ee' }}>{resources.crystal.toLocaleString()}</span>
+            </div>
+            <div style={{ width: '1px', height: '13px', background: 'rgba(255,255,255,0.14)' }} />
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }} title="Treasury Gold">
-            {renderResourceSvg('gold')}
-            <span style={{ font: "700 11.5px 'Barlow Condensed'", color: '#fde047' }}>{resources.gold.toLocaleString()}</span>
-          </div>
-          <div style={{ width: '1px', height: '13px', background: 'rgba(255,255,255,0.14)' }} />
+            <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }} title="Treasury Gold">
+              {renderResourceSvg('gold')}
+              <span style={{ font: "700 11.5px 'Barlow Condensed'", color: '#fde047' }}>{resources.gold.toLocaleString()}</span>
+            </div>
+            <div style={{ width: '1px', height: '13px', background: 'rgba(255,255,255,0.14)' }} />
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }} title="Sacred Gems">
-            {renderResourceSvg('gems')}
-            <span style={{ font: "700 11.5px 'Barlow Condensed'", color: '#d8b4fe' }}>{resources.gems.toLocaleString()}</span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }} title="Sacred Gems">
+              {renderResourceSvg('gems')}
+              <span style={{ font: "700 11.5px 'Barlow Condensed'", color: '#d8b4fe' }}>{resources.gems.toLocaleString()}</span>
+            </div>
           </div>
         </div>
 
@@ -2813,6 +2831,36 @@ export const MapNavigationUI: React.FC<MapNavigationUIProps> = ({
             <span>Relocate</span>
           </button>
 
+          {onToggleCollisionDebug && (
+            <button
+              type="button"
+              onClick={() => onToggleCollisionDebug()}
+              style={{
+                padding: '4px 9px',
+                borderRadius: '7px',
+                background: isCollisionDebugVisible
+                  ? 'linear-gradient(180deg, #b45309, #78350f)'
+                  : 'linear-gradient(180deg, #1e293b, #0f172a)',
+                borderTop: isCollisionDebugVisible ? '1.5px solid #facc15' : '1px solid rgba(250, 204, 21, 0.45)',
+                borderLeft: isCollisionDebugVisible ? '1.5px solid #facc15' : '1px solid rgba(250, 204, 21, 0.45)',
+                borderRight: isCollisionDebugVisible ? '1.5px solid #facc15' : '1px solid rgba(250, 204, 21, 0.45)',
+                borderBottom: isCollisionDebugVisible ? '3px solid #451a03' : '3px solid #0f172a',
+                boxShadow: '0 3px 8px rgba(0,0,0,0.45)',
+                color: isCollisionDebugVisible ? '#fef08a' : '#e2e8f0',
+                font: "800 11px 'Barlow Condensed'",
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '4px',
+                whiteSpace: 'nowrap',
+              }}
+              title="Toggle 3D Wireframe Collision Boxes (Shortcut: B) — Yellow: Buildings, Red: Monsters, Green: Resources"
+            >
+              <span>📦</span>
+              <span>{isCollisionDebugVisible ? 'Colliders: ON' : 'Colliders'}</span>
+            </button>
+          )}
+
           {onOpenTestMode && (
             <button
               type="button"
@@ -2840,7 +2888,125 @@ export const MapNavigationUI: React.FC<MapNavigationUIProps> = ({
               <span>Test Mode</span>
             </button>
           )}
+
+          {onOpenAnimationLab && (
+            <button
+              type="button"
+              onClick={onOpenAnimationLab}
+              style={{
+                padding: '4px 9px',
+                borderRadius: '7px',
+                background: 'linear-gradient(180deg, #0284c7, #0c4a6e)',
+                borderTop: '1px solid #7dd3fc',
+                borderLeft: '1px solid #7dd3fc',
+                borderRight: '1px solid #7dd3fc',
+                borderBottom: '3px solid #082f49',
+                boxShadow: '0 3px 8px rgba(0,0,0,0.45)',
+                color: '#f0f9ff',
+                font: "800 11px 'Barlow Condensed'",
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '4px',
+                whiteSpace: 'nowrap',
+              }}
+              title="Open 3D Animation & VFX Test Lab (Troops, Monsters, Shrines, Citadel & Shaders)"
+            >
+              <span>🎭</span>
+              <span>Anim Lab</span>
+            </button>
+          )}
+
+          {onCycleTimeOfDay && (
+            <button
+              type="button"
+              onClick={onCycleTimeOfDay}
+              style={{
+                padding: '4px 9px',
+                borderRadius: '7px',
+                background:
+                  timeOfDay === 'night'
+                    ? 'linear-gradient(180deg, #1e1b4b, #0f172a)'
+                    : timeOfDay === 'dusk'
+                      ? 'linear-gradient(180deg, #c2410c, #7c2d12)'
+                      : 'linear-gradient(180deg, #0ea5e9, #0369a1)',
+                borderTop: '1px solid rgba(255,255,255,0.45)',
+                borderLeft: '1px solid rgba(255,255,255,0.45)',
+                borderRight: '1px solid rgba(255,255,255,0.45)',
+                borderBottom: '3px solid #0f172a',
+                boxShadow: '0 3px 8px rgba(0,0,0,0.45)',
+                color: '#f8fafc',
+                font: "800 11px 'Barlow Condensed'",
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '4px',
+                whiteSpace: 'nowrap',
+              }}
+              title="Cycle World Map Lighting (Day / Dusk / Night)"
+            >
+              <span>{timeOfDay === 'night' ? '🌙' : timeOfDay === 'dusk' ? '🌅' : '☀️'}</span>
+              <span>{timeOfDay === 'night' ? 'Night' : timeOfDay === 'dusk' ? 'Dusk' : 'Day'}</span>
+            </button>
+          )}
         </div>
+
+        {isCollisionDebugVisible && collisionDebugLayers && onToggleCollisionLayer && (
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '5px',
+              padding: '4px 7px',
+              borderRadius: '7px',
+              background: 'rgba(10, 16, 28, 0.92)',
+              border: '1px solid rgba(250, 204, 21, 0.45)',
+              boxShadow: '0 4px 12px rgba(0,0,0,0.55)',
+            }}
+          >
+            {(
+              [
+                { key: 'building', label: 'Buildings', color: '#facc15' },
+                { key: 'monster', label: 'Monsters', color: '#f43f5e' },
+                { key: 'resource', label: 'Resources', color: '#22c55e' },
+              ] as const
+            ).map((item) => {
+              const active = collisionDebugLayers[item.key];
+              return (
+                <button
+                  key={item.key}
+                  type="button"
+                  onClick={() => onToggleCollisionLayer(item.key)}
+                  style={{
+                    padding: '2px 7px',
+                    borderRadius: '5px',
+                    background: active ? 'rgba(30, 41, 59, 0.95)' : 'rgba(15, 23, 42, 0.6)',
+                    border: `1px solid ${active ? item.color : 'rgba(148, 163, 184, 0.3)'}`,
+                    color: active ? '#f8fafc' : '#64748b',
+                    font: "700 10px 'Barlow Condensed'",
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '4px',
+                    opacity: active ? 1 : 0.65,
+                  }}
+                  title={`Toggle ${item.label} wireframe collision boxes`}
+                >
+                  <span
+                    style={{
+                      width: '8px',
+                      height: '8px',
+                      borderRadius: '2px',
+                      border: `2px solid ${item.color}`,
+                      display: 'inline-block',
+                    }}
+                  />
+                  <span>{item.label}</span>
+                </button>
+              );
+            })}
+          </div>
+        )}
       </div>
 
       {/* ============================================================ */}

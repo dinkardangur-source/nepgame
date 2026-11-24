@@ -1,0 +1,176 @@
+{
+  "entities": {
+    "PlayerProfile": {
+      "title": "PlayerProfile",
+      "description": "Publicly scoped commander identity and progression metadata without email PII.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "username": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 24,
+          "pattern": "^[a-zA-Z0-9_ ]+$"
+        },
+        "usernameLower": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 24,
+          "pattern": "^[a-z0-9_]+$"
+        },
+        "avatarId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "kingdomName": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 40
+        },
+        "level": {
+          "type": "number"
+        },
+        "provider": {
+          "type": "string",
+          "enum": ["password", "google.com"]
+        },
+        "emailVerified": {
+          "type": "boolean"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "lastLoginAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "uid",
+        "username",
+        "usernameLower",
+        "avatarId",
+        "kingdomName",
+        "level",
+        "provider",
+        "emailVerified",
+        "createdAt",
+        "lastLoginAt"
+      ]
+    },
+    "PrivateAccount": {
+      "title": "PrivateAccount",
+      "description": "Owner-only PII (email) and privacy preferences.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "email": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 254
+        },
+        "allowFriendRequests": {
+          "type": "boolean"
+        },
+        "showOnlineStatus": {
+          "type": "boolean"
+        },
+        "showKingdomStats": {
+          "type": "boolean"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "uid",
+        "email",
+        "allowFriendRequests",
+        "showOnlineStatus",
+        "showKingdomStats",
+        "updatedAt"
+      ]
+    },
+    "UsernameIndex": {
+      "title": "UsernameIndex",
+      "description": "Unique lowercase username reservation mapped to a player UID.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "username": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 24
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["uid", "username", "createdAt"]
+    },
+    "KingdomProgress": {
+      "title": "KingdomProgress",
+      "description": "Persistent player kingdom simulation state saved independently of authentication sessions.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "commanderXp": {
+          "type": "number"
+        },
+        "snapshotVersion": {
+          "type": "number"
+        },
+        "state": {
+          "type": "object"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["uid", "commanderXp", "snapshotVersion", "state", "updatedAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/PlayerProfile" },
+      "description": "Owner-scoped player commander profile."
+    },
+    "/users/{userId}/private/{docId}": {
+      "schema": { "$ref": "#/entities/PrivateAccount" },
+      "description": "Owner-only PII and privacy settings."
+    },
+    "/users/{userId}/kingdom/{docId}": {
+      "schema": { "$ref": "#/entities/KingdomProgress" },
+      "description": "Owner-only saved kingdom simulation snapshot."
+    },
+    "/usernames/{usernameLower}": {
+      "schema": { "$ref": "#/entities/UsernameIndex" },
+      "description": "Public uniqueness index for commander usernames."
+    }
+  }
+}
