@@ -87,7 +87,7 @@ define(['./workbox-afac4cd2'], (function (workbox) { 'use strict';
     "revision": "baee7932c47b483452047731c7d9d990"
   }, {
     "url": "index.html",
-    "revision": "00780e48a9ca21d3b20058f1bce6f1fb"
+    "revision": "11712336e61b8e836948c0c2f4b802e6"
   }, {
     "url": "favicon.ico",
     "revision": "bced82f6fc61f49f97449e34128d81fa"
@@ -101,22 +101,25 @@ define(['./workbox-afac4cd2'], (function (workbox) { 'use strict';
     "url": "assets/workbox-window.prod.es5-Bd17z0YL.js",
     "revision": null
   }, {
-    "url": "assets/three-vendor-BDIn3zjl.js",
+    "url": "assets/three-vendor-CZEm4HN2.js",
     "revision": null
   }, {
-    "url": "assets/index-Bto2pHRJ.js",
+    "url": "assets/index-BZOpJWQ8.js",
     "revision": null
   }, {
     "url": "assets/index-BRYu6DSd.css",
     "revision": null
   }, {
-    "url": "assets/StrategicWorldMapModal-BvQ-Fd81.js",
+    "url": "assets/WorldMapTestMode-DpWdVaQn.js",
     "revision": null
   }, {
-    "url": "assets/InsideKingdomView-BbDkZWWP.js",
+    "url": "assets/StrategicWorldMapModal-ZFPcCekj.js",
     "revision": null
   }, {
-    "url": "assets/CommandHubDrawer-UkLfYiEZ.js",
+    "url": "assets/InsideKingdomView-CAP0Vgeg.js",
+    "revision": null
+  }, {
+    "url": "assets/CommandHubDrawer-Bqqk8Ixe.js",
     "revision": null
   }, {
     "url": "assets/aistudio/screenshot_1_2be6e62f.png",
@@ -150,6 +153,12 @@ define(['./workbox-afac4cd2'], (function (workbox) { 'use strict';
     "revision": null
   }, {
     "url": "assets/aistudio/Fierce_Orc_Warrior_with_Branch_Club_2d06f5eb.png",
+    "revision": null
+  }, {
+    "url": "assets/aistudio/Fantasy_Kingdom_Player_Profile_Banner_ba29fba5.png",
+    "revision": null
+  }, {
+    "url": "assets/aistudio/Fantasy_Game_Profile_Dashboard_92c232d3.png",
     "revision": null
   }, {
     "url": "assets/aistudio/Crystal_Alliance_Citadel_Strategy_Map_673bdea9.png",

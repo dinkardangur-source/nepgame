@@ -34,21 +34,19 @@ import {
   getEnemyCastleMaxHp,
   getHeroById,
   getRecommendedMonsterBand,
-  normalizeAllianceTag,
-  validateAllianceAlias,
 } from '../game/NepaleseBalanceConfig';
 import type { CommandHubTab, LiveCastleStatus, LiveMonsterStatus, LiveNodeStatus } from './CommandHubDrawer';
 import { MonsterPortrait } from './MonsterPortrait';
 import { HeroPortrait } from './HeroPortrait';
 import { usePWAInstall, useOnlineStatus } from '../hooks/usePWAInstall';
+import { Hud3DPedestalDock, Hud3DSnapshotBadge } from './Hud3DPedestalDock';
+import { QuestBoardModal, QuestBoardCategory, QuestBoardItem } from './QuestBoardModal';
+import { AllianceHeadquartersModal, AllianceHqTab } from './AllianceHeadquartersModal';
+import { CommanderProfileModal } from './CommanderProfileModal';
+import { Profile3DBadge } from './Profile3DEmblems';
+import { getHeroPortraitUrl } from '../game/HeroPortraits';
 
 const CASTLE_EMBLEM_SRC = '/assets/aistudio/Gemini_Generated_Image_fzxzmyfzxzmyfzxz_6436d71f.jfif';
-
-interface ButtonRippleBurst {
-  id: number;
-  xPct: number;
-  yPct: number;
-}
 
 interface MapNavigationUIProps {
   cameraInfo: { x: number; y: number; z: number; zoom: number };
@@ -109,6 +107,7 @@ interface MapNavigationUIProps {
   nowMs?: number;
   onRecallMarch?: (marchId: string) => void;
   onSelectWorldTarget?: (entityId: string, x: number, z: number) => void;
+  onOpenTestMode?: () => void;
 }
 
 interface BookmarkPin {
@@ -138,20 +137,6 @@ interface InventoryItemData {
   rewardType: 'wood' | 'stone' | 'iron' | 'food' | 'gold' | 'gems';
   rewardAmount: number;
   iconType: 'chest_gold' | 'crystal_gems' | 'timber_bundle' | 'granite_crate' | 'iron_ingot' | 'chrono_hourglass';
-}
-
-interface QuestItemData {
-  id: string;
-  tab: 'imperial' | 'daily';
-  title: string;
-  desc: string;
-  progress: number;
-  target: number;
-  rewardType: 'wood' | 'stone' | 'iron' | 'food' | 'gold' | 'gems';
-  rewardAmount: number;
-  secondaryGems: number;
-  claimed: boolean;
-  actionType?: 'enter_kingdom' | 'open_worldmap' | 'relocate' | 'filter_3d';
 }
 
 interface MailMessageData {
@@ -215,6 +200,7 @@ export const MapNavigationUI: React.FC<MapNavigationUIProps> = ({
   nowMs,
   onRecallMarch,
   onSelectWorldTarget,
+  onOpenTestMode,
 }) => {
   const minimapCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const isMinimapDraggingRef = useRef<boolean>(false);
@@ -225,10 +211,9 @@ export const MapNavigationUI: React.FC<MapNavigationUIProps> = ({
   const isOnline = useOnlineStatus();
   const [showAndroidModal, setShowAndroidModal] = useState(false);
 
-  // Tactile Spring Press, Golden Ripple & Rune Sparkle Animations
+  // Tactile Spring Press & Rune Sparkle Animations
   const [pressedBtnKey, setPressedBtnKey] = useState<string | null>(null);
   const [springPopKey, setSpringPopKey] = useState<string | null>(null);
-  const [rippleBursts, setRippleBursts] = useState<Record<string, ButtonRippleBurst>>({});
 
   const handleHudPointerDown = (key: string) => {
     setPressedBtnKey(key);
@@ -238,29 +223,12 @@ export const MapNavigationUI: React.FC<MapNavigationUIProps> = ({
     setPressedBtnKey((prev) => (prev === key ? null : prev));
   };
 
-  const triggerTouchVfx = (e: React.PointerEvent<HTMLElement> | React.MouseEvent<HTMLElement>, key: string) => {
+  const triggerTouchVfx = (_e: React.PointerEvent<HTMLElement> | React.MouseEvent<HTMLElement>, key: string) => {
     setPressedBtnKey(null);
-    const rect = e.currentTarget.getBoundingClientRect();
-    let xPct = 50;
-    let yPct = 50;
-    if ('clientX' in e && rect.width > 0 && rect.height > 0 && e.clientX > 0) {
-      xPct = Math.max(10, Math.min(90, ((e.clientX - rect.left) / rect.width) * 100));
-      yPct = Math.max(10, Math.min(90, ((e.clientY - rect.top) / rect.height) * 100));
-    }
-    const burstId = Date.now() + Math.floor(Math.random() * 1000);
-    setRippleBursts((prev) => ({ ...prev, [key]: { id: burstId, xPct, yPct } }));
     setSpringPopKey(key);
     window.setTimeout(() => {
       setSpringPopKey((prev) => (prev === key ? null : prev));
     }, 460);
-    window.setTimeout(() => {
-      setRippleBursts((prev) => {
-        if (prev[key]?.id !== burstId) return prev;
-        const copy = { ...prev };
-        delete copy[key];
-        return copy;
-      });
-    }, 640);
   };
 
   // Coordinate Bookmark State & Persistence
@@ -289,7 +257,24 @@ export const MapNavigationUI: React.FC<MapNavigationUIProps> = ({
   }, [bookmarks]);
 
   // Nepalese Contextual Battalion & Lead Hero Selector State (Magar Inf / Limbu Arc / Thakuri Cav Lv 1-5)
-  const [selectedHeroId, setSelectedHeroId] = useState<string>(NEPALESE_HEROES[0].id);
+  const [selectedHeroId, setSelectedHeroId] = useState<string>(() => {
+    try {
+      const saved = localStorage.getItem('himalayan_selected_hero_v1');
+      if (saved && getHeroById(saved)) return saved;
+    } catch {
+      // Ignore storage read errors
+    }
+    return NEPALESE_HEROES[0].id;
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('himalayan_selected_hero_v1', selectedHeroId);
+    } catch {
+      // Ignore storage write errors
+    }
+  }, [selectedHeroId]);
+
   const [selectedTroopLv, setSelectedTroopLv] = useState<TroopLevel>(3);
   const [marchCounts, setMarchCounts] = useState<Record<TroopClassId, number>>({
     infantry: 500,
@@ -405,16 +390,40 @@ export const MapNavigationUI: React.FC<MapNavigationUIProps> = ({
     setOpenShareKey(null);
   }, [selectedEntity?.id]);
 
-  // Alliance Hub Modal State
-  const [isAllianceOpen, setIsAllianceOpen] = useState(false);
-  const [allianceTab, setAllianceTab] = useState<'profile' | 'overview' | 'members' | 'war'>('profile');
-  const [allianceTagDraft, setAllianceTagDraft] = useState(playerAlliance.tag);
-  const [allianceAliasDraft, setAllianceAliasDraft] = useState(playerAlliance.alias);
-
+  // Profile, Alliance HQ & Quest Board Modal State
+  const [isProfileOpen, setIsProfileOpen] = useState(false);
+  const [commanderName, setCommanderName] = useState<string>(() => {
+    try {
+      const saved = localStorage.getItem('himalayan_commander_name_v1');
+      if (saved && saved.trim().length >= 2) return saved.trim().toUpperCase().slice(0, 18);
+    } catch {
+      // Ignore storage read errors
+    }
+    return 'LORD DANGOL';
+  });
   useEffect(() => {
-    setAllianceTagDraft(playerAlliance.tag);
-    setAllianceAliasDraft(playerAlliance.alias);
-  }, [playerAlliance.tag, playerAlliance.alias]);
+    try {
+      localStorage.setItem('himalayan_commander_name_v1', commanderName);
+    } catch {
+      // Ignore storage write errors
+    }
+  }, [commanderName]);
+
+  const MAX_ACTION_POINTS = 190;
+  const [actionPoints, setActionPoints] = useState<number>(190);
+  const handleReplenishActionPoints = () => {
+    if (actionPoints >= MAX_ACTION_POINTS) {
+      onShowToast?.('Action Points are already full (190 / 190)!');
+      return;
+    }
+    setActionPoints((prev) => Math.min(MAX_ACTION_POINTS, prev + 35));
+    onShowToast?.('Used Royal Elixir: +35 Action Points restored!');
+  };
+
+  const [isAllianceOpen, setIsAllianceOpen] = useState(false);
+  const [allianceTab, setAllianceTab] = useState<AllianceHqTab>('overview');
+  const [questBoardTab, setQuestBoardTab] = useState<QuestBoardCategory>('daily');
+  const [unclaimedQuestsCount, setUnclaimedQuestsCount] = useState<number>(0);
 
   // 3D Inventory, Quests & Mail Modals State
   const [isInventoryOpen, setIsInventoryOpen] = useState(false);
@@ -489,73 +498,6 @@ export const MapNavigationUI: React.FC<MapNavigationUIProps> = ({
   ]);
 
   const [isQuestsOpen, setIsQuestsOpen] = useState(false);
-  const [questTab, setQuestTab] = useState<'imperial' | 'daily'>('imperial');
-  const [questsList, setQuestsList] = useState<QuestItemData[]>([
-    {
-      id: 'q-merge-courtyard',
-      tab: 'imperial',
-      title: 'Merge 3D Buildings Inside Kingdom',
-      desc: 'Enter the 3D Walled Imperial Citadel and merge matching Barracks, Towers, Mills, or Shrines.',
-      progress: 1,
-      target: 1,
-      rewardType: 'gold',
-      rewardAmount: 6000,
-      secondaryGems: 120,
-      claimed: false,
-      actionType: 'enter_kingdom',
-    },
-    {
-      id: 'q-inspect-congress',
-      tab: 'imperial',
-      title: 'Reconnoiter The Congress & 36 Shrines',
-      desc: 'Open the Parchment WorldMap to inspect The Congress at [1600, 1600] and Shrines A1–A4, B1–B12, and C1–C20.',
-      progress: 1,
-      target: 1,
-      rewardType: 'stone',
-      rewardAmount: 20000,
-      secondaryGems: 100,
-      claimed: false,
-      actionType: 'open_worldmap',
-    },
-    {
-      id: 'q-alliance-castles',
-      tab: 'imperial',
-      title: 'Coordinate with 10 Alliance Member Castles',
-      desc: 'Verify randomized spawn coordinates for My Castle and all 10 Alliance Member Castles across the 3200×3200 green continent.',
-      progress: 10,
-      target: 10,
-      rewardType: 'wood',
-      rewardAmount: 24000,
-      secondaryGems: 90,
-      claimed: false,
-      actionType: 'relocate',
-    },
-    {
-      id: 'q-daily-shrine',
-      tab: 'daily',
-      title: 'Activate 3D Strategic Shrine Filter',
-      desc: 'Toggle the 3D World Filter to highlight only The Congress, Shrines A/B/C & Castles.',
-      progress: 1,
-      target: 1,
-      rewardType: 'iron',
-      rewardAmount: 15000,
-      secondaryGems: 80,
-      claimed: false,
-      actionType: 'filter_3d',
-    },
-    {
-      id: 'q-daily-patrol',
-      tab: 'daily',
-      title: 'Garrison Vanguard Battalion',
-      desc: 'Maintain 10,000+ March Power ready at My Castle to defend adjacent Crystal Shrines.',
-      progress: 1,
-      target: 1,
-      rewardType: 'gold',
-      rewardAmount: 4500,
-      secondaryGems: 65,
-      claimed: false,
-    },
-  ]);
 
   const [isMailOpen, setIsMailOpen] = useState(false);
   const [mailTab, setMailTab] = useState<'all' | 'system' | 'battle' | 'alliance'>('all');
@@ -647,6 +589,7 @@ export const MapNavigationUI: React.FC<MapNavigationUIProps> = ({
   const openExclusiveDockPanel = (
     panel: 'inventory' | 'quests' | 'alliance' | 'mail' | 'search' | 'chat' | 'bookmarks'
   ) => {
+    setIsProfileOpen(false);
     setIsInventoryOpen(panel === 'inventory' ? !isInventoryOpen : false);
     setIsQuestsOpen(panel === 'quests' ? !isQuestsOpen : false);
     setIsAllianceOpen(panel === 'alliance' ? !isAllianceOpen : false);
@@ -774,11 +717,6 @@ export const MapNavigationUI: React.FC<MapNavigationUIProps> = ({
     [inventoryItems]
   );
 
-  const unclaimedQuestsCount = useMemo(
-    () => questsList.filter((q) => !q.claimed && q.progress >= q.target).length,
-    [questsList]
-  );
-
   const unreadOrUnclaimedMailCount = useMemo(
     () => mailMessages.filter((m) => !m.read || !m.claimed).length,
     [mailMessages]
@@ -793,18 +731,6 @@ export const MapNavigationUI: React.FC<MapNavigationUIProps> = ({
         .filter((item) => item.count > 0)
     );
     onGrantReward?.(target.rewardType, target.rewardAmount, target.name);
-  };
-
-  const handleClaimQuest = (questId: string) => {
-    const q = questsList.find((item) => item.id === questId);
-    if (!q || q.claimed || q.progress < q.target) return;
-    setQuestsList((prev) =>
-      prev.map((item) => (item.id === questId ? { ...item, claimed: true } : item))
-    );
-    onGrantReward?.(q.rewardType, q.rewardAmount, q.title);
-    if (q.secondaryGems > 0) {
-      onGrantReward?.('gems', q.secondaryGems, `${q.title} Bonus`);
-    }
   };
 
   const handleClaimMail = (mailId: string) => {
@@ -1630,93 +1556,275 @@ export const MapNavigationUI: React.FC<MapNavigationUIProps> = ({
           pointerEvents: 'auto',
         }}
       >
-        {/* User Profile Card */}
+        {/* User Profile Banner — 3D Royal Crowned Plaque + VIP Hanging Pennant */}
         <div
-          className="hud-profile-card"
           style={{
             display: 'flex',
-            alignItems: 'center',
-            gap: '9px',
-            background: 'rgba(12, 17, 26, 0.94)',
-            border: '1px solid rgba(218, 165, 32, 0.5)',
-            borderRadius: '10px',
-            padding: '5px 12px',
-            boxShadow: '0 6px 20px rgba(0, 0, 0, 0.65)',
+            flexDirection: 'column',
+            alignItems: 'flex-start',
+            gap: '3px',
           }}
         >
           <div
+            className="hud-profile-card"
             style={{
-              width: '36px',
-              height: '36px',
-              minWidth: '36px',
-              borderRadius: '50%',
-              background: 'linear-gradient(135deg, #7f1d1d, #b91c1c)',
-              border: '2px solid #dfba6e',
-              display: 'grid',
-              placeItems: 'center',
-              fontSize: '16px',
-              boxShadow: '0 2px 8px rgba(0,0,0,0.5)',
+              position: 'relative',
+              display: 'flex',
+              alignItems: 'center',
+              paddingTop: '10px',
+              paddingLeft: '4px',
+              paddingRight: '4px',
             }}
           >
-            👑
-          </div>
+            {/* Left Crimson Cloak + Gold-Beveled Square Frame + Overhanging 3D Royal Crown */}
+            <button
+              type="button"
+              onClick={() => setIsProfileOpen(true)}
+              title="Open 3D Commander Profile Dashboard"
+              style={{
+                position: 'relative',
+                zIndex: 4,
+                width: '52px',
+                height: '52px',
+                minWidth: '52px',
+                padding: '3px',
+                borderRadius: '8px',
+                background: 'linear-gradient(180deg, #fef08a 0%, #eab308 42%, #b45309 100%)',
+                border: '1.5px solid #fef9c3',
+                boxShadow: '0 6px 16px rgba(0,0,0,0.85), -4px 4px 0 #991b1b',
+                cursor: 'pointer',
+                display: 'grid',
+                placeItems: 'center',
+                flexShrink: 0,
+              }}
+            >
+              {/* 3D Royal Crown Seated on Frame Top */}
+              <div
+                style={{
+                  position: 'absolute',
+                  top: '-22px',
+                  left: '50%',
+                  transform: 'translateX(-50%)',
+                  pointerEvents: 'none',
+                  zIndex: 5,
+                }}
+              >
+                <Profile3DBadge iconKey="royal_crown" size={34} />
+              </div>
 
-          <div style={{ minWidth: 0 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-              <span style={{ font: "700 13px 'Barlow Condensed'", color: '#fef08a', letterSpacing: '0.04em', whiteSpace: 'nowrap' }}>
-                LORD DANGOL
-              </span>
+              <div
+                style={{
+                  width: '100%',
+                  height: '100%',
+                  borderRadius: '5px',
+                  overflow: 'hidden',
+                  background: '#0f172a',
+                  border: '1px solid #78350f',
+                }}
+              >
+                <img
+                  src={getHeroPortraitUrl(selectedHeroId)}
+                  alt="Commander Avatar"
+                  referrerPolicy="no-referrer"
+                  style={{
+                    width: '100%',
+                    height: '100%',
+                    objectFit: 'cover',
+                    objectPosition: 'center 18%',
+                    display: 'block',
+                  }}
+                />
+              </div>
+
+              {/* Bottom Sapphire Diamond Clasp */}
+              <div
+                aria-hidden="true"
+                style={{
+                  position: 'absolute',
+                  bottom: '-5px',
+                  left: '50%',
+                  transform: 'translateX(-50%) rotate(45deg)',
+                  width: '9px',
+                  height: '9px',
+                  background: 'linear-gradient(135deg, #bae6fd, #0284c7)',
+                  border: '1px solid #fef08a',
+                  boxShadow: '0 0 8px rgba(56, 189, 248, 0.85)',
+                }}
+              />
+            </button>
+
+            {/* Center Dual-Tier Sapphire Nameplate + Slate Power & AP Plate */}
+            <button
+              type="button"
+              onClick={() => setIsProfileOpen(true)}
+              title="Open Commander Profile & Hero Mastery"
+              style={{
+                position: 'relative',
+                zIndex: 2,
+                marginLeft: '-6px',
+                marginRight: '-6px',
+                minWidth: '154px',
+                padding: '0',
+                background: 'linear-gradient(180deg, #1b2434 0%, #0f1520 100%)',
+                borderTop: '2.5px solid #eab308',
+                borderBottom: '2.5px solid #b45309',
+                borderLeft: 'none',
+                borderRight: 'none',
+                boxShadow: '0 6px 18px rgba(0,0,0,0.78)',
+                cursor: 'pointer',
+                display: 'flex',
+                flexDirection: 'column',
+                overflow: 'hidden',
+                textAlign: 'left',
+              }}
+            >
+              {/* Upper Sapphire Name Ribbon */}
+              <div
+                style={{
+                  width: '100%',
+                  padding: '2px 12px',
+                  background: 'linear-gradient(180deg, #1d4e89 0%, #0d2b52 100%)',
+                  borderBottom: '1.5px solid rgba(250, 204, 21, 0.55)',
+                }}
+              >
+                <span
+                  style={{
+                    font: "800 12.5px 'Cinzel', serif",
+                    color: '#fefce8',
+                    letterSpacing: '0.05em',
+                    textShadow: '0 1px 3px rgba(0,0,0,0.9)',
+                    whiteSpace: 'nowrap',
+                    display: 'block',
+                  }}
+                >
+                  {commanderName}
+                </span>
+              </div>
+
+              {/* Lower Power + Glowing Orange AP Track */}
+              <div
+                style={{
+                  padding: '3px 10px 4px 12px',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '2px',
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                  <Profile3DBadge iconKey="crossed_swords" size={16} />
+                  <span
+                    style={{
+                      font: "800 13.5px 'Plus Jakarta Sans', sans-serif",
+                      fontVariantNumeric: 'tabular-nums',
+                      color: '#fde047',
+                      textShadow: '0 1px 3px rgba(0,0,0,0.95)',
+                      lineHeight: 1.05,
+                    }}
+                  >
+                    {standingPower.toLocaleString()}
+                  </span>
+                </div>
+
+                <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                  <Profile3DBadge iconKey="xp_star" size={13} />
+                  <div
+                    style={{
+                      flex: 1,
+                      height: '7px',
+                      borderRadius: '4px',
+                      background: '#080d16',
+                      border: '1px solid rgba(234, 179, 8, 0.45)',
+                      overflow: 'hidden',
+                    }}
+                  >
+                    <div
+                      style={{
+                        width: `${Math.round((actionPoints / MAX_ACTION_POINTS) * 100)}%`,
+                        height: '100%',
+                        background: 'linear-gradient(90deg, #ea580c 0%, #f59e0b 55%, #fde047 100%)',
+                        boxShadow: '0 0 8px rgba(245, 158, 11, 0.7)',
+                      }}
+                    />
+                  </div>
+                </div>
+              </div>
+            </button>
+
+            {/* Right Hanging Royal Blue & Gold VIP Pennant Banner */}
+            <button
+              type="button"
+              onClick={() => setIsProfileOpen(true)}
+              title="VIP Level 4 · Open Profile"
+              style={{
+                position: 'relative',
+                zIndex: 3,
+                width: '40px',
+                height: '58px',
+                padding: '6px 2px 10px',
+                border: '2px solid #facc15',
+                borderTop: '3px solid #fef08a',
+                background: 'linear-gradient(180deg, #2563eb 0%, #1d4ed8 58%, #1e3a8a 100%)',
+                clipPath: 'polygon(0 0, 100% 0, 100% 82%, 50% 100%, 0 82%)',
+                boxShadow: '0 6px 14px rgba(0,0,0,0.85)',
+                cursor: 'pointer',
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '1px',
+                flexShrink: 0,
+              }}
+            >
+              <Profile3DBadge iconKey="banner_crown" size={22} />
               <span
                 style={{
-                  font: "700 8.5px 'Barlow Condensed'",
-                  background: '#b45309',
-                  color: '#fef3c7',
-                  padding: '1px 5px',
-                  borderRadius: '3px',
+                  font: "900 12px 'Cinzel', serif",
+                  fontVariantNumeric: 'tabular-nums',
+                  color: '#fde047',
+                  lineHeight: 1,
+                  textShadow: '0 1px 3px rgba(0,0,0,0.95)',
                 }}
               >
-                VIP 4
+                4
               </span>
-            </div>
-
-            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '10px', color: '#94a3b8', marginTop: '1px', whiteSpace: 'nowrap' }}>
-              <button
-                type="button"
-                onClick={() => {
-                  setAllianceTab('profile');
-                  setIsAllianceOpen(true);
-                }}
-                title="Open Alliance Profile & Held Shrines"
-                style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: '5px',
-                  background: 'transparent',
-                  border: 'none',
-                  padding: 0,
-                  margin: 0,
-                  cursor: 'pointer',
-                  fontSize: '10px',
-                  color: 'inherit',
-                  fontFamily: 'inherit',
-                  textAlign: 'left',
-                }}
-              >
-                <span style={{ color: '#a7f3d0', fontWeight: 700 }}>[{playerAlliance.tag}]</span>
-                <span style={{ color: 'rgba(255,255,255,0.2)' }}>·</span>
-                <span style={{ color: '#cbd5e1', maxWidth: '145px', overflow: 'hidden', textOverflow: 'ellipsis' }} title={playerAlliance.alias}>{playerAlliance.alias}</span>
-                <span style={{ color: 'rgba(255,255,255,0.2)' }}>·</span>
-                <span style={{ color: shrineRuleStatus.atShrineCap ? '#fca5a5' : '#86efac', fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>
-                  Shrines {shrineRuleStatus.totalShrinesHeld}/{shrineRuleStatus.maxShrinesPerAlliance}
-                </span>
-                <span style={{ color: '#6ee7b7', fontSize: '10px' }}>›</span>
-              </button>
-              <span style={{ color: 'rgba(255,255,255,0.2)' }}>·</span>
-              <span style={{ color: '#38bdf8', fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>
-                {standingPower.toLocaleString()} ⚡
-              </span>
-            </div>
+            </button>
           </div>
+
+          {/* Compact Alliance & Shrines Quick Link Bar */}
+          <button
+            type="button"
+            className="hud-alliance-subbar"
+            onClick={() => {
+              setAllianceTab('overview');
+              setIsAllianceOpen(true);
+            }}
+            title="Open Alliance Headquarters & Territory"
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '5px',
+              background: 'rgba(10, 16, 28, 0.88)',
+              border: '1px solid rgba(218, 165, 32, 0.45)',
+              borderRadius: '6px',
+              padding: '2px 8px',
+              marginLeft: '4px',
+              cursor: 'pointer',
+              fontSize: '10px',
+              color: '#cbd5e1',
+              whiteSpace: 'nowrap',
+              boxShadow: '0 3px 10px rgba(0,0,0,0.55)',
+            }}
+          >
+            <span style={{ color: '#a7f3d0', fontWeight: 700 }}>[{playerAlliance.tag}]</span>
+            <span style={{ color: 'rgba(255,255,255,0.22)' }}>·</span>
+            <span style={{ maxWidth: '115px', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+              {playerAlliance.alias}
+            </span>
+            <span style={{ color: 'rgba(255,255,255,0.22)' }}>·</span>
+            <span style={{ color: shrineRuleStatus.atShrineCap ? '#fca5a5' : '#86efac', fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>
+              Shrines {shrineRuleStatus.totalShrinesHeld}/{shrineRuleStatus.maxShrinesPerAlliance}
+            </span>
+          </button>
         </div>
 
         {/* Minimap Directly Below Profile */}
@@ -2704,6 +2812,34 @@ export const MapNavigationUI: React.FC<MapNavigationUIProps> = ({
             <span>🎲</span>
             <span>Relocate</span>
           </button>
+
+          {onOpenTestMode && (
+            <button
+              type="button"
+              onClick={onOpenTestMode}
+              style={{
+                padding: '4px 9px',
+                borderRadius: '7px',
+                background: 'linear-gradient(180deg, #7c3aed, #4c1d95)',
+                borderTop: '1px solid #c4b5fd',
+                borderLeft: '1px solid #c4b5fd',
+                borderRight: '1px solid #c4b5fd',
+                borderBottom: '3px solid #2e1065',
+                boxShadow: '0 3px 8px rgba(0,0,0,0.45)',
+                color: '#f5f3ff',
+                font: "800 11px 'Barlow Condensed'",
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '4px',
+                whiteSpace: 'nowrap',
+              }}
+              title="Launch Dedicated World Map Test Mode (Grid, Footprint & Collision Prototype)"
+            >
+              <span>🧪</span>
+              <span>Test Mode</span>
+            </button>
+          )}
         </div>
       </div>
 
@@ -2979,475 +3115,85 @@ export const MapNavigationUI: React.FC<MapNavigationUIProps> = ({
       })()}
 
       {/* ============================================================ */}
-      {/* 5. BOTTOM-RIGHT: INVENTORY, QUESTS, MAIL & CASTLE INSIDE     */}
+      {/* 5. BOTTOM-RIGHT: LIVE 3D PEDESTAL HUD ACTION ICONS           */}
       {/* ============================================================ */}
-      <div
-        className="hud-bottom-right-dock"
-        style={{
-          position: 'absolute',
-          bottom: '12px',
-          right: '12px',
-          zIndex: 55,
-          display: 'flex',
-          alignItems: 'center',
-          gap: '6px',
-          background: 'rgba(10, 16, 28, 0.94)',
-          borderTop: '1.5px solid rgba(218, 165, 32, 0.55)',
-          borderLeft: '1.5px solid rgba(218, 165, 32, 0.55)',
-          borderRight: '1.5px solid rgba(218, 165, 32, 0.55)',
-          borderBottom: '4px solid #451a03',
-          borderRadius: '12px',
-          padding: '6px 8px',
-          boxShadow: '0 10px 26px rgba(0, 0, 0, 0.85)',
-          pointerEvents: 'auto',
-        }}
-      >
-        <button
-          type="button"
-          onPointerDown={() => handleHudPointerDown('hub')}
-          onPointerLeave={() => handleHudPointerLeave('hub')}
-          onPointerCancel={() => handleHudPointerLeave('hub')}
-          onClick={(e) => {
-            triggerTouchVfx(e, 'hub');
-            onOpenCommandHub('barracks');
-          }}
-          className={springPopKey === 'hub' ? 'hud-spring-pop' : undefined}
-          style={{
-            position: 'relative',
-            overflow: 'visible',
-            width: '52px',
-            height: '54px',
-            borderRadius: '9px',
-            background: 'linear-gradient(180deg, #0369a1 0%, #0f172a 100%)',
-            borderTop: '1.5px solid #38bdf8',
-            borderLeft: '1.5px solid #38bdf8',
-            borderRight: '1.5px solid #38bdf8',
-            borderBottom: '3.5px solid #082f49',
-            boxShadow: '0 4px 12px rgba(56, 189, 248, 0.25)',
-            color: '#f8fafc',
-            cursor: 'pointer',
-            touchAction: 'manipulation',
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'center',
-            justifyContent: 'center',
-            gap: '2px',
-            padding: '3px 2px',
-            transform: pressedBtnKey === 'hub' ? 'scale(0.90) translateY(2px)' : 'none',
-            transition: 'transform 0.14s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.15s ease',
-          }}
-          title="Open 8-Panel Nepalese Kingdom Command Hub (Barracks, Shrines, Congress, Marches & Config)"
-        >
-          {activeMarchesCount + battleReportsCount > 0 && (
-            <span
-              style={{
-                position: 'absolute',
-                top: '-5px',
-                right: '-4px',
-                minWidth: '16px',
-                height: '16px',
-                padding: '0 4px',
-                borderRadius: '999px',
-                background: activeMarchesCount > 0 ? '#0284c7' : '#d97706',
-                border: '1.5px solid #fef08a',
-                color: '#fff',
-                font: "800 9px 'Barlow Condensed', sans-serif",
-                fontVariantNumeric: 'tabular-nums',
-                display: 'grid',
-                placeItems: 'center',
-                zIndex: 3,
-              }}
-            >
-              {activeMarchesCount > 0 ? activeMarchesCount : battleReportsCount}
-            </span>
-          )}
-          <div style={{ filter: 'drop-shadow(0 2px 4px rgba(0,0,0,0.65))', position: 'relative', zIndex: 2 }}>
-            {render3DModelIcon('hub', 25)}
-          </div>
-          <span
-            style={{
-              position: 'relative',
-              zIndex: 2,
-              font: "800 8.5px 'Barlow Condensed', sans-serif",
-              color: '#bae6fd',
-              letterSpacing: '0.03em',
-              lineHeight: 1,
-              whiteSpace: 'nowrap',
-            }}
-          >
-            COMMAND
-          </span>
-        </button>
-
-        {[
+      <Hud3DPedestalDock
+        slots={[
           {
-            key: 'inventory' as const,
+            key: 'command',
+            label: 'COMMAND',
+            isActive: false,
+            badgeCount: activeMarchesCount > 0 ? activeMarchesCount : battleReportsCount,
+            badgeColor: activeMarchesCount > 0 ? '#0284c7' : '#d97706',
+            title: 'Open 8-Panel Nepalese Kingdom Command Hub (Barracks, Shrines, Congress, Marches & Config)',
+            onClick: (e) => {
+              triggerTouchVfx(e, 'hub');
+              onOpenCommandHub('barracks');
+            },
+          },
+          {
+            key: 'inventory',
             label: 'INVENTORY',
-            isOpen: isInventoryOpen,
-            badge: totalInventoryCount,
+            isActive: isInventoryOpen,
+            badgeCount: totalInventoryCount,
             badgeColor: '#d97706',
-            bgActive: 'linear-gradient(180deg, #d97706 0%, #78350f 100%)',
-            bgIdle: 'linear-gradient(180deg, #1e293b 0%, #0f172a 100%)',
-            borderColor: '#facc15',
-            bevelColor: '#451a03',
             title: 'Open 3D Royal Inventory',
+            onClick: (e) => {
+              triggerTouchVfx(e, 'inventory');
+              openExclusiveDockPanel('inventory');
+            },
           },
           {
-            key: 'quests' as const,
+            key: 'quests',
             label: 'QUESTS',
-            isOpen: isQuestsOpen,
-            badge: unclaimedQuestsCount,
+            isActive: isQuestsOpen,
+            badgeCount: unclaimedQuestsCount,
             badgeColor: '#16a34a',
-            bgActive: 'linear-gradient(180deg, #0284c7 0%, #1e3a8a 100%)',
-            bgIdle: 'linear-gradient(180deg, #1e293b 0%, #0f172a 100%)',
-            borderColor: '#38bdf8',
-            bevelColor: '#0c4a6e',
-            title: 'Open 3D Imperial & Daily Quests',
+            title: 'Open Ornate Quest Board & Daily Activity',
+            onClick: (e) => {
+              triggerTouchVfx(e, 'quests');
+              setQuestBoardTab('daily');
+              openExclusiveDockPanel('quests');
+            },
           },
           {
-            key: 'alliance' as const,
+            key: 'alliance',
             label: 'ALLIANCE',
-            isOpen: isAllianceOpen,
-            badge: allianceTerritoryStats.capturedTotal > 0 ? allianceTerritoryStats.capturedTotal : enemyCastles.length,
+            isActive: isAllianceOpen,
+            badgeCount: allianceTerritoryStats.capturedTotal > 0 ? allianceTerritoryStats.capturedTotal : enemyCastles.length,
             badgeColor: allianceTerritoryStats.capturedTotal > 0 ? '#10b981' : '#dc2626',
-            bgActive: 'linear-gradient(180deg, #059669 0%, #064e3b 100%)',
-            bgIdle: 'linear-gradient(180deg, #1e293b 0%, #0f172a 100%)',
-            borderColor: '#34d399',
-            bevelColor: '#064e3b',
-            title: 'Open Alliance Hub, Territory Buffs & War Rallies',
+            title: 'Open Alliance Headquarters, Territory & Technology',
+            onClick: (e) => {
+              triggerTouchVfx(e, 'alliance');
+              setAllianceTab('overview');
+              openExclusiveDockPanel('alliance');
+            },
           },
           {
-            key: 'mail' as const,
+            key: 'mail',
             label: 'MAIL',
-            isOpen: isMailOpen,
-            badge: unreadOrUnclaimedMailCount,
+            isActive: isMailOpen,
+            badgeCount: unreadOrUnclaimedMailCount,
             badgeColor: '#dc2626',
-            bgActive: 'linear-gradient(180deg, #b45309 0%, #7c2d12 100%)',
-            bgIdle: 'linear-gradient(180deg, #1e293b 0%, #0f172a 100%)',
-            borderColor: '#fde047',
-            bevelColor: '#431407',
             title: 'Open 3D Royal Mail & Battle Dispatches',
+            onClick: (e) => {
+              triggerTouchVfx(e, 'mail');
+              openExclusiveDockPanel('mail');
+            },
           },
-        ].map((btn) => {
-          const burst = rippleBursts[btn.key];
-          const isPressed = pressedBtnKey === btn.key;
-          const isPopping = springPopKey === btn.key;
-          return (
-            <button
-              key={btn.key}
-              type="button"
-              onPointerDown={() => handleHudPointerDown(btn.key)}
-              onPointerLeave={() => handleHudPointerLeave(btn.key)}
-              onPointerCancel={() => handleHudPointerLeave(btn.key)}
-              onClick={(e) => {
-                triggerTouchVfx(e, btn.key);
-                openExclusiveDockPanel(btn.key);
-              }}
-              className={isPopping ? 'hud-spring-pop' : undefined}
-              style={{
-                position: 'relative',
-                overflow: 'visible',
-                width: '52px',
-                height: '54px',
-                borderRadius: '9px',
-                background: btn.isOpen ? btn.bgActive : btn.bgIdle,
-                borderTop: btn.isOpen ? `2px solid ${btn.borderColor}` : '1.5px solid rgba(218, 165, 32, 0.45)',
-                borderLeft: btn.isOpen ? `2px solid ${btn.borderColor}` : '1.5px solid rgba(218, 165, 32, 0.45)',
-                borderRight: btn.isOpen ? `2px solid ${btn.borderColor}` : '1.5px solid rgba(218, 165, 32, 0.45)',
-                borderBottom: `3.5px solid ${btn.bevelColor}`,
-                boxShadow: btn.isOpen
-                  ? '0 4px 12px rgba(250, 204, 21, 0.35)'
-                  : '0 4px 8px rgba(0,0,0,0.6)',
-                color: '#f8fafc',
-                cursor: 'pointer',
-                touchAction: 'manipulation',
-                display: 'flex',
-                flexDirection: 'column',
-                alignItems: 'center',
-                justifyContent: 'center',
-                gap: '2px',
-                padding: '3px 2px',
-                transform: isPressed
-                  ? 'scale(0.90) translateY(2px)'
-                  : btn.isOpen
-                    ? 'translateY(-2px)'
-                    : 'none',
-                transition: 'transform 0.14s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.15s ease',
-              }}
-              title={btn.title}
-            >
-              {/* Clipped Golden Ripple Wave inside Button Bounds */}
-              {burst && (
-                <span
-                  key={burst.id}
-                  style={{
-                    position: 'absolute',
-                    inset: 0,
-                    borderRadius: '8px',
-                    overflow: 'hidden',
-                    pointerEvents: 'none',
-                  }}
-                >
-                  <span
-                    style={{
-                      position: 'absolute',
-                      left: `${burst.xPct}%`,
-                      top: `${burst.yPct}%`,
-                      width: '18px',
-                      height: '18px',
-                      borderRadius: '50%',
-                      borderTop: '2px solid #fef08a',
-                      borderLeft: '2px solid #fef08a',
-                      borderRight: '2px solid #fef08a',
-                      borderBottom: '2px solid #fef08a',
-                      background: 'radial-gradient(circle, rgba(250, 204, 21, 0.45), rgba(56, 189, 248, 0.12), transparent 70%)',
-                      animation: 'hudGoldRipple 0.55s cubic-bezier(0.16, 1, 0.3, 1) forwards',
-                    }}
-                  />
-                </span>
-              )}
-
-              {btn.badge > 0 && (
-                <span
-                  style={{
-                    position: 'absolute',
-                    top: '-5px',
-                    right: '-4px',
-                    minWidth: '16px',
-                    height: '16px',
-                    padding: '0 4px',
-                    borderRadius: '999px',
-                    background: btn.badgeColor,
-                    borderTop: '1.5px solid #fef08a',
-                    borderLeft: '1.5px solid #fef08a',
-                    borderRight: '1.5px solid #fef08a',
-                    borderBottom: '1.5px solid #fef08a',
-                    color: '#fff',
-                    font: "800 9px 'Barlow Condensed', sans-serif",
-                    fontVariantNumeric: 'tabular-nums',
-                    display: 'grid',
-                    placeItems: 'center',
-                    boxShadow: '0 2px 5px rgba(0,0,0,0.75)',
-                    zIndex: 3,
-                  }}
-                >
-                  {btn.badge}
-                </span>
-              )}
-              <div style={{ filter: 'drop-shadow(0 2px 4px rgba(0,0,0,0.65))', position: 'relative', zIndex: 2 }}>
-                {render3DModelIcon(btn.key, 25)}
-              </div>
-              <span
-                style={{
-                  position: 'relative',
-                  zIndex: 2,
-                  font: "800 8.5px 'Barlow Condensed', sans-serif",
-                  color: btn.isOpen ? '#fef08a' : '#e2e8f0',
-                  letterSpacing: '0.03em',
-                  lineHeight: 1,
-                  whiteSpace: 'nowrap',
-                }}
-              >
-                {btn.label}
-              </span>
-            </button>
-          );
-        })}
-
-        {/* Castle Inside Kingdom / World Toggle Button with Full-Bleed Crest & Rune Sparkle Burst */}
-        {(() => {
-          const castleBurst = rippleBursts['castle'];
-          const isCastlePressed = pressedBtnKey === 'castle';
-          const isCastlePopping = springPopKey === 'castle';
-          return (
-            <button
-              className={`hud-castle-corner-btn${isCastlePopping ? ' hud-spring-pop' : ''}`}
-              type="button"
-              onPointerDown={() => handleHudPointerDown('castle')}
-              onPointerLeave={() => handleHudPointerLeave('castle')}
-              onPointerCancel={() => handleHudPointerLeave('castle')}
-              onClick={(e) => {
-                triggerTouchVfx(e, 'castle');
-                onToggleViewMode();
-              }}
-              style={{
-                position: 'relative',
-                overflow: 'visible',
-                width: '66px',
-                height: '58px',
-                borderRadius: '11px',
-                background:
-                  viewMode === 'world'
-                    ? '#1c1208'
-                    : 'linear-gradient(180deg, #0284c7 0%, #0369a1 65%, #0c4a6e 100%)',
-                borderTop: viewMode === 'world' ? '2px solid #fde047' : '2px solid #38bdf8',
-                borderLeft: viewMode === 'world' ? '2px solid #fde047' : '2px solid #38bdf8',
-                borderRight: viewMode === 'world' ? '2px solid #fde047' : '2px solid #38bdf8',
-                borderBottom: viewMode === 'world' ? '4px solid #78350f' : '4px solid #082f49',
-                boxShadow:
-                  viewMode === 'world'
-                    ? '0 4px 16px rgba(250, 204, 21, 0.45), 0 0 12px rgba(56, 189, 248, 0.3)'
-                    : '0 4px 14px rgba(56, 189, 248, 0.45)',
-                color: '#fff',
-                cursor: 'pointer',
-                touchAction: 'manipulation',
-                display: 'flex',
-                flexDirection: 'column',
-                alignItems: 'center',
-                justifyContent: viewMode === 'world' ? 'flex-end' : 'center',
-                gap: '1px',
-                padding: '3px 2px',
-                transform: isCastlePressed ? 'scale(0.89) translateY(2px)' : undefined,
-                transition: 'transform 0.14s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.18s ease',
-              }}
-              title={
-                viewMode === 'world'
-                  ? 'Enter Inside Kingdom (3D Citadel Courtyard)'
-                  : 'Return to World Map'
-              }
-            >
-              {/* Clipped Artwork, Scrim & Golden Ripple Layer */}
-              <div
-                style={{
-                  position: 'absolute',
-                  inset: 0,
-                  borderRadius: '9px',
-                  overflow: 'hidden',
-                  pointerEvents: 'none',
-                }}
-              >
-                {viewMode === 'world' && (
-                  <>
-                    <img
-                      src={CASTLE_EMBLEM_SRC}
-                      alt="Castle Inside"
-                      draggable={false}
-                      style={{
-                        width: '100%',
-                        height: '100%',
-                        objectFit: 'cover',
-                        objectPosition: 'center 42%',
-                        display: 'block',
-                        transform: isCastlePressed ? 'scale(1.08)' : 'scale(1.03)',
-                        transition: 'transform 0.2s ease',
-                      }}
-                    />
-                    {/* Bottom Contrast Scrim for Sharp Label Readability */}
-                    <div
-                      style={{
-                        position: 'absolute',
-                        inset: 0,
-                        background:
-                          'linear-gradient(180deg, rgba(6,10,18,0.02) 0%, rgba(6,10,18,0.18) 46%, rgba(6,10,18,0.92) 100%)',
-                      }}
-                    />
-                  </>
-                )}
-
-                {/* Expanding Golden & Cyan Ripple Wave on Tap/Click */}
-                {castleBurst && (
-                  <span
-                    key={`rip-${castleBurst.id}`}
-                    style={{
-                      position: 'absolute',
-                      left: `${castleBurst.xPct}%`,
-                      top: `${castleBurst.yPct}%`,
-                      width: '22px',
-                      height: '22px',
-                      borderRadius: '50%',
-                      borderTop: '2.5px solid #fef08a',
-                      borderLeft: '2.5px solid #fef08a',
-                      borderRight: '2.5px solid #fef08a',
-                      borderBottom: '2.5px solid #fef08a',
-                      background:
-                        'radial-gradient(circle, rgba(254, 240, 138, 0.55) 0%, rgba(56, 189, 248, 0.35) 55%, transparent 75%)',
-                      animation: 'hudGoldRipple 0.58s cubic-bezier(0.16, 1, 0.3, 1) forwards',
-                    }}
-                  />
-                )}
-              </div>
-
-              {/* Radial Cyan & Gold Rune Sparkle Burst Outside Button Frame */}
-              {castleBurst && (
-                <div
-                  key={`spk-${castleBurst.id}`}
-                  style={{
-                    position: 'absolute',
-                    inset: 0,
-                    pointerEvents: 'none',
-                    zIndex: 6,
-                  }}
-                >
-                  {[0, 45, 90, 135, 180, 225, 270, 315].map((deg, idx) => {
-                    const rad = (deg * Math.PI) / 180;
-                    const dist = idx % 2 === 0 ? 34 : 26;
-                    const tx = Math.round(Math.cos(rad) * dist);
-                    const ty = Math.round(Math.sin(rad) * dist);
-                    const isCyan = idx % 2 === 1;
-                    return (
-                      <span
-                        key={deg}
-                        style={
-                          {
-                            position: 'absolute',
-                            left: '50%',
-                            top: '50%',
-                            width: isCyan ? '6px' : '7px',
-                            height: isCyan ? '6px' : '7px',
-                            borderRadius: '50%',
-                            background: isCyan ? '#38bdf8' : '#fef08a',
-                            boxShadow: isCyan
-                              ? '0 0 8px #38bdf8, 0 0 14px #0ea5e9'
-                              : '0 0 8px #fde047, 0 0 14px #f59e0b',
-                            '--spark-tx': `${tx}px`,
-                            '--spark-ty': `${ty}px`,
-                            animation: 'runeSparkFly 0.52s cubic-bezier(0.16, 1, 0.3, 1) forwards',
-                          } as React.CSSProperties
-                        }
-                      />
-                    );
-                  })}
-                </div>
-              )}
-
-              {viewMode === 'kingdom' && (
-                <span style={{ fontSize: '20px', lineHeight: 1, position: 'relative', zIndex: 2 }}>
-                  🌍
-                </span>
-              )}
-              <span
-                style={{
-                  position: 'relative',
-                  zIndex: 2,
-                  font: "900 10.5px 'Barlow Condensed', sans-serif",
-                  color: '#fef08a',
-                  letterSpacing: '0.05em',
-                  lineHeight: 1,
-                  whiteSpace: 'nowrap',
-                  textShadow: '0 1px 4px rgba(0,0,0,0.95), 0 0 8px rgba(0,0,0,0.9)',
-                }}
-              >
-                {viewMode === 'world' ? 'CASTLE' : 'WORLD'}
-              </span>
-              <span
-                style={{
-                  position: 'relative',
-                  zIndex: 2,
-                  font: "800 7.5px 'Barlow Condensed', sans-serif",
-                  color: viewMode === 'world' ? '#7dd3fc' : '#bae6fd',
-                  textTransform: 'uppercase',
-                  lineHeight: 1,
-                  whiteSpace: 'nowrap',
-                  textShadow: '0 1px 3px rgba(0,0,0,0.95)',
-                  marginBottom: viewMode === 'world' ? '1px' : 0,
-                }}
-              >
-                {viewMode === 'world' ? 'Inside' : 'Map'}
-              </span>
-            </button>
-          );
-        })()}
-      </div>
+          {
+            key: 'castle',
+            label: viewMode === 'world' ? 'CASTLE' : 'WORLD',
+            isActive: viewMode === 'kingdom',
+            title: viewMode === 'world' ? 'Enter Inside Kingdom (3D Citadel Courtyard)' : 'Return to World Map',
+            onClick: (e) => {
+              triggerTouchVfx(e, 'castle');
+              onToggleViewMode();
+            },
+          },
+        ]}
+        renderFallbackSvg={(k, size) => render3DModelIcon(k === 'command' ? 'hub' : k === 'castle' ? 'hub' : k, size)}
+      />
 
       {/* ============================================================ */}
       {/* 5B. RIGHT-SIDE NEPALESE BATTALION COMMANDER POPUP            */}
@@ -5227,7 +4973,7 @@ export const MapNavigationUI: React.FC<MapNavigationUIProps> = ({
             {/* Header */}
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid rgba(250,204,21,0.25)', paddingBottom: '10px' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                {render3DModelIcon('inventory', 34)}
+                <Hud3DSnapshotBadge iconKey="inventory" size={38} fallback={render3DModelIcon('inventory', 34)} />
                 <div>
                   <h2 style={{ margin: 0, font: "800 20px 'Barlow Condensed', sans-serif", color: '#fef08a', letterSpacing: '0.04em' }}>
                     3D IMPERIAL VAULT & INVENTORY
@@ -5439,246 +5185,51 @@ export const MapNavigationUI: React.FC<MapNavigationUIProps> = ({
       )}
 
       {/* ============================================================ */}
-      {/* 13. 3D IMPERIAL & DAILY QUESTS MODAL                         */}
+      {/* 13. ORNATE QUEST BOARD (5 TABS + DAILY ACTIVITY CHESTS)      */}
       {/* ============================================================ */}
-      {isQuestsOpen && (
-        <div
-          style={{
-            position: 'fixed',
-            inset: 0,
-            background: 'rgba(2, 6, 23, 0.88)',
-            zIndex: 105,
-            display: 'grid',
-            placeItems: 'center',
-            padding: '20px',
-            pointerEvents: 'auto',
-          }}
-          onClick={() => setIsQuestsOpen(false)}
-        >
-          <div
-            style={{
-              width: '100%',
-              maxWidth: '660px',
-              background: 'linear-gradient(180deg, #0f172a 0%, #090d16 100%)',
-              borderTop: '2px solid #38bdf8',
-              borderLeft: '2px solid #38bdf8',
-              borderRight: '2px solid #38bdf8',
-              borderBottom: '5px solid #0c4a6e',
-              borderRadius: '16px',
-              padding: '18px 20px',
-              boxShadow: '0 24px 64px rgba(0,0,0,0.9)',
-              color: '#f8fafc',
-              display: 'flex',
-              flexDirection: 'column',
-              gap: '14px',
-            }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            {/* Header */}
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid rgba(56,189,248,0.25)', paddingBottom: '10px' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                {render3DModelIcon('quests', 34)}
-                <div>
-                  <h2 style={{ margin: 0, font: "800 20px 'Barlow Condensed', sans-serif", color: '#fef08a', letterSpacing: '0.04em' }}>
-                    3D IMPERIAL DECREES & REALM QUESTS
-                  </h2>
-                  <div style={{ fontSize: '11.5px', color: '#7dd3fc' }}>
-                    Complete 3D Citadel Merges & Crystal Tower Recon to claim Royal Treasury Rewards
-                  </div>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => setIsQuestsOpen(false)}
-                style={{
-                  width: '32px',
-                  height: '32px',
-                  borderRadius: '8px',
-                  background: 'rgba(30, 41, 59, 0.9)',
-                  border: '1px solid rgba(255,255,255,0.2)',
-                  color: '#e2e8f0',
-                  cursor: 'pointer',
-                  fontSize: '16px',
-                }}
-              >
-                ✕
-              </button>
-            </div>
-
-            {/* Quest Tabs */}
-            <div style={{ display: 'flex', gap: '8px' }}>
-              <button
-                type="button"
-                onClick={() => setQuestTab('imperial')}
-                style={{
-                  padding: '6px 16px',
-                  borderRadius: '8px',
-                  background:
-                    questTab === 'imperial'
-                      ? 'linear-gradient(180deg, #0284c7, #1e3a8a)'
-                      : 'rgba(30, 41, 59, 0.75)',
-                  borderTop: questTab === 'imperial' ? '1.5px solid #38bdf8' : '1px solid rgba(255,255,255,0.12)',
-                  borderLeft: questTab === 'imperial' ? '1.5px solid #38bdf8' : '1px solid rgba(255,255,255,0.12)',
-                  borderRight: questTab === 'imperial' ? '1.5px solid #38bdf8' : '1px solid rgba(255,255,255,0.12)',
-                  borderBottom: questTab === 'imperial' ? '3px solid #0c4a6e' : '3px solid #0f172a',
-                  color: questTab === 'imperial' ? '#fef08a' : '#cbd5e1',
-                  font: "800 12.5px 'Barlow Condensed'",
-                  cursor: 'pointer',
-                }}
-              >
-                👑 Main Imperial Quests
-              </button>
-              <button
-                type="button"
-                onClick={() => setQuestTab('daily')}
-                style={{
-                  padding: '6px 16px',
-                  borderRadius: '8px',
-                  background:
-                    questTab === 'daily'
-                      ? 'linear-gradient(180deg, #0284c7, #1e3a8a)'
-                      : 'rgba(30, 41, 59, 0.75)',
-                  borderTop: questTab === 'daily' ? '1.5px solid #38bdf8' : '1px solid rgba(255,255,255,0.12)',
-                  borderLeft: questTab === 'daily' ? '1.5px solid #38bdf8' : '1px solid rgba(255,255,255,0.12)',
-                  borderRight: questTab === 'daily' ? '1.5px solid #38bdf8' : '1px solid rgba(255,255,255,0.12)',
-                  borderBottom: questTab === 'daily' ? '3px solid #0c4a6e' : '3px solid #0f172a',
-                  color: questTab === 'daily' ? '#fef08a' : '#cbd5e1',
-                  font: "800 12.5px 'Barlow Condensed'",
-                  cursor: 'pointer',
-                }}
-              >
-                ⚔️ Daily Vanguard Tasks
-              </button>
-            </div>
-
-            {/* Quest List */}
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', maxHeight: '360px', overflowY: 'auto' }}>
-              {questsList
-                .filter((q) => q.tab === questTab)
-                .map((q) => (
-                  <div
-                    key={q.id}
-                    style={{
-                      background: 'linear-gradient(180deg, rgba(30, 41, 59, 0.9) 0%, rgba(15, 23, 42, 0.95) 100%)',
-                      borderTop: q.claimed
-                        ? '1px solid rgba(148, 163, 184, 0.25)'
-                        : '1.5px solid rgba(56, 189, 248, 0.5)',
-                      borderLeft: q.claimed
-                        ? '1px solid rgba(148, 163, 184, 0.25)'
-                        : '1.5px solid rgba(56, 189, 248, 0.5)',
-                      borderRight: q.claimed
-                        ? '1px solid rgba(148, 163, 184, 0.25)'
-                        : '1.5px solid rgba(56, 189, 248, 0.5)',
-                      borderBottom: q.claimed ? '3px solid #1e293b' : '4px solid #0c4a6e',
-                      borderRadius: '12px',
-                      padding: '12px 14px',
-                      display: 'flex',
-                      justifyContent: 'space-between',
-                      alignItems: 'center',
-                      gap: '12px',
-                      opacity: q.claimed ? 0.68 : 1,
-                    }}
-                  >
-                    <div style={{ flex: 1 }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                        <span style={{ font: "800 15px 'Barlow Condensed'", color: '#fef08a' }}>
-                          {q.title}
-                        </span>
-                        <span
-                          style={{
-                            fontSize: '10px',
-                            padding: '1px 6px',
-                            borderRadius: '4px',
-                            background: 'rgba(56, 189, 248, 0.15)',
-                            border: '1px solid rgba(56, 189, 248, 0.4)',
-                            color: '#7dd3fc',
-                            fontWeight: 700,
-                          }}
-                        >
-                          {q.progress}/{q.target}
-                        </span>
-                      </div>
-                      <div style={{ fontSize: '11.5px', color: '#cbd5e1', marginTop: '3px' }}>
-                        {q.desc}
-                      </div>
-                      <div style={{ display: 'flex', gap: '10px', marginTop: '7px', fontSize: '11.5px', fontWeight: 700 }}>
-                        <span style={{ color: '#fde047' }}>
-                          🪙 +{q.rewardAmount.toLocaleString()} {q.rewardType.toUpperCase()}
-                        </span>
-                        <span style={{ color: '#c084fc' }}>💎 +{q.secondaryGems} GEMS</span>
-                      </div>
-                    </div>
-
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', alignItems: 'flex-end' }}>
-                      {!q.claimed ? (
-                        <button
-                          type="button"
-                          onClick={() => handleClaimQuest(q.id)}
-                          style={{
-                            padding: '7px 16px',
-                            borderRadius: '8px',
-                            background: 'linear-gradient(180deg, #16a34a 0%, #15803d 100%)',
-                            borderTop: '1.5px solid #86efac',
-                            borderLeft: '1.5px solid #86efac',
-                            borderRight: '1.5px solid #86efac',
-                            borderBottom: '3.5px solid #14532d',
-                            color: '#fef08a',
-                            font: "800 12.5px 'Barlow Condensed'",
-                            cursor: 'pointer',
-                            whiteSpace: 'nowrap',
-                          }}
-                        >
-                          🎁 CLAIM REWARD
-                        </button>
-                      ) : (
-                        <span
-                          style={{
-                            padding: '6px 12px',
-                            borderRadius: '7px',
-                            background: 'rgba(51, 65, 85, 0.5)',
-                            color: '#94a3b8',
-                            font: "700 11.5px 'Barlow Condensed'",
-                          }}
-                        >
-                          ✓ CLAIMED
-                        </span>
-                      )}
-
-                      {q.actionType && (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setIsQuestsOpen(false);
-                            if (q.actionType === 'enter_kingdom' && viewMode === 'world') {
-                              onToggleViewMode();
-                            } else if (q.actionType === 'open_worldmap') {
-                              onOpenStrategicWorldMap();
-                            } else if (q.actionType === 'relocate') {
-                              onRelocateCastles();
-                            } else if (q.actionType === 'filter_3d') {
-                              onToggleStrategicFilter(!isStrategicFilterActive);
-                            }
-                          }}
-                          style={{
-                            padding: '3px 10px',
-                            borderRadius: '6px',
-                            background: 'rgba(14, 116, 144, 0.35)',
-                            border: '1px solid #38bdf8',
-                            color: '#bae6fd',
-                            font: "700 10.5px 'Barlow Condensed'",
-                            cursor: 'pointer',
-                          }}
-                        >
-                          🎯 Go To Objective
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                ))}
-            </div>
-          </div>
-        </div>
-      )}
+      <QuestBoardModal
+        isOpen={isQuestsOpen}
+        initialCategory={questBoardTab}
+        onClose={() => setIsQuestsOpen(false)}
+        resources={resources}
+        troopInventory={troopInventory}
+        standingPower={standingPower}
+        shrinesHeldCount={shrineRuleStatus.totalShrinesHeld}
+        hasCongress={allianceTerritoryStats.hasCongress}
+        battleReportsCount={battleReportsCount}
+        activeMarchesCount={activeMarchesCount}
+        isStrategicFilterActive={isStrategicFilterActive}
+        infantryGear={infantryGear}
+        onGrantReward={onGrantReward}
+        onShowToast={onShowToast}
+        onOpenCommandHub={onOpenCommandHub}
+        onUnclaimedCountChange={setUnclaimedQuestsCount}
+        onExecuteGoAction={(action: NonNullable<QuestBoardItem['goAction']>) => {
+          if (action === 'enter_kingdom') {
+            if (viewMode === 'world') onToggleViewMode();
+          } else if (action === 'open_worldmap') {
+            onOpenStrategicWorldMap();
+          } else if (action === 'relocate') {
+            onRelocateCastles();
+          } else if (action === 'filter_3d') {
+            onToggleStrategicFilter(!isStrategicFilterActive);
+          } else if (action === 'open_barracks') {
+            onOpenCommandHub('barracks');
+          } else if (action === 'open_research') {
+            onOpenCommandHub('reports_config');
+          } else if (action === 'open_shrines') {
+            onOpenCommandHub('shrines');
+          } else if (action === 'open_gear') {
+            onOpenCommandHub('troops');
+          } else if (action === 'open_search_wood') {
+            setSearchCategory('wood');
+            setIsSearchOpen(true);
+          } else if (action === 'open_search_monster') {
+            setSearchCategory('monsters');
+            setIsSearchOpen(true);
+          }
+        }}
+      />
 
       {/* ============================================================ */}
       {/* 14. 3D ROYAL MAIL & BATTLE DISPATCHES MODAL                  */}
@@ -5719,7 +5270,7 @@ export const MapNavigationUI: React.FC<MapNavigationUIProps> = ({
             {/* Header */}
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid rgba(245,158,11,0.25)', paddingBottom: '10px' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                {render3DModelIcon('mail', 34)}
+                <Hud3DSnapshotBadge iconKey="mail" size={38} fallback={render3DModelIcon('mail', 34)} />
                 <div>
                   <h2 style={{ margin: 0, font: "800 20px 'Barlow Condensed', sans-serif", color: '#fef08a', letterSpacing: '0.04em' }}>
                     3D IMPERIAL MAIL & BATTLE REPORTS
@@ -5977,691 +5528,69 @@ export const MapNavigationUI: React.FC<MapNavigationUIProps> = ({
       )}
 
       {/* ============================================================ */}
-      {/* 15. ALLIANCE HUB, TERRITORY BUFFS & WAR RALLIES MODAL        */}
       {/* ============================================================ */}
-      {isAllianceOpen && (
-        <div
-          style={{
-            position: 'fixed',
-            inset: 0,
-            background: 'rgba(2, 6, 23, 0.88)',
-            zIndex: 105,
-            display: 'grid',
-            placeItems: 'center',
-            padding: '16px',
-            pointerEvents: 'auto',
-          }}
-          onClick={() => setIsAllianceOpen(false)}
-        >
-          <div
-            style={{
-              width: '100%',
-              maxWidth: '720px',
-              maxHeight: '88dvh',
-              background: 'linear-gradient(180deg, #0f172a 0%, #090d16 100%)',
-              borderTop: '2px solid #34d399',
-              borderLeft: '2px solid #34d399',
-              borderRight: '2px solid #34d399',
-              borderBottom: '5px solid #064e3b',
-              borderRadius: '16px',
-              padding: '18px 20px',
-              boxShadow: '0 24px 64px rgba(0,0,0,0.9)',
-              color: '#f8fafc',
-              display: 'flex',
-              flexDirection: 'column',
-              gap: '12px',
-              overflow: 'hidden',
-            }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            {/* Header */}
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid rgba(52,211,153,0.25)', paddingBottom: '10px' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                {render3DModelIcon('alliance', 34)}
-                <div>
-                  <h2 style={{ margin: 0, font: "800 20px 'Barlow Condensed', sans-serif", color: '#a7f3d0', letterSpacing: '0.04em' }}>
-                    🛡️ [{playerAlliance.tag}] {playerAlliance.alias.toUpperCase()}
-                  </h2>
-                  <div style={{ fontSize: '11.5px', color: '#86efac', fontVariantNumeric: 'tabular-nums' }}>
-                    Shrines: {shrineRuleStatus.totalShrinesHeld}/{shrineRuleStatus.maxShrinesPerAlliance} (C {shrineRuleStatus.heldByTier.shrine_c}/2 · B {shrineRuleStatus.heldByTier.shrine_b}/1 · A {shrineRuleStatus.heldByTier.shrine_a}/1) · Congress: {allianceTerritoryStats.hasCongress ? 'CLAIMED' : shrineRuleStatus.congressUnlocked ? 'UNLOCKED' : 'LOCKED'} · Power: {allianceTerritoryStats.totalPower.toLocaleString()} ⚡
-                  </div>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => setIsAllianceOpen(false)}
-                style={{
-                  width: '32px',
-                  height: '32px',
-                  borderRadius: '8px',
-                  background: 'rgba(30, 41, 59, 0.9)',
-                  border: '1px solid rgba(255,255,255,0.2)',
-                  color: '#e2e8f0',
-                  cursor: 'pointer',
-                  fontSize: '16px',
-                }}
-              >
-                ✕
-              </button>
-            </div>
+      {/* 15. ORNATE ALLIANCE HEADQUARTERS & COMMANDER PROFILE         */}
+      {/* ============================================================ */}
+      <AllianceHeadquartersModal
+        isOpen={isAllianceOpen}
+        initialTab={allianceTab}
+        onClose={() => setIsAllianceOpen(false)}
+        playerAlliance={playerAlliance}
+        onUpdateAllianceIdentity={onUpdateAllianceIdentity}
+        shrineRuleStatus={shrineRuleStatus}
+        shrineGarrisons={shrineGarrisons}
+        conqueredPlots={conqueredPlots}
+        castles={castles}
+        resources={resources}
+        balanceConfig={balanceConfig}
+        bonuses={bonuses}
+        onPanTo={onPanTo}
+        onOpenCommandHub={onOpenCommandHub}
+        onRelinquishStructure={onRelinquishStructure}
+        onGrantReward={onGrantReward}
+        onShowToast={onShowToast}
+      />
 
-            {/* Alliance Hub Tabs */}
-            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-              {(
-                [
-                  { id: 'profile', label: `🛡️ Alliance Profile (${allianceTerritoryStats.capturedTotal})` },
-                  { id: 'overview', label: '👑 Overview & Territory Buffs' },
-                  { id: 'members', label: `🏰 Alliance Castles (${allianceMemberCastles.length})` },
-                  { id: 'war', label: `⚔️ War Rallies & Targets (${enemyCastles.length})` },
-                ] as const
-              ).map((tab) => (
-                <button
-                  key={tab.id}
-                  type="button"
-                  onClick={() => setAllianceTab(tab.id)}
-                  style={{
-                    minHeight: '36px',
-                    padding: '6px 14px',
-                    borderRadius: '8px',
-                    background:
-                      allianceTab === tab.id
-                        ? 'linear-gradient(180deg, #059669, #064e3b)'
-                        : 'rgba(30, 41, 59, 0.75)',
-                    borderTop: allianceTab === tab.id ? '1.5px solid #34d399' : '1px solid rgba(255,255,255,0.12)',
-                    borderLeft: allianceTab === tab.id ? '1.5px solid #34d399' : '1px solid rgba(255,255,255,0.12)',
-                    borderRight: allianceTab === tab.id ? '1.5px solid #34d399' : '1px solid rgba(255,255,255,0.12)',
-                    borderBottom: allianceTab === tab.id ? '3px solid #022c22' : '3px solid #0f172a',
-                    color: allianceTab === tab.id ? '#fef08a' : '#cbd5e1',
-                    font: "800 12px 'Barlow Condensed', sans-serif",
-                    cursor: 'pointer',
-                  }}
-                >
-                  {tab.label}
-                </button>
-              ))}
-            </div>
-
-            {/* Tab Content */}
-            <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '10px', paddingRight: '4px' }}>
-              {allianceTab === 'profile' && (() => {
-                const heldPlots = RESERVED_PLOTS.filter(
-                  (plot) =>
-                    conqueredPlots?.[plot.id] === 'alliance' ||
-                    shrineGarrisons[plot.id]?.ownerFaction === 'alliance'
-                );
-                const tierPriority: Record<string, number> = {
-                  congress: 0,
-                  shrine_a: 1,
-                  shrine_b: 2,
-                  shrine_c: 3,
-                };
-                heldPlots.sort((a, b) => (tierPriority[a.type] ?? 9) - (tierPriority[b.type] ?? 9));
-
-                return (
-                  <>
-                    {/* Alliance Crest & Identity Card */}
-                    <div
-                      style={{
-                        background: 'linear-gradient(135deg, rgba(6, 78, 59, 0.42), rgba(15, 23, 42, 0.94))',
-                        border: '1px solid rgba(52, 211, 153, 0.45)',
-                        borderRadius: '11px',
-                        padding: '12px 14px',
-                        display: 'flex',
-                        flexDirection: 'column',
-                        gap: '10px',
-                      }}
-                    >
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                          {render3DModelIcon('alliance', 38)}
-                          <div>
-                            <div style={{ font: "800 18px 'Barlow Condensed', sans-serif", color: '#fef08a', letterSpacing: '0.04em' }}>
-                              [{playerAlliance.tag}] {playerAlliance.alias}
-                            </div>
-                            <div style={{ fontSize: '11px', color: '#a7f3d0', fontVariantNumeric: 'tabular-nums' }}>
-                              Combined Power: {allianceTerritoryStats.totalPower.toLocaleString()} ⚡ · {allianceMemberCastles.length} Allied Kingdoms · Continent 1 (3200×3200)
-                            </div>
-                          </div>
-                        </div>
-
-                        <div style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
-                          <div style={{ font: "800 14px 'Barlow Condensed', sans-serif", color: shrineRuleStatus.atShrineCap ? '#fca5a5' : '#34d399' }}>
-                            SHRINES HELD: {shrineRuleStatus.totalShrinesHeld} / {shrineRuleStatus.maxShrinesPerAlliance}
-                          </div>
-                          <div style={{ fontSize: '10.5px', color: shrineRuleStatus.congressUnlocked ? '#fde047' : '#cbd5e1' }}>
-                            Req for Congress: C {shrineRuleStatus.heldByTier.shrine_c}/2 · B {shrineRuleStatus.heldByTier.shrine_b}/1 · A {shrineRuleStatus.heldByTier.shrine_a}/1
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* Inline 4-Char Tag + 4-Word Alias Editor */}
-                      <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center', borderTop: '1px solid rgba(255,255,255,0.08)', paddingTop: '8px' }}>
-                        <input
-                          type="text"
-                          maxLength={4}
-                          value={allianceTagDraft}
-                          onChange={(e) => setAllianceTagDraft(e.target.value.replace(/[^a-zA-Z0-9]/g, '').toUpperCase().slice(0, 4))}
-                          placeholder="GORK"
-                          style={{
-                            width: '76px',
-                            minHeight: '34px',
-                            padding: '4px 8px',
-                            borderRadius: '6px',
-                            background: '#020617',
-                            border: '1px solid rgba(56, 189, 248, 0.45)',
-                            color: '#fef08a',
-                            fontWeight: 800,
-                            fontSize: '12px',
-                            textTransform: 'uppercase',
-                          }}
-                        />
-                        <input
-                          type="text"
-                          value={allianceAliasDraft}
-                          onChange={(e) => setAllianceAliasDraft(e.target.value)}
-                          placeholder="Royal Himalayan Mountain Guard"
-                          style={{
-                            flex: 1,
-                            minWidth: '200px',
-                            minHeight: '34px',
-                            padding: '4px 10px',
-                            borderRadius: '6px',
-                            background: '#020617',
-                            border: '1px solid rgba(56, 189, 248, 0.45)',
-                            color: '#f8fafc',
-                            fontSize: '12px',
-                          }}
-                        />
-                        <button
-                          type="button"
-                          onClick={() => onUpdateAllianceIdentity(normalizeAllianceTag(allianceTagDraft), allianceAliasDraft)}
-                          style={{
-                            minHeight: '34px',
-                            padding: '5px 12px',
-                            borderRadius: '7px',
-                            background: 'linear-gradient(180deg, #059669, #065f46)',
-                            border: '1px solid #34d399',
-                            color: '#fff',
-                            font: "800 11.5px 'Barlow Condensed', sans-serif",
-                            cursor: 'pointer',
-                          }}
-                        >
-                          Save Tag & 4-Word Alias
-                        </button>
-                      </div>
-                      {(() => {
-                        const check = validateAllianceAlias(allianceAliasDraft);
-                        return (
-                          <div style={{ fontSize: '10.5px', color: check.valid ? '#86efac' : '#fca5a5' }}>
-                            {check.valid
-                              ? `Displayed Badge: [${normalizeAllianceTag(allianceTagDraft)}] ${check.normalized}`
-                              : check.error}
-                          </div>
-                        );
-                      })()}
-                    </div>
-
-                    {/* Held Shrines & Congress Roster */}
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
-                      <div style={{ font: "800 14.5px 'Barlow Condensed', sans-serif", color: '#fef08a', letterSpacing: '0.04em' }}>
-                        ⛩️ HELD SHRINES & CITADELS BY [{playerAlliance.tag}] {playerAlliance.alias.toUpperCase()} ({heldPlots.length})
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setIsAllianceOpen(false);
-                          onOpenCommandHub('shrines');
-                        }}
-                        style={{
-                          minHeight: '32px',
-                          padding: '4px 10px',
-                          borderRadius: '7px',
-                          background: 'rgba(2, 132, 199, 0.3)',
-                          border: '1px solid #38bdf8',
-                          color: '#bae6fd',
-                          font: "700 11px 'Barlow Condensed', sans-serif",
-                          cursor: 'pointer',
-                        }}
-                      >
-                        Open Shrines Hub ↗
-                      </button>
-                    </div>
-
-                    {heldPlots.length === 0 ? (
-                      <div style={{ background: 'rgba(15, 23, 42, 0.85)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '10px', padding: '14px', fontSize: '12px', color: '#94a3b8' }}>
-                        [{playerAlliance.tag}] {playerAlliance.alias} does not hold any Crystal Shrines yet. Capture up to 5 Shrines across Continent 1 (at least 2 C Shrines, 1 B Shrine, and 1 A Shrine to unlock The Congress at [1600, 1600]).
-                      </div>
-                    ) : (
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                        {heldPlots.map((plot) => {
-                          const garrison = shrineGarrisons[plot.id];
-                          const tierMeta =
-                            plot.type === 'congress'
-                              ? { tag: 'CONGRESS 👑', accent: '#facc15', border: 'rgba(250, 204, 21, 0.55)', bg: 'rgba(113, 63, 18, 0.25)', buff: '+20% Attack / Speed / Yield' }
-                              : plot.type === 'shrine_a'
-                                ? { tag: 'A SHRINE · BLUE CRYSTAL ★★★', accent: '#38bdf8', border: 'rgba(56, 189, 248, 0.55)', bg: 'rgba(12, 74, 110, 0.25)', buff: '+12% Alliance Attack' }
-                                : plot.type === 'shrine_b'
-                                  ? { tag: 'B SHRINE · RED CRYSTAL ★★', accent: '#f87171', border: 'rgba(248, 113, 113, 0.55)', bg: 'rgba(127, 29, 29, 0.22)', buff: '+8% March Speed' }
-                                  : { tag: 'C SHRINE · PURPLE CRYSTAL ★', accent: '#c084fc', border: 'rgba(192, 132, 252, 0.55)', bg: 'rgba(88, 28, 135, 0.22)', buff: '+5% Resource Yield' };
-                          const garrisonStacks = [
-                            ...(garrison?.playerStacks || []),
-                            ...(garrison?.allianceReinforcements || []),
-                          ];
-                          const gMetrics = calculateArmyMetrics(garrisonStacks, balanceConfig, bonuses);
-                          const totalTroops = garrisonStacks.reduce((s, st) => s + st.count, 0);
-
-                          return (
-                            <div
-                              key={plot.id}
-                              style={{
-                                background: tierMeta.bg,
-                                border: `1px solid ${tierMeta.border}`,
-                                borderRadius: '10px',
-                                padding: '10px 12px',
-                                display: 'flex',
-                                justifyContent: 'space-between',
-                                alignItems: 'center',
-                                flexWrap: 'wrap',
-                                gap: '10px',
-                              }}
-                            >
-                              <div style={{ minWidth: '220px', flex: 1 }}>
-                                <div style={{ display: 'flex', alignItems: 'center', gap: '7px', flexWrap: 'wrap' }}>
-                                  <span style={{ font: "800 14.5px 'Barlow Condensed', sans-serif", color: '#f8fafc' }}>
-                                    {plot.name}
-                                  </span>
-                                  <span style={{ font: "800 10.5px 'Barlow Condensed', sans-serif", color: tierMeta.accent }}>
-                                    {tierMeta.tag}
-                                  </span>
-                                  <span style={{ fontSize: '10.5px', color: '#6ee7b7', fontWeight: 700 }}>
-                                    · Held by [{playerAlliance.tag}] {playerAlliance.alias}
-                                  </span>
-                                </div>
-                                <div style={{ fontSize: '11px', color: '#cbd5e1', marginTop: '3px', fontVariantNumeric: 'tabular-nums' }}>
-                                  Coords: [{Math.round(plot.position[0])}, {Math.round(plot.position[2])}] · Buff: {tierMeta.buff}
-                                </div>
-                                <div style={{ fontSize: '10.5px', color: '#94a3b8', marginTop: '2px', fontVariantNumeric: 'tabular-nums' }}>
-                                  Garrison: {totalTroops.toLocaleString()} troops ({gMetrics.totalPower.toLocaleString()} ⚡) · Barrier: {garrison ? `${garrison.barrierHp.toLocaleString()} / ${garrison.maxBarrierHp.toLocaleString()} (${garrison.barrierActive ? 'Shield ON' : 'Shield OFF'})` : 'Ready'}
-                                </div>
-                              </div>
-
-                              <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setIsAllianceOpen(false);
-                                    onPanTo(plot.position[0], plot.position[2]);
-                                    onShowToast?.(`📍 Focused on ${plot.name} [${Math.round(plot.position[0])}, ${Math.round(plot.position[2])}]`);
-                                  }}
-                                  style={{
-                                    minHeight: '34px',
-                                    padding: '5px 10px',
-                                    borderRadius: '7px',
-                                    background: 'rgba(2, 132, 199, 0.35)',
-                                    border: '1px solid #38bdf8',
-                                    color: '#e0f2fe',
-                                    font: "700 11px 'Barlow Condensed', sans-serif",
-                                    cursor: 'pointer',
-                                  }}
-                                >
-                                  Jump 📍
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setIsAllianceOpen(false);
-                                    onOpenCommandHub(plot.type === 'congress' ? 'congress' : 'shrines', plot.id);
-                                  }}
-                                  style={{
-                                    minHeight: '34px',
-                                    padding: '5px 10px',
-                                    borderRadius: '7px',
-                                    background: 'rgba(5, 150, 105, 0.4)',
-                                    border: '1px solid #34d399',
-                                    color: '#a7f3d0',
-                                    font: "700 11px 'Barlow Condensed', sans-serif",
-                                    cursor: 'pointer',
-                                  }}
-                                >
-                                  Manage ⛩️
-                                </button>
-                                {plot.type !== 'congress' && (
-                                  <button
-                                    type="button"
-                                    onClick={() => onRelinquishStructure(plot.id)}
-                                    style={{
-                                      minHeight: '34px',
-                                      padding: '5px 10px',
-                                      borderRadius: '7px',
-                                      background: 'rgba(153, 27, 27, 0.4)',
-                                      border: '1px solid #f87171',
-                                      color: '#fecaca',
-                                      font: "700 11px 'Barlow Condensed', sans-serif",
-                                      cursor: 'pointer',
-                                    }}
-                                  >
-                                    Relinquish 🏳️
-                                  </button>
-                                )}
-                              </div>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    )}
-                  </>
-                );
-              })()}
-
-              {allianceTab === 'overview' && (
-                <>
-                  {/* Alliance 4-Char Tag + 4-Word Alias Customizer */}
-                  <div style={{ background: 'rgba(15, 23, 42, 0.92)', border: '1px solid rgba(52, 211, 153, 0.35)', borderRadius: '10px', padding: '10px 12px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                    <div style={{ font: "800 13px 'Barlow Condensed'", color: '#a7f3d0' }}>
-                      ALLIANCE TAG (4 CHARS) & 4-WORD ALIAS
-                    </div>
-                    <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
-                      <input
-                        type="text"
-                        maxLength={4}
-                        value={allianceTagDraft}
-                        onChange={(e) => setAllianceTagDraft(e.target.value.replace(/[^a-zA-Z0-9]/g, '').toUpperCase().slice(0, 4))}
-                        placeholder="GORK"
-                        style={{
-                          width: '82px',
-                          minHeight: '34px',
-                          padding: '4px 8px',
-                          borderRadius: '6px',
-                          background: '#020617',
-                          border: '1px solid rgba(56, 189, 248, 0.45)',
-                          color: '#fef08a',
-                          fontWeight: 800,
-                          fontSize: '12px',
-                          textTransform: 'uppercase',
-                        }}
-                      />
-                      <input
-                        type="text"
-                        value={allianceAliasDraft}
-                        onChange={(e) => setAllianceAliasDraft(e.target.value)}
-                        placeholder="Royal Himalayan Mountain Guard"
-                        style={{
-                          flex: 1,
-                          minWidth: '210px',
-                          minHeight: '34px',
-                          padding: '4px 10px',
-                          borderRadius: '6px',
-                          background: '#020617',
-                          border: '1px solid rgba(56, 189, 248, 0.45)',
-                          color: '#f8fafc',
-                          fontSize: '12px',
-                        }}
-                      />
-                      <button
-                        type="button"
-                        onClick={() => onUpdateAllianceIdentity(normalizeAllianceTag(allianceTagDraft), allianceAliasDraft)}
-                        style={{
-                          minHeight: '34px',
-                          padding: '5px 12px',
-                          borderRadius: '7px',
-                          background: 'linear-gradient(180deg, #059669, #065f46)',
-                          border: '1px solid #34d399',
-                          color: '#fff',
-                          font: "800 11.5px 'Barlow Condensed'",
-                          cursor: 'pointer',
-                        }}
-                      >
-                        Update Tag & Alias
-                      </button>
-                    </div>
-                    {(() => {
-                      const check = validateAllianceAlias(allianceAliasDraft);
-                      return (
-                        <div style={{ fontSize: '10.5px', color: check.valid ? '#86efac' : '#fca5a5' }}>
-                          {check.valid
-                            ? `Active Format: [${normalizeAllianceTag(allianceTagDraft)}] ${check.normalized}`
-                            : check.error}
-                        </div>
-                      );
-                    })()}
-                  </div>
-
-                  <div
-                    style={{
-                      display: 'grid',
-                      gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
-                      gap: '10px',
-                    }}
-                  >
-                    <div style={{ background: 'rgba(6, 78, 59, 0.35)', border: '1px solid rgba(52, 211, 153, 0.45)', borderRadius: '10px', padding: '10px 12px' }}>
-                      <div style={{ fontSize: '10px', color: '#6ee7b7', textTransform: 'uppercase' }}>Congress Prerequisite</div>
-                      <div style={{ font: "800 17px 'Barlow Condensed'", color: allianceTerritoryStats.hasCongress ? '#fef08a' : shrineRuleStatus.congressUnlocked ? '#34d399' : '#fbbf24' }}>
-                        {allianceTerritoryStats.hasCongress ? '👑 CLAIMED (+20% ALL)' : shrineRuleStatus.congressUnlocked ? '🔓 UNLOCKED' : '🔒 NEED 2C 1B 1A'}
-                      </div>
-                      <div style={{ fontSize: '10px', color: '#cbd5e1' }}>Shrine Cap: {shrineRuleStatus.totalShrinesHeld}/{shrineRuleStatus.maxShrinesPerAlliance}</div>
-                    </div>
-                    <div style={{ background: 'rgba(30, 41, 59, 0.8)', border: '1px solid rgba(250, 204, 21, 0.35)', borderRadius: '10px', padding: '10px 12px' }}>
-                      <div style={{ fontSize: '10px', color: '#fde047', textTransform: 'uppercase' }}>Attack Bonus</div>
-                      <div style={{ font: "800 18px 'Barlow Condensed'", color: '#fef08a', fontVariantNumeric: 'tabular-nums' }}>
-                        +{allianceTerritoryStats.attackBuff}% Attack
-                      </div>
-                      <div style={{ fontSize: '10px', color: '#94a3b8' }}>{shrineRuleStatus.heldByTier.shrine_a}/1 Req Shrine A</div>
-                    </div>
-                    <div style={{ background: 'rgba(30, 41, 59, 0.8)', border: '1px solid rgba(56, 189, 248, 0.35)', borderRadius: '10px', padding: '10px 12px' }}>
-                      <div style={{ fontSize: '10px', color: '#7dd3fc', textTransform: 'uppercase' }}>March Speed</div>
-                      <div style={{ font: "800 18px 'Barlow Condensed'", color: '#bae6fd', fontVariantNumeric: 'tabular-nums' }}>
-                        +{allianceTerritoryStats.marchBuff}% Speed
-                      </div>
-                      <div style={{ fontSize: '10px', color: '#94a3b8' }}>{shrineRuleStatus.heldByTier.shrine_b}/1 Req Shrine B</div>
-                    </div>
-                    <div style={{ background: 'rgba(30, 41, 59, 0.8)', border: '1px solid rgba(134, 239, 172, 0.35)', borderRadius: '10px', padding: '10px 12px' }}>
-                      <div style={{ fontSize: '10px', color: '#86efac', textTransform: 'uppercase' }}>Resource Yield</div>
-                      <div style={{ font: "800 18px 'Barlow Condensed'", color: '#a7f3d0', fontVariantNumeric: 'tabular-nums' }}>
-                        +{allianceTerritoryStats.yieldBuff}% Yield
-                      </div>
-                      <div style={{ fontSize: '10px', color: '#94a3b8' }}>{shrineRuleStatus.heldByTier.shrine_c}/2 Req Shrine C</div>
-                    </div>
-                  </div>
-
-                  <div style={{ background: 'rgba(15, 23, 42, 0.9)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '10px', padding: '12px' }}>
-                    <div style={{ font: "800 14px 'Barlow Condensed'", color: '#fef08a', marginBottom: '6px' }}>
-                      🏰 CONQUEST DIRECTIVE — 5 SHRINE CAP & CONGRESS RULE
-                    </div>
-                    <div style={{ fontSize: '12px', color: '#cbd5e1', lineHeight: 1.5 }}>
-                      Each alliance may hold at most <b>5 Shrines</b> simultaneously across Continent 1 (3200×3200). To unlock and claim <b>The Congress [1600, 1600]</b>, your alliance must simultaneously hold at least <b>2 C Shrines, 1 B Shrine, and 1 A Shrine</b>. Use the Shrines Hub or Shrine popup to relinquish a held Shrine if needed.
-                    </div>
-                    <div style={{ display: 'flex', gap: '8px', marginTop: '10px', flexWrap: 'wrap' }}>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setIsAllianceOpen(false);
-                          onPanTo(1600, 1600);
-                          onShowToast?.('👑 Focused camera on The Congress [1600, 1600]!');
-                        }}
-                        style={{
-                          padding: '7px 14px',
-                          borderRadius: '8px',
-                          background: 'linear-gradient(180deg, #ca8a04, #854d0e)',
-                          borderTop: '1px solid #fef08a',
-                          borderLeft: '1px solid #fef08a',
-                          borderRight: '1px solid #fef08a',
-                          borderBottom: '3px solid #422006',
-                          color: '#fef08a',
-                          font: "800 12px 'Barlow Condensed'",
-                          cursor: 'pointer',
-                        }}
-                      >
-                        👑 Jump to The Congress [1600, 1600]
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setIsAllianceOpen(false);
-                          onOpenCommandHub('shrines');
-                        }}
-                        style={{
-                          padding: '7px 14px',
-                          borderRadius: '8px',
-                          background: 'linear-gradient(180deg, #0284c7, #0369a1)',
-                          borderTop: '1px solid #7dd3fc',
-                          borderLeft: '1px solid #7dd3fc',
-                          borderRight: '1px solid #7dd3fc',
-                          borderBottom: '3px solid #0c4a6e',
-                          color: '#fff',
-                          font: "800 12px 'Barlow Condensed'",
-                          cursor: 'pointer',
-                        }}
-                      >
-                        ⛩️ Manage Shrines ({shrineRuleStatus.totalShrinesHeld}/5)
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setAllianceTab('war')}
-                        style={{
-                          padding: '7px 14px',
-                          borderRadius: '8px',
-                          background: 'linear-gradient(180deg, #dc2626, #991b1b)',
-                          borderTop: '1px solid #f87171',
-                          borderLeft: '1px solid #f87171',
-                          borderRight: '1px solid #f87171',
-                          borderBottom: '3px solid #450a0a',
-                          color: '#fff',
-                          font: "800 12px 'Barlow Condensed'",
-                          cursor: 'pointer',
-                        }}
-                      >
-                        ⚔️ View {enemyCastles.length} Enemy Threats
-                      </button>
-                    </div>
-                  </div>
-                </>
-              )}
-
-              {allianceTab === 'members' && (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '7px' }}>
-                  {allianceMemberCastles.map((mc) => (
-                    <div
-                      key={mc.id}
-                      style={{
-                        display: 'flex',
-                        justifyContent: 'space-between',
-                        alignItems: 'center',
-                        gap: '10px',
-                        padding: '9px 12px',
-                        background: mc.isMyCastle ? 'rgba(6, 78, 59, 0.35)' : 'rgba(15, 23, 42, 0.85)',
-                        border: mc.isMyCastle ? '1px solid #34d399' : '1px solid rgba(56, 189, 248, 0.28)',
-                        borderRadius: '9px',
-                      }}
-                    >
-                      <div>
-                        <div style={{ font: "800 13.5px 'Barlow Condensed'", color: mc.isMyCastle ? '#fef08a' : '#bae6fd' }}>
-                          {mc.isMyCastle ? '👑 ' : '🛡️ '}
-                          [{playerAlliance.tag}] {mc.owner} · {mc.name} (Lv.{mc.level})
-                        </div>
-                        <div style={{ fontSize: '10.5px', color: '#94a3b8', fontVariantNumeric: 'tabular-nums' }}>
-                          {playerAlliance.alias} · [X:{Math.round(mc.position[0])}, Y:{Math.round(mc.position[2])}] · Power: {mc.power.toLocaleString()} ⚡
-                        </div>
-                      </div>
-                      <div style={{ display: 'flex', gap: '6px' }}>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setIsAllianceOpen(false);
-                            onPanTo(mc.position[0], mc.position[2]);
-                          }}
-                          style={{
-                            padding: '5px 10px',
-                            borderRadius: '6px',
-                            background: 'rgba(2, 132, 199, 0.35)',
-                            border: '1px solid #38bdf8',
-                            color: '#e0f2fe',
-                            font: "700 11px 'Barlow Condensed'",
-                            cursor: 'pointer',
-                          }}
-                        >
-                          Jump 📍
-                        </button>
-                        {!mc.isMyCastle && (
-                          <button
-                            type="button"
-                            onClick={() => {
-                              onGrantReward?.('gold', 250, `Alliance Aid to ${mc.owner}`);
-                              onShowToast?.(`🛡️ Sent Vanguard reinforcements to ${mc.owner}! (+250 Alliance Tribute Gold)`);
-                            }}
-                            style={{
-                              padding: '5px 10px',
-                              borderRadius: '6px',
-                              background: 'rgba(5, 150, 105, 0.4)',
-                              border: '1px solid #34d399',
-                              color: '#a7f3d0',
-                              font: "700 11px 'Barlow Condensed'",
-                              cursor: 'pointer',
-                            }}
-                          >
-                            Reinforce 🛡️
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              {allianceTab === 'war' && (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                  {enemyCastles.map((ec) => (
-                    <div
-                      key={ec.id}
-                      style={{
-                        display: 'flex',
-                        justifyContent: 'space-between',
-                        alignItems: 'center',
-                        gap: '10px',
-                        padding: '10px 12px',
-                        background: 'rgba(69, 10, 10, 0.4)',
-                        border: '1px solid rgba(248, 113, 113, 0.5)',
-                        borderRadius: '9px',
-                      }}
-                    >
-                      <div>
-                        <div style={{ font: "800 14px 'Barlow Condensed'", color: '#fca5a5' }}>
-                          ☠️ {ec.allianceTag} {ec.owner} · {ec.name} (Lv.{ec.level})
-                        </div>
-                        <div style={{ fontSize: '10.5px', color: '#fecaca', fontVariantNumeric: 'tabular-nums' }}>
-                          {ec.allianceAlias || 'Rival Frontier Horde'} · [X:{Math.round(ec.position[0])}, Y:{Math.round(ec.position[2])}] · Power: {ec.power.toLocaleString()} ⚡
-                        </div>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setIsAllianceOpen(false);
-                          onPanTo(ec.position[0], ec.position[2]);
-                          onShowToast?.(`⚔️ Camera locked on enemy ${ec.name} — Tap citadel to Attack or Rally!`);
-                        }}
-                        style={{
-                          padding: '6px 12px',
-                          borderRadius: '7px',
-                          background: 'linear-gradient(180deg, #dc2626, #991b1b)',
-                          borderTop: '1px solid #f87171',
-                          borderLeft: '1px solid #f87171',
-                          borderRight: '1px solid #f87171',
-                          borderBottom: '3px solid #450a0a',
-                          color: '#fff',
-                          font: "800 11.5px 'Barlow Condensed'",
-                          cursor: 'pointer',
-                          whiteSpace: 'nowrap',
-                        }}
-                      >
-                        Jump to Attack ⚔️
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
+      <CommanderProfileModal
+        isOpen={isProfileOpen}
+        onClose={() => setIsProfileOpen(false)}
+        commanderName={commanderName}
+        onChangeCommanderName={setCommanderName}
+        vipLevel={4}
+        commanderLevel={Math.max(18, Math.round(standingPower / 3500))}
+        standingPower={standingPower}
+        actionPoints={actionPoints}
+        maxActionPoints={MAX_ACTION_POINTS}
+        onReplenishActionPoints={handleReplenishActionPoints}
+        selectedHeroId={selectedHeroId}
+        onSelectHeroId={setSelectedHeroId}
+        playerAlliance={playerAlliance}
+        shrinesHeldCount={shrineRuleStatus.totalShrinesHeld}
+        hasCongress={allianceTerritoryStats.hasCongress}
+        battleReportsCount={battleReportsCount}
+        troopInventory={troopInventory}
+        castles={castles}
+        bonuses={bonuses}
+        infantryGear={infantryGear}
+        isStrategicFilterActive={isStrategicFilterActive}
+        onToggleStrategicFilter={onToggleStrategicFilter}
+        viewMode={viewMode}
+        onToggleViewMode={onToggleViewMode}
+        onOpenStrategicWorldMap={onOpenStrategicWorldMap}
+        onOpenAlliance={() => {
+          setAllianceTab('overview');
+          setIsAllianceOpen(true);
+        }}
+        onOpenAchievements={() => {
+          setQuestBoardTab('achievements');
+          setIsQuestsOpen(true);
+        }}
+        onOpenInventory={() => {
+          setIsInventoryOpen(true);
+        }}
+        onOpenCommandHub={onOpenCommandHub}
+        onShowToast={onShowToast}
+      />
 
       {/* ============================================================ */}
       {/* 16. ANDROID APK BUILD & INSTALL MODAL + OFFLINE INDICATOR    */}
@@ -6874,14 +5803,12 @@ export const MapNavigationUI: React.FC<MapNavigationUIProps> = ({
             max-width: 44vw;
           }
           .hud-profile-card {
-            padding: 3px 7px !important;
-            gap: 5px !important;
+            transform: scale(0.84);
+            transform-origin: top left;
+            margin-bottom: -8px;
           }
-          .hud-profile-card > div:first-child {
-            width: 24px !important;
-            height: 24px !important;
-            min-width: 24px !important;
-            font-size: 12px !important;
+          .hud-alliance-subbar {
+            display: none !important;
           }
           .hud-minimap-box {
             width: 72px !important;
@@ -6925,18 +5852,21 @@ export const MapNavigationUI: React.FC<MapNavigationUIProps> = ({
             padding: 4px 8px !important;
             max-width: 190px !important;
           }
-          .hud-bottom-right-dock {
+          .hud-bottom-actions {
             bottom: 6px !important;
             right: 6px !important;
-            padding: 3px 5px !important;
             gap: 4px !important;
           }
-          .hud-bottom-right-dock > button {
-            width: 42px !important;
-            height: 42px !important;
+          .hud-bottom-actions > button {
+            width: 46px !important;
+            height: 54px !important;
+          }
+          .hud-bottom-actions > button:last-child {
+            width: 52px !important;
+            height: 58px !important;
           }
           .hud-bottom-compass {
-            bottom: 54px !important;
+            bottom: 58px !important;
             min-height: 40px !important;
             padding: 4px 10px 4px 6px !important;
             gap: 6px !important;
@@ -6944,10 +5874,6 @@ export const MapNavigationUI: React.FC<MapNavigationUIProps> = ({
           .hud-bottom-compass svg {
             width: 28px !important;
             height: 28px !important;
-          }
-          .hud-castle-corner-btn {
-            width: 52px !important;
-            height: 44px !important;
           }
           .bottom-1x1-troop-card {
             bottom: 54px !important;
@@ -6979,15 +5905,13 @@ export const MapNavigationUI: React.FC<MapNavigationUIProps> = ({
             max-width: calc(52vw - 10px);
           }
           .hud-profile-card {
-            padding: 4px 8px !important;
-            gap: 6px !important;
-            max-width: 100%;
+            transform: scale(0.86);
+            transform-origin: top left;
+            margin-bottom: -6px;
           }
-          .hud-profile-card > div:first-child {
-            width: 28px !important;
-            height: 28px !important;
-            min-width: 28px !important;
-            font-size: 13px !important;
+          .hud-alliance-subbar {
+            max-width: 195px;
+            overflow: hidden;
           }
           .hud-minimap-box {
             width: 86px !important;
@@ -7031,19 +5955,18 @@ export const MapNavigationUI: React.FC<MapNavigationUIProps> = ({
             padding: 4px 8px !important;
             max-width: 96px !important;
           }
-          .hud-bottom-right-dock {
+          .hud-bottom-actions {
             bottom: 8px !important;
-            right: 8px !important;
-            padding: 4px 5px !important;
+            right: 6px !important;
             gap: 3px !important;
           }
-          .hud-bottom-right-dock > button {
-            width: 35px !important;
-            height: 46px !important;
+          .hud-bottom-actions > button {
+            width: 40px !important;
+            height: 50px !important;
           }
-          .hud-castle-corner-btn {
-            width: 44px !important;
-            height: 48px !important;
+          .hud-bottom-actions > button:last-child {
+            width: 46px !important;
+            height: 54px !important;
           }
           .hud-bottom-compass {
             bottom: 60px !important;

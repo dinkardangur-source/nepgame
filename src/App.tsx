@@ -26,6 +26,9 @@ const StrategicWorldMapModal = lazy(() =>
 const CommandHubDrawer = lazy(() =>
   import('./components/CommandHubDrawer').then((m) => ({ default: m.CommandHubDrawer }))
 );
+const WorldMapTestMode = lazy(() =>
+  import('./components/WorldMapTestMode').then((m) => ({ default: m.WorldMapTestMode }))
+);
 import {
   ActiveMarch,
   AllianceShrineRuleStatus,
@@ -346,6 +349,7 @@ export const App: React.FC = () => {
   });
   const [isStrategicWorldMapOpen, setIsStrategicWorldMapOpen] = useState<boolean>(false);
   const [isStrategicFilterActive, setIsStrategicFilterActive] = useState<boolean>(false);
+  const [isTestModeOpen, setIsTestModeOpen] = useState<boolean>(false);
 
   const [cameraInfo, setCameraInfo] = useState<{ x: number; y: number; z: number; zoom: number }>({
     x: 1600,
@@ -2761,6 +2765,7 @@ export const App: React.FC = () => {
         shrineGarrisons={shrineGarrisons}
         onRelinquishStructure={handleRelinquishStructure}
         infantryGear={infantryGear}
+        onOpenTestMode={() => setIsTestModeOpen(true)}
       />
 
       {/* 3B. Unified 8-Panel Kingdom Command Hub Drawer */}
@@ -2820,6 +2825,13 @@ export const App: React.FC = () => {
             onUpgradeInfantryGear={handleUpgradeInfantryGear}
             onShowToast={showToast}
           />
+        </Suspense>
+      )}
+
+      {/* 3C. Isolated World Map Test Mode (Grid, Dimensions, Spacing & 13 Acceptance Tests) */}
+      {isTestModeOpen && (
+        <Suspense fallback={null}>
+          <WorldMapTestMode isOpen={isTestModeOpen} onClose={() => setIsTestModeOpen(false)} />
         </Suspense>
       )}
 

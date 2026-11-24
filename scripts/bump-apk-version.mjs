@@ -43,16 +43,15 @@ if (fs.existsSync(versionFile)) {
 let nextCode = current.versionCode;
 let nextName = current.versionName;
 
-const bumpBy = syncOnly ? 0 : ciRunOffset > 0 ? ciRunOffset : 1;
-
-if (bumpBy > 0) {
-  nextCode = current.versionCode + bumpBy;
+if (!syncOnly) {
+  nextCode = Math.max(current.versionCode + 1, ciRunOffset > 0 ? ciRunOffset : current.versionCode + 1);
+  const patchStep = Math.max(1, nextCode - current.versionCode);
   const parts = current.versionName.split('.').map((n) => parseInt(n, 10));
   if (parts.length >= 3 && parts.every((n) => Number.isFinite(n))) {
-    parts[2] += bumpBy;
+    parts[2] += 1;
     nextName = `${parts[0]}.${parts[1]}.${parts[2]}`;
   } else if (parts.length === 2 && parts.every((n) => Number.isFinite(n))) {
-    nextName = `${parts[0]}.${parts[1]}.${bumpBy}`;
+    nextName = `${parts[0]}.${parts[1]}.${patchStep}`;
   } else {
     nextName = `1.0.${Math.max(0, nextCode - 1)}`;
   }
