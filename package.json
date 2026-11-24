@@ -10,7 +10,8 @@
     "lint": "tsc --noEmit",
     "version:bump": "node scripts/bump-apk-version.mjs",
     "android:sync": "node scripts/bump-apk-version.mjs --sync && npm run build && npx cap sync android",
-    "android:apk": "node scripts/bump-apk-version.mjs && npm run build && npx cap sync android && cd android && chmod +x gradlew && ./gradlew assembleDebug && cd .. && node scripts/package-apk.mjs"
+    "android:bundle": "node scripts/bump-apk-version.mjs && npm run build && npx cap sync android && cd android && chmod +x gradlew && ./gradlew bundleDebug bundleRelease && cd .. && node scripts/package-apk.mjs",
+    "android:apk": "node scripts/bump-apk-version.mjs && npm run build && npx cap sync android && cd android && chmod +x gradlew && ./gradlew assembleDebug bundleDebug bundleRelease && cd .. && node scripts/package-apk.mjs"
   },
   "dependencies": {
     "@capacitor/android": "^8.6.2",
