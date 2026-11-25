@@ -8,9 +8,28 @@ if (typeof window !== 'undefined' && 'serviceWorker' in navigator) {
   window.addEventListener(
     'load',
     () => {
+      const emitSwStatus = (ready: boolean) => {
+        window.__EROT_SW_OFFLINE_READY__ = ready;
+        window.dispatchEvent(new CustomEvent('erot-sw-status', { detail: { offlineReady: ready } }));
+      };
+
+      if (navigator.serviceWorker.controller) {
+        emitSwStatus(true);
+      }
+
       const triggerSw = () => {
         void import('virtual:pwa-register').then(({ registerSW }) => {
-          registerSW({ immediate: true });
+          registerSW({
+            immediate: true,
+            onOfflineReady() {
+              emitSwStatus(true);
+            },
+            onRegisteredSW(_swUrl, registration) {
+              if (registration?.active) {
+                emitSwStatus(true);
+              }
+            },
+          });
         });
       };
       const ric = (

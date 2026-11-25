@@ -47,6 +47,7 @@ import { Profile3DBadge } from './Profile3DEmblems';
 import { getHeroPortraitUrl } from '../game/HeroPortraits';
 import { SimCountdownText } from '../game/simClockStore';
 import { AndroidApkModal } from './AndroidApkModal';
+import { OfflineReconnectBanner, SyncStatusButton } from './SyncStatusIndicator';
 
 interface MapNavigationUIProps {
   cameraInfo: { x: number; y: number; z: number; zoom: number };
@@ -115,6 +116,7 @@ interface MapNavigationUIProps {
   timeOfDay?: 'day' | 'dusk' | 'night';
   onCycleTimeOfDay?: () => void;
   commanderNameOverride?: string;
+  syncUid?: string | null;
 }
 
 interface BookmarkPin {
@@ -215,6 +217,7 @@ export const MapNavigationUI: React.FC<MapNavigationUIProps> = ({
   timeOfDay = 'day',
   onCycleTimeOfDay,
   commanderNameOverride,
+  syncUid = null,
 }) => {
   const minimapCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const isMinimapDraggingRef = useRef<boolean>(false);
@@ -2672,6 +2675,8 @@ export const MapNavigationUI: React.FC<MapNavigationUIProps> = ({
             <span>📲</span>
             <span>APK</span>
           </button>
+
+          <SyncStatusButton uid={syncUid} onShowToast={onShowToast} />
 
           <button
             type="button"
@@ -5730,26 +5735,7 @@ export const MapNavigationUI: React.FC<MapNavigationUIProps> = ({
         onShowToast={onShowToast}
       />
 
-      {!isOnline && (
-        <div
-          style={{
-            position: 'fixed',
-            bottom: '74px',
-            left: '12px',
-            zIndex: 80,
-            background: 'rgba(180, 83, 9, 0.95)',
-            border: '1px solid #fde047',
-            borderRadius: '7px',
-            padding: '4px 10px',
-            color: '#fef08a',
-            font: "700 11px 'Barlow Condensed'",
-            boxShadow: '0 4px 12px rgba(0,0,0,0.65)',
-            pointerEvents: 'none',
-          }}
-        >
-          ● Offline Mode — Cached Realm Active
-        </div>
-      )}
+      <OfflineReconnectBanner uid={syncUid} onShowToast={onShowToast} />
 
       {/* Animation Keyframes & Mobile Responsive HUD Styles */}
       <style>{`

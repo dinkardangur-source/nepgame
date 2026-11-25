@@ -435,11 +435,37 @@ export class GitHubUpdateService {
     return null;
   }
 
+  /**
+   * Returns the deterministic GitHub rolling latest release download URL for
+   * Empire-of-the-Rising-Towers.apk when VITE_GITHUB_REPO (or custom repo) is configured.
+   */
+  public getDirectReleaseDownloadUrl(overrideRepo?: string): string | null {
+    const repoSlug = this.getTargetRepo(overrideRepo);
+    if (!repoSlug) return null;
+    return `https://github.com/${repoSlug}/releases/latest/download/${TARGET_APK_ASSET_NAME}`;
+  }
+
+  /**
+   * Polls GitHub Releases API for the latest release containing Empire-of-the-Rising-Towers.apk
+   * and returns the verified asset download URL (falling back to the rolling latest URL if repo is set).
+   */
+  public async getLatestApkDownloadUrl(options?: {
+    force?: boolean;
+    overrideRepo?: string;
+  }): Promise<string | null> {
+    const result = await this.checkForUpdates(options);
+    if (result.latestRelease?.downloadUrl) {
+      return result.latestRelease.downloadUrl;
+    }
+    return this.getDirectReleaseDownloadUrl(options?.overrideRepo);
+  }
+
   public downloadUpdate(release?: GitHubApkReleaseInfo | null): boolean {
     const target = release || this.lastResult.latestRelease;
-    if (!target?.downloadUrl || typeof document === 'undefined') return false;
+    const url = target?.downloadUrl || this.getDirectReleaseDownloadUrl();
+    if (!url || typeof document === 'undefined') return false;
     const anchor = document.createElement('a');
-    anchor.href = target.downloadUrl;
+    anchor.href = url;
     anchor.download = TARGET_APK_ASSET_NAME;
     anchor.rel = 'noopener noreferrer';
     document.body.appendChild(anchor);
@@ -475,3 +501,10 @@ export class GitHubUpdateService {
 }
 
 export const gitHubUpdateService = new GitHubUpdateService();
+
+export async function fetchLatestApkDownloadUrl(options?: {
+  force?: boolean;
+  overrideRepo?: string;
+}): Promise<string | null> {
+  return gitHubUpdateService.getLatestApkDownloadUrl(options);
+}

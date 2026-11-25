@@ -265,8 +265,8 @@ export const AuthGatewayScreen: React.FC = () => {
     setErrorMessage(null);
     setLoadingAction('google');
     try {
-      setSuccessHeadline('SUMMONING ROYAL SEAL...');
-      await signInGoogle(rememberMe);
+      const res = await signInGoogle(rememberMe);
+      setSuccessHeadline(res.isNewUser ? 'YOUR KINGDOM BEGINS NOW.' : 'WELCOME BACK, COMMANDER.');
     } catch (err) {
       setSuccessHeadline(null);
       setErrorMessage(err instanceof Error ? err.message : 'Google authentication failed.');

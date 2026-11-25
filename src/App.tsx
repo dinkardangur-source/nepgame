@@ -13,6 +13,9 @@ const ProtectedGameShell = lazy(() =>
 const AccountModalController = lazy(() =>
   import('./components/AccountMenusAndModals').then((m) => ({ default: m.AccountModalController }))
 );
+const MobileGoogleAuthRelay = lazy(() =>
+  import('./components/MobileGoogleAuthRelay').then((m) => ({ default: m.MobileGoogleAuthRelay }))
+);
 
 const CitadelLoadingScreen: React.FC<{ label: string }> = ({ label }) => (
   <div
@@ -81,6 +84,20 @@ const AppGate: React.FC = () => {
 };
 
 export const App: React.FC = () => {
+  const isMobileAuthRelay =
+    typeof window !== 'undefined' &&
+    new URLSearchParams(window.location.search).get('mobileAuth') === 'google';
+
+  if (isMobileAuthRelay) {
+    return (
+      <AuthErrorBoundary>
+        <Suspense fallback={<CitadelLoadingScreen label="Connecting Google Sign-In..." />}>
+          <MobileGoogleAuthRelay />
+        </Suspense>
+      </AuthErrorBoundary>
+    );
+  }
+
   return (
     <AuthErrorBoundary>
       <AuthProvider>

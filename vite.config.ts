@@ -89,17 +89,48 @@ export default defineConfig({
         ],
       },
       workbox: {
-        maximumFileSizeToCacheInBytes: 3 * 1024 * 1024,
-        globPatterns: ['**/*.{js,css,html,ico,svg,woff,woff2}', 'boot-crest.png', 'pwa-*.png', 'apple-touch-icon.png', 'favicon-*.png'],
+        maximumFileSizeToCacheInBytes: 6 * 1024 * 1024,
+        cleanupOutdatedCaches: true,
+        clientsClaim: true,
+        skipWaiting: true,
+        navigateFallback: '/index.html',
+        navigateFallbackDenylist: [/^\/__\//, /^\/api\//, /^\/download\//, /^\/android-apk\//],
+        globPatterns: [
+          '**/*.{js,css,html,ico,svg,woff,woff2,webp}',
+          'boot-crest.png',
+          'pwa-*.png',
+          'apple-touch-icon.png',
+          'favicon-*.png',
+          'assets/models/*.glb',
+        ],
         globIgnores: ['**/assets/aistudio/**', '**/assets/images/**'],
         runtimeCaching: [
+          {
+            urlPattern: /^https:\/\/(.*\.)?(googleapis\.com|firebaseapp\.com|firebaseio\.com|accounts\.google\.com|securetoken\.googleapis\.com|identitytoolkit\.googleapis\.com)\/.*/i,
+            handler: 'NetworkOnly',
+          },
+          {
+            urlPattern: ({ url }) => url.pathname.startsWith('/api/'),
+            handler: 'NetworkFirst',
+            options: {
+              cacheName: 'realm-api-cache',
+              networkTimeoutSeconds: 3,
+              expiration: {
+                maxEntries: 20,
+                maxAgeSeconds: 60 * 60 * 24,
+              },
+              cacheableResponse: {
+                statuses: [0, 200],
+              },
+            },
+          },
           {
             urlPattern: ({ url }) => url.pathname.startsWith('/assets/'),
             handler: 'CacheFirst',
             options: {
               cacheName: 'realm-runtime-assets',
               expiration: {
-                maxEntries: 40,
+                maxEntries: 60,
                 maxAgeSeconds: 60 * 60 * 24 * 30,
               },
               cacheableResponse: {

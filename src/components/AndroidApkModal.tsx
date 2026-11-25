@@ -438,11 +438,11 @@ export const AndroidApkModal: React.FC<AndroidApkModalProps> = ({
               </>
             ) : isAndroid ? (
               <>
-                <b>Android Install:</b> Download <code>{DEFAULT_APK_FILENAME}</code> above and tap to install, or use Chrome <b>Add to Home screen</b>.
+                <b>Android Install:</b> Download <code>{DEFAULT_APK_FILENAME}</code> above and tap to install. If upgrading from an older test build shows a package conflict once, uninstall the old build first—all updates from now on share the same signing key.
               </>
             ) : (
               <>
-                <b>Package ID:</b> <code>com.himalayanrealms.strategy</code> · Auto-updated on every GitHub push with <code>{DEFAULT_APK_FILENAME}</code>.
+                <b>Package ID:</b> <code>com.himalayanrealms.strategy</code> · Consistently signed &amp; auto-updated on every GitHub push as <code>{DEFAULT_APK_FILENAME}</code>.
               </>
             )}
           </div>

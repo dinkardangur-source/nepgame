@@ -1,5 +1,6 @@
 import {
   EmailAuthProvider,
+  GoogleAuthProvider,
   User,
   browserLocalPersistence,
   browserSessionPersistence,
@@ -9,6 +10,7 @@ import {
   sendEmailVerification,
   sendPasswordResetEmail,
   setPersistence,
+  signInWithCredential,
   signInWithEmailAndPassword,
   signInWithPopup,
   signOut,
@@ -24,6 +26,7 @@ import {
   setDoc,
   updateDoc,
 } from 'firebase/firestore';
+import firebaseConfig from '../../firebase-applet-config.json';
 import { OperationType, auth, db, googleProvider, handleFirestoreError } from '../firebase';
 
 // Blueprint-synchronized validation constants
@@ -182,10 +185,22 @@ export function mapAuthErrorMessage(error: unknown): string {
     case 'auth/requires-recent-login':
       return 'For security, please re-enter your current password or sign in again before updating credentials.';
     case 'auth/operation-not-allowed':
-      return 'Email/Password sign-in is not yet enabled in Firebase Console (Authentication → Sign-in method → Enable Email/Password). Google Sign-In works immediately.';
+      return 'Email/Password sign-in is not yet enabled in Firebase Console (Authentication → Sign-in method → Enable Email/Password).';
+    case 'auth/unauthorized-domain':
+      return 'This app domain is not authorized for Google Sign-In in Firebase Console. Please use Email & Password sign-in or open the hosted web URL.';
+    case 'auth/invalid-action-code':
+    case 'auth/expired-action-code':
+      return 'This verification or password reset link is invalid or has expired. Please request a fresh link.';
+    case 'auth/web-storage-unsupported':
+      return 'Browser storage/cookies are blocked. Allow storage for this site or use Email & Password sign-in.';
+    case 'auth/user-disabled':
+      return 'This commander account has been disabled.';
     case 'auth/network-request-failed':
       return 'Network error communicating with authentication servers. Check your connection.';
     default:
+      if (message.toLowerCase().includes('requested action is invalid')) {
+        return 'Google Sign-In could not verify this domain or popup session. Please use Email & Password sign-in or open from the authorized web URL.';
+      }
       if (message.includes('Firebase:') && message.includes('(')) {
         return message.replace(/^Firebase:\s*/i, '');
       }
@@ -454,10 +469,201 @@ export async function signInWithEmail(params: {
   }
 }
 
+let cachedAuthorizedDomains: { domains: string[]; fetchedAt: number } | null = null;
+
+async function fetchFirebaseAuthorizedDomains(): Promise<string[] | null> {
+  if (cachedAuthorizedDomains && Date.now() - cachedAuthorizedDomains.fetchedAt < 5 * 60_000) {
+    return cachedAuthorizedDomains.domains;
+  }
+  if (!firebaseConfig?.apiKey) return null;
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), 2500);
+  try {
+    const res = await fetch(
+      `https://www.googleapis.com/identitytoolkit/v3/relyingparty/getProjectConfig?key=${encodeURIComponent(firebaseConfig.apiKey)}`,
+      { signal: controller.signal }
+    );
+    if (!res.ok) return null;
+    const data = (await res.json()) as { authorizedDomains?: unknown };
+    if (Array.isArray(data.authorizedDomains)) {
+      const domains = data.authorizedDomains.map((d) => String(d).toLowerCase());
+      cachedAuthorizedDomains = { domains, fetchedAt: Date.now() };
+      return domains;
+    }
+    return null;
+  } catch {
+    return null;
+  } finally {
+    window.clearTimeout(timeout);
+  }
+}
+
+function hostnameMatchesAuthorized(hostname: string, domains: string[]): boolean {
+  const host = hostname.toLowerCase();
+  return domains.some((d) => host === d || host.endsWith(`.${d}`));
+}
+
+export function isNativeAndroidApk(): boolean {
+  if (typeof window === 'undefined') return false;
+  if (window.AndroidAuthBridge) return true;
+  return (
+    window.location.protocol === 'https:' &&
+    window.location.hostname === 'localhost' &&
+    /Android/i.test(navigator.userAgent)
+  );
+}
+
+async function resolveReadyMobileAuthRelayUrl(authorizedDomains: string[] | null): Promise<string | null> {
+  const rawCandidates = [
+    import.meta.env.VITE_AUTH_BRIDGE_URL,
+    'https://ais-pre-qmqd244uw7jv7pihnnfano-351876851193.asia-east1.run.app',
+    'https://nepgame.ai.studio',
+    'https://nepgame-270849059427.asia-southeast1.run.app',
+  ].filter((v): v is string => typeof v === 'string' && v.trim().startsWith('https://'));
+
+  const uniqueCandidates = Array.from(new Set(rawCandidates.map((u) => u.trim().replace(/\/+$/, ''))));
+  for (const baseUrl of uniqueCandidates) {
+    try {
+      const parsed = new URL(baseUrl);
+      if (authorizedDomains && !hostnameMatchesAuthorized(parsed.hostname, authorizedDomains)) {
+        continue;
+      }
+      const controller = new AbortController();
+      const timer = window.setTimeout(() => controller.abort(), 3000);
+      try {
+        const res = await fetch(`${baseUrl}/`, { cache: 'no-store', signal: controller.signal });
+        if (!res.ok) continue;
+        const html = await res.text();
+        if (html.includes('name="erot-mobile-auth-ready"') || html.includes("name='erot-mobile-auth-ready'")) {
+          return baseUrl;
+        }
+      } finally {
+        window.clearTimeout(timer);
+      }
+    } catch {
+      // Try next relay candidate
+    }
+  }
+  return null;
+}
+
+export async function completeNativeGoogleCallbackUrl(
+  callbackUrl: string,
+  expectedNonce?: string,
+  rememberMe = true
+): Promise<{ user: User; profile: PlayerProfile; privateAccount: PrivateAccount; isNewUser: boolean }> {
+  const parsed = new URL(callbackUrl);
+  const hashParams = new URLSearchParams(parsed.hash.startsWith('#') ? parsed.hash.slice(1) : parsed.hash);
+  const queryParams = parsed.searchParams;
+
+  const returnedError = hashParams.get('error') || queryParams.get('error');
+  if (returnedError) {
+    throw new Error(returnedError);
+  }
+
+  const returnedNonce = hashParams.get('nonce') || queryParams.get('nonce') || '';
+  if (expectedNonce && returnedNonce && returnedNonce !== expectedNonce) {
+    throw new Error('Google sign-in session verification mismatch. Please try again.');
+  }
+
+  const idToken = hashParams.get('idToken') || queryParams.get('idToken') || '';
+  const accessToken = hashParams.get('accessToken') || queryParams.get('accessToken') || '';
+  if (!idToken && !accessToken) {
+    throw new Error('Google sign-in did not return an authentication token.');
+  }
+
+  await setPersistence(auth, rememberMe ? browserLocalPersistence : browserSessionPersistence);
+  const credential = GoogleAuthProvider.credential(idToken || null, accessToken || null);
+  const cred = await signInWithCredential(auth, credential);
+  const existingSnap = await getDoc(doc(db, 'users', cred.user.uid));
+  const isNewUser = !existingSnap.exists();
+  const { profile, privateAccount } = await ensurePlayerProfileDocs(cred.user, {
+    provider: 'google.com',
+  });
+  clearAuthFailures('login');
+  return { user: cred.user, profile, privateAccount, isNewUser };
+}
+
+async function signInViaAndroidChromeRelay(
+  relayBaseUrl: string,
+  rememberMe: boolean
+): Promise<{ user: User; profile: PlayerProfile; privateAccount: PrivateAccount; isNewUser: boolean }> {
+  const nonce = `${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+  const authUrl = `${relayBaseUrl}/?mobileAuth=google&nonce=${encodeURIComponent(nonce)}`;
+
+  const callbackUrl = await new Promise<string>((resolve, reject) => {
+    let settled = false;
+    const cleanup = () => {
+      window.removeEventListener('erot-native-auth-callback', onCallbackEvent as EventListener);
+      window.removeEventListener('focus', checkPending);
+      document.removeEventListener('visibilitychange', checkPending);
+      window.clearTimeout(timeoutId);
+    };
+
+    const finish = (url: string) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(url);
+    };
+
+    const onCallbackEvent = (ev: CustomEvent<{ url?: string }>) => {
+      const url = ev?.detail?.url;
+      if (url) finish(url);
+    };
+
+    const checkPending = () => {
+      const pending = window.AndroidAuthBridge?.consumePendingAuthUrl?.();
+      if (pending) finish(pending);
+    };
+
+    const timeoutId = window.setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(new Error('Google sign-in timed out before returning to the app. Please try again.'));
+    }, 120_000);
+
+    window.addEventListener('erot-native-auth-callback', onCallbackEvent as EventListener);
+    window.addEventListener('focus', checkPending);
+    document.addEventListener('visibilitychange', checkPending);
+
+    if (window.AndroidAuthBridge?.openExternalBrowser) {
+      window.AndroidAuthBridge.openExternalBrowser(authUrl);
+    } else {
+      window.open(authUrl, '_blank', 'noopener,noreferrer');
+    }
+  });
+
+  return completeNativeGoogleCallbackUrl(callbackUrl, nonce, rememberMe);
+}
+
 export async function signInWithGooglePopup(
   rememberMe = true
 ): Promise<{ user: User; profile: PlayerProfile; privateAccount: PrivateAccount; isNewUser: boolean }> {
   try {
+    const authorizedDomains = await fetchFirebaseAuthorizedDomains();
+
+    if (isNativeAndroidApk()) {
+      const relayUrl = await resolveReadyMobileAuthRelayUrl(authorizedDomains);
+      if (relayUrl && window.AndroidAuthBridge?.openExternalBrowser) {
+        return await signInViaAndroidChromeRelay(relayUrl, rememberMe);
+      }
+      throw new Error(
+        'Google Sign-In inside the Android APK needs an updated web relay or Email & Password sign-in. Please sign in or Create Kingdom Account with Email & Password below—it works immediately!'
+      );
+    }
+
+    if (
+      typeof window !== 'undefined' &&
+      authorizedDomains &&
+      !hostnameMatchesAuthorized(window.location.hostname, authorizedDomains)
+    ) {
+      throw new Error(
+        `Domain "${window.location.hostname}" is not in Firebase Authorized Domains yet (which triggers "The requested action is invalid"). Use Email & Password below or add "${window.location.hostname}" in Firebase Console → Authentication → Settings → Authorized domains.`
+      );
+    }
+
     await setPersistence(auth, rememberMe ? browserLocalPersistence : browserSessionPersistence);
     const cred = await signInWithPopup(auth, googleProvider);
     const existingSnap = await getDoc(doc(db, 'users', cred.user.uid));

@@ -48,6 +48,13 @@ export interface InsideKingdomState {
   selectedPlotId: string | null; // 'keep' or plotId
 }
 
+export interface InsideKingdomSnapshot {
+  keepLevel: number;
+  keepPower: number;
+  selectedPlotId: string | null;
+  slots: Array<{ slotIndex: number; category: MergeBuildingCategory; level: number } | null>;
+}
+
 export const BUILDING_TEMPLATES: Record<
   MergeBuildingCategory,
   {
@@ -390,6 +397,78 @@ export class InsideKingdom3D {
       })),
       selectedPlotId: this.selectedPlotId,
     };
+  }
+
+  public getSnapshot(): InsideKingdomSnapshot {
+    return {
+      keepLevel: this.keepLevel,
+      keepPower: this.keepPower,
+      selectedPlotId: this.selectedPlotId,
+      slots: this.plots.map((p) =>
+        p.building
+          ? {
+              slotIndex: p.slotIndex,
+              category: p.building.category,
+              level: p.building.level,
+            }
+          : null
+      ),
+    };
+  }
+
+  public restoreState(snapshot: Partial<InsideKingdomSnapshot>): void {
+    if (typeof snapshot.keepLevel === 'number' && snapshot.keepLevel >= 1) {
+      this.keepLevel = Math.min(this.keepMaxLevel, Math.max(1, Math.round(snapshot.keepLevel)));
+      this.keepPower =
+        typeof snapshot.keepPower === 'number' && snapshot.keepPower > 0
+          ? Math.round(snapshot.keepPower)
+          : Math.round(24000 * Math.pow(1.18, Math.max(0, this.keepLevel - 20)));
+
+      const oldSprite = this.plotLabelSpritesMap.get('keep');
+      if (oldSprite) {
+        this.keepGroup.remove(oldSprite);
+        if (oldSprite.material.map) oldSprite.material.map.dispose();
+        oldSprite.material.dispose();
+      }
+      const keepSprite = this.createBadgeSprite(
+        `🏯 Lv.${this.keepLevel} Imperial Pagoda Keep`,
+        'SUPREME CITADEL THRONE',
+        '#facc15',
+        false
+      );
+      keepSprite.position.set(0, 28.2, 0);
+      keepSprite.scale.set(16, 4.0, 1);
+      this.keepGroup.add(keepSprite);
+      this.plotLabelSpritesMap.set('keep', keepSprite);
+    }
+
+    if (Array.isArray(snapshot.slots)) {
+      for (let i = 0; i < this.plots.length; i++) {
+        const plot = this.plots[i];
+        const savedSlot = snapshot.slots[i];
+        if (
+          savedSlot &&
+          (savedSlot.category === 'barracks' ||
+            savedSlot.category === 'tower' ||
+            savedSlot.category === 'mill' ||
+            savedSlot.category === 'shrine')
+        ) {
+          const lvl = Math.min(10, Math.max(1, Math.round(savedSlot.level || 1)));
+          plot.building = createBuildingData(savedSlot.category, lvl, `${plot.slotIndex}`);
+        } else if (savedSlot === null) {
+          plot.building = null;
+        }
+        this.rebuildPlot3DMesh(plot);
+      }
+    }
+
+    if (snapshot.selectedPlotId !== undefined) {
+      this.selectedPlotId = snapshot.selectedPlotId;
+    }
+
+    this.refreshAnimatedPartsCache();
+    this.refreshHighlightsAndLabels();
+    this.emitState();
   }
 
   private emitState() {

@@ -12,6 +12,7 @@ import { auth } from '../firebase';
 import {
   PrivateAccount,
   PlayerProfile,
+  completeNativeGoogleCallbackUrl,
   ensurePlayerProfileDocs,
   refreshEmailVerification,
   registerWithEmail,
@@ -192,8 +193,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
       setAuthStatus('authenticated');
 
-      // Sync authoritative Firestore player docs non-blockingly in the background
-      if (!manualAuthInFlightRef.current) {
+      // Sync authoritative Firestore player docs non-blockingly when online
+      if (!manualAuthInFlightRef.current && (typeof navigator === 'undefined' || navigator.onLine)) {
         void ensurePlayerProfileDocs(firebaseUser)
           .then((docs) => {
             if (!active || auth.currentUser?.uid !== firebaseUser.uid) return;
@@ -203,6 +204,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           })
           .catch((err) => {
             if (!active) return;
+            if (typeof navigator !== 'undefined' && !navigator.onLine) return;
             setAuthSyncError(err instanceof Error ? err.message : 'Unable to load kingdom profile.');
           });
       }
@@ -214,14 +216,47 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     };
   }, []);
 
-  // Periodic + focus session token expiration validation
+  // Recover Google OAuth callback if Android restarted MainActivity from deep-link return
+  useEffect(() => {
+    const pendingUrl = window.AndroidAuthBridge?.consumePendingAuthUrl?.();
+    if (!pendingUrl || auth.currentUser) return;
+    manualAuthInFlightRef.current = true;
+    void completeNativeGoogleCallbackUrl(pendingUrl)
+      .then((res) => {
+        setUser(res.user);
+        setProfile(res.profile);
+        setPrivateAccount(res.privateAccount);
+        writeCachedAuthDocs(res.user.uid, res.profile, res.privateAccount);
+        setWelcomeBanner(res.isNewUser ? 'YOUR KINGDOM BEGINS NOW.' : 'WELCOME BACK, COMMANDER.');
+        setAuthStatus('authenticated');
+      })
+      .catch((err) => {
+        setAuthSyncError(err instanceof Error ? err.message : 'Unable to finish Google Sign-In.');
+      })
+      .finally(() => {
+        manualAuthInFlightRef.current = false;
+      });
+  }, []);
+
+  // Periodic + focus + reconnect session token validation (survives offline play)
   useEffect(() => {
     if (authStatus !== 'authenticated' || !user) return;
 
-    const validateSessionToken = async () => {
+    const REVOKED_AUTH_CODES = new Set([
+      'auth/user-token-expired',
+      'auth/invalid-user-token',
+      'auth/token-expired',
+      'auth/user-disabled',
+      'auth/user-not-found',
+    ]);
+
+    const validateSessionToken = async (refreshProfileOnSuccess = false) => {
       const current = auth.currentUser;
       if (!current) {
         setAuthStatus('unauthenticated');
+        return;
+      }
+      if (typeof navigator !== 'undefined' && !navigator.onLine) {
         return;
       }
       try {
@@ -230,22 +265,40 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         if (!Number.isNaN(expiresAtMs) && Date.now() >= expiresAtMs) {
           await current.getIdToken(true);
         }
-      } catch {
-        // Token revoked or session invalidated
-        await signOutPlayerSession().catch(() => {});
+        if (refreshProfileOnSuccess && !manualAuthInFlightRef.current) {
+          void ensurePlayerProfileDocs(current)
+            .then((docs) => {
+              if (auth.currentUser?.uid !== current.uid) return;
+              setProfile(docs.profile);
+              setPrivateAccount(docs.privateAccount);
+              writeCachedAuthDocs(current.uid, docs.profile, docs.privateAccount);
+              setAuthSyncError(null);
+            })
+            .catch(() => {});
+        }
+      } catch (err) {
+        const code = (err as { code?: string })?.code || '';
+        if (REVOKED_AUTH_CODES.has(code)) {
+          await signOutPlayerSession().catch(() => {});
+        }
       }
     };
 
     const onFocus = () => {
-      void validateSessionToken();
+      void validateSessionToken(false);
+    };
+    const onOnline = () => {
+      void validateSessionToken(true);
     };
     window.addEventListener('focus', onFocus);
+    window.addEventListener('online', onOnline);
     const interval = window.setInterval(() => {
-      void validateSessionToken();
+      void validateSessionToken(false);
     }, 60_000);
 
     return () => {
       window.removeEventListener('focus', onFocus);
+      window.removeEventListener('online', onOnline);
       window.clearInterval(interval);
     };
   }, [authStatus, user]);

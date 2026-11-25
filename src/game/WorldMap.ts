@@ -46,6 +46,7 @@ import {
 } from './proceduralTextures';
 import {
   InsideKingdom3D,
+  InsideKingdomSnapshot,
   InsideKingdomState,
   MergeBuildingCategory,
   KingdomMergePlot,
@@ -564,6 +565,7 @@ export class WorldMap {
 
   // 3D Inside Kingdom Walled Courtyard & Merge System (Lazily initialized on first enter)
   public insideKingdom3D: InsideKingdom3D | null = null;
+  private pendingInsideKingdomSnapshot: Partial<InsideKingdomSnapshot> | null = null;
   public currentSceneMode: 'world' | 'kingdom' = 'world';
   private resizeObserver: ResizeObserver | null = null;
   private worldMapBuilt = false;
@@ -891,6 +893,10 @@ export class WorldMap {
     });
     this.insideKingdom3D.rootGroup.visible = false;
     this.scene.add(this.insideKingdom3D.rootGroup);
+    if (this.pendingInsideKingdomSnapshot) {
+      this.insideKingdom3D.restoreState(this.pendingInsideKingdomSnapshot);
+      this.pendingInsideKingdomSnapshot = null;
+    }
     return this.insideKingdom3D;
   }
 
@@ -6500,6 +6506,24 @@ export class WorldMap {
 
   public getInsideKingdomState(): InsideKingdomState | null {
     return this.insideKingdom3D ? this.insideKingdom3D.getState() : null;
+  }
+
+  public getInsideKingdomSnapshot(): InsideKingdomSnapshot | null {
+    if (this.insideKingdom3D) {
+      return this.insideKingdom3D.getSnapshot();
+    }
+    return this.pendingInsideKingdomSnapshot
+      ? (this.pendingInsideKingdomSnapshot as InsideKingdomSnapshot)
+      : null;
+  }
+
+  public restoreInsideKingdomState(snapshot: Partial<InsideKingdomSnapshot> | null | undefined): void {
+    if (!snapshot) return;
+    if (this.insideKingdom3D) {
+      this.insideKingdom3D.restoreState(snapshot);
+    } else {
+      this.pendingInsideKingdomSnapshot = snapshot;
+    }
   }
 
   public selectInsidePlot(plotId: string) {

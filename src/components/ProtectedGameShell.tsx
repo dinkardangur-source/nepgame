@@ -9,7 +9,7 @@ import {
   WORLD_RESOURCES,
   RESERVED_PLOTS,
 } from '../game/WorldCoordinates';
-import { InsideKingdomState, MergeBuildingCategory } from '../game/InsideKingdom3D';
+import { InsideKingdomSnapshot, InsideKingdomState, MergeBuildingCategory } from '../game/InsideKingdom3D';
 import type {
   CommandHubTab,
   LiveCastleStatus,
@@ -21,6 +21,7 @@ import {
   loadKingdomProgressFromCloud,
   saveKingdomProgressToCloud,
 } from '../services/playerAuthService';
+import { offlineSyncService } from '../services/offlineSyncService';
 
 const InsideKingdomView = lazy(() =>
   import('./InsideKingdomView').then((m) => ({ default: m.InsideKingdomView }))
@@ -117,6 +118,7 @@ interface PersistedSimState {
   monsterStates: Record<string, LiveMonsterStatus>;
   castleStates?: Record<string, LiveCastleStatus>;
   infantryGear?: InfantryGearState;
+  insideKingdomSnapshot?: InsideKingdomSnapshot;
   commanderXp: number;
 }
 
@@ -289,6 +291,7 @@ function loadInitialSimState(cfg: GameBalanceConfig, uid: string): PersistedSimS
         monsterStates: buildInitialMonsterStates(cfg, parsed.monsterStates),
         castleStates: parsed.castleStates || {},
         infantryGear: normalizeInfantryGear(parsed.infantryGear),
+        insideKingdomSnapshot: parsed.insideKingdomSnapshot,
         commanderXp: typeof parsed.commanderXp === 'number' ? parsed.commanderXp : 1450,
       };
     }
@@ -365,6 +368,9 @@ export const ProtectedGameShell: React.FC<ProtectedGameShellProps> = ({
   const viewModeRef = useRef<'world' | 'kingdom'>(initialViewMode);
   viewModeRef.current = viewMode;
   const [kingdomState, setKingdomState] = useState<InsideKingdomState | null>(null);
+  const [insideKingdomSnapshot, setInsideKingdomSnapshot] = useState<InsideKingdomSnapshot | undefined>(
+    initialSim.insideKingdomSnapshot
+  );
   const [castles, setCastles] = useState<CastleSpawnData[]>([]);
   const [conqueredPlots, setConqueredPlots] = useState<Record<string, 'neutral' | 'enemy' | 'alliance'>>(() => {
     const map: Record<string, 'neutral' | 'enemy' | 'alliance'> = {};
@@ -475,6 +481,7 @@ export const ProtectedGameShell: React.FC<ProtectedGameShellProps> = ({
       monsterStates,
       castleStates,
       infantryGear,
+      insideKingdomSnapshot,
       commanderXp,
     };
   }, [
@@ -493,30 +500,98 @@ export const ProtectedGameShell: React.FC<ProtectedGameShellProps> = ({
     monsterStates,
     castleStates,
     infantryGear,
+    insideKingdomSnapshot,
     commanderXp,
   ]);
 
-  const flushCloudSave = useCallback(async () => {
+  const initialHydrationDoneRef = useRef<boolean>(false);
+  const lastSavedJsonRef = useRef<string>('');
+  const syncRetryTimerRef = useRef<number | null>(null);
+
+  const flushCloudSave = useCallback(async (): Promise<boolean> => {
+    const payload = buildSimPayload();
+    const serialized = JSON.stringify(payload);
     try {
-      const payload = buildSimPayload();
-      localStorage.setItem(getUserSimStorageKey(uid), JSON.stringify(payload));
-      await saveKingdomProgressToCloud(uid, payload.commanderXp, payload as unknown as Record<string, unknown>);
+      localStorage.setItem(getUserSimStorageKey(uid), serialized);
+      lastSavedJsonRef.current = serialized;
     } catch {
-      // Non-fatal offline or quota error
+      // Ignore storage quota errors
+    }
+
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+      offlineSyncService.recordLocalSave(uid, { forceDirty: true });
+      return false;
+    }
+
+    offlineSyncService.markSyncStarted(uid);
+    try {
+      await saveKingdomProgressToCloud(
+        uid,
+        payload.commanderXp,
+        payload as unknown as Record<string, unknown>
+      );
+      offlineSyncService.markSyncSucceeded(uid, false);
+      return true;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Unable to sync kingdom progress.';
+      offlineSyncService.markSyncFailed(uid, msg);
+      return false;
     }
   }, [buildSimPayload, uid]);
 
   useEffect(() => {
-    registerBeforeSignOutHook(flushCloudSave);
+    const unregisterSync = offlineSyncService.registerSyncHandler(uid, flushCloudSave);
+    return () => {
+      unregisterSync();
+      if (syncRetryTimerRef.current !== null) {
+        window.clearTimeout(syncRetryTimerRef.current);
+        syncRetryTimerRef.current = null;
+      }
+    };
+  }, [flushCloudSave, uid]);
+
+  useEffect(() => {
+    registerBeforeSignOutHook(async () => {
+      await flushCloudSave();
+    });
     return () => registerBeforeSignOutHook(null);
   }, [flushCloudSave, registerBeforeSignOutHook]);
 
-  // Hydrate cloud kingdom state on mount for the signed-in commander
+  // Hydrate cloud kingdom state on mount (preserving dirty offline mutations until synced!)
   useEffect(() => {
     let cancelled = false;
+    initialHydrationDoneRef.current = false;
+
+    if (offlineSyncService.hasPendingOfflineChanges(uid)) {
+      initialHydrationDoneRef.current = true;
+      if (typeof navigator === 'undefined' || navigator.onLine) {
+        void offlineSyncService.triggerSync(uid);
+      }
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+      initialHydrationDoneRef.current = true;
+      return () => {
+        cancelled = true;
+      };
+    }
+
     void loadKingdomProgressFromCloud(uid)
       .then((cloudState) => {
-        if (cancelled || !cloudState) return;
+        if (cancelled) return;
+        if (!cloudState) {
+          initialHydrationDoneRef.current = true;
+          return;
+        }
+        // Double check we didn't accumulate offline mutations while fetch was in flight
+        if (offlineSyncService.hasPendingOfflineChanges(uid)) {
+          initialHydrationDoneRef.current = true;
+          void offlineSyncService.triggerSync(uid);
+          return;
+        }
         const parsed = cloudState as Partial<PersistedSimState>;
         if (parsed.resources) setResources((prev) => ({ ...prev, ...parsed.resources }));
         if (parsed.troopInventory) setTroopInventory(parsed.troopInventory);
@@ -542,34 +617,70 @@ export const ProtectedGameShell: React.FC<ProtectedGameShellProps> = ({
         if (Array.isArray(parsed.activeMarches)) setActiveMarches(parsed.activeMarches);
         if (Array.isArray(parsed.battleReports)) setBattleReports(parsed.battleReports);
         if (parsed.infantryGear) setInfantryGear(normalizeInfantryGear(parsed.infantryGear));
+        if (parsed.insideKingdomSnapshot) {
+          setInsideKingdomSnapshot(parsed.insideKingdomSnapshot);
+          worldMapRef.current?.restoreInsideKingdomState(parsed.insideKingdomSnapshot);
+        }
         if (typeof parsed.commanderXp === 'number') setCommanderXp(parsed.commanderXp);
+        offlineSyncService.markSyncSucceeded(uid, false);
+        initialHydrationDoneRef.current = true;
       })
       .catch(() => {
-        // Offline fallback uses per-UID localStorage
+        initialHydrationDoneRef.current = true;
       });
     return () => {
       cancelled = true;
     };
   }, [uid]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Persist simulation state cleanly (debounced localStorage + Firestore sync, flushed on unload/sign-out)
+  // Persist simulation state cleanly (localStorage + offline sync queue + debounced Firestore sync)
   useEffect(() => {
+    const payload = buildSimPayload();
+    const serialized = JSON.stringify(payload);
+    if (!lastSavedJsonRef.current) {
+      lastSavedJsonRef.current = serialized;
+    }
+
+    const hasActualChange = serialized !== lastSavedJsonRef.current;
+
     const localTimer = window.setTimeout(() => {
+      if (!hasActualChange && initialHydrationDoneRef.current) return;
       try {
-        const payload = buildSimPayload();
-        localStorage.setItem(getUserSimStorageKey(uid), JSON.stringify(payload));
+        localStorage.setItem(getUserSimStorageKey(uid), serialized);
+        lastSavedJsonRef.current = serialized;
+        if (initialHydrationDoneRef.current && hasActualChange) {
+          offlineSyncService.recordLocalSave(uid, {
+            forceDirty: typeof navigator !== 'undefined' && !navigator.onLine,
+          });
+        }
       } catch {
         // Ignore quota errors
       }
-    }, 1000);
+    }, 900);
+
     const cloudTimer = window.setTimeout(() => {
-      const payload = buildSimPayload();
-      void saveKingdomProgressToCloud(
-        uid,
-        payload.commanderXp,
-        payload as unknown as Record<string, unknown>
-      ).catch(() => {});
-    }, 8000);
+      if (typeof navigator !== 'undefined' && !navigator.onLine) {
+        if (hasActualChange) {
+          offlineSyncService.recordLocalSave(uid, { forceDirty: true });
+        }
+        return;
+      }
+      if (!hasActualChange && !offlineSyncService.hasPendingOfflineChanges(uid)) {
+        return;
+      }
+      void offlineSyncService.triggerSync(uid).then((ok) => {
+        if (!ok && navigator.onLine) {
+          if (syncRetryTimerRef.current !== null) window.clearTimeout(syncRetryTimerRef.current);
+          syncRetryTimerRef.current = window.setTimeout(() => {
+            syncRetryTimerRef.current = null;
+            if (navigator.onLine && offlineSyncService.hasPendingOfflineChanges(uid)) {
+              void offlineSyncService.triggerSync(uid);
+            }
+          }, 12_000);
+        }
+      });
+    }, 5000);
+
     return () => {
       window.clearTimeout(localTimer);
       window.clearTimeout(cloudTimer);
@@ -580,7 +691,11 @@ export const ProtectedGameShell: React.FC<ProtectedGameShellProps> = ({
     const flushLocalSync = () => {
       try {
         const payload = buildSimPayload();
-        localStorage.setItem(getUserSimStorageKey(uid), JSON.stringify(payload));
+        const serialized = JSON.stringify(payload);
+        localStorage.setItem(getUserSimStorageKey(uid), serialized);
+        if (serialized !== lastSavedJsonRef.current && (!navigator.onLine || offlineSyncService.hasPendingOfflineChanges(uid))) {
+          offlineSyncService.recordLocalSave(uid, { forceDirty: true });
+        }
       } catch {
         // Ignore quota errors
       }
@@ -1438,9 +1553,12 @@ export const ProtectedGameShell: React.FC<ProtectedGameShellProps> = ({
         completesAt: now + durationMs,
       };
       setTrainingQueue((prev) => [...prev, item]);
+      if (typeof navigator !== 'undefined' && !navigator.onLine) {
+        offlineSyncService.queueOfflineActionLabel(uid, `Trained ${count} ${balanceConfig.troops[classId].name}`);
+      }
       showToast(`⚔️ Training ${count.toLocaleString()} × ${balanceConfig.troops[classId].name} Lv.${level}!`);
     },
-    [balanceConfig, resources, showToast]
+    [balanceConfig, resources, showToast, uid]
   );
 
   const handleInstantFinishTraining = useCallback(
@@ -1509,9 +1627,12 @@ export const ProtectedGameShell: React.FC<ProtectedGameShellProps> = ({
       }
       setWoundedInventory(nextWounded);
       setHospitalQueue((prev) => [...prev, ...newJobs]);
+      if (typeof navigator !== 'undefined' && !navigator.onLine) {
+        offlineSyncService.queueOfflineActionLabel(uid, `Healed ${totalQueued} Troops`);
+      }
       showToast(`🏥 Royal Hospital treating ${totalQueued.toLocaleString()} wounded troops!`);
     },
-    [balanceConfig.hospitalHealSecondsPerTroop, balanceConfig.simulationTimeScale, bonuses.healSpeedMult, showToast, woundedInventory]
+    [balanceConfig.hospitalHealSecondsPerTroop, balanceConfig.simulationTimeScale, bonuses.healSpeedMult, showToast, uid, woundedInventory]
   );
 
   const handleDeployStructureTroops = useCallback(
@@ -1956,9 +2077,12 @@ export const ProtectedGameShell: React.FC<ProtectedGameShellProps> = ({
       const spec = MAGAR_PROGRESSION_SPECS[level];
       const itemLabel =
         slot === 'weapon' ? spec.weaponName : slot === 'shield' ? spec.shieldName : spec.armorName;
+      if (typeof navigator !== 'undefined' && !navigator.onLine) {
+        offlineSyncService.queueOfflineActionLabel(uid, `Forged ${itemLabel}`);
+      }
       showToast(`⚒️ Forged Lv.${level} ${spec.tierName} · ${itemLabel} to +${nextRank}!`);
     },
-    [infantryGear, resources.crystal, resources.gold, resources.iron, resources.wood, showToast]
+    [infantryGear, resources.crystal, resources.gold, resources.iron, resources.wood, showToast, uid]
   );
 
   const handleUpgradeResearch = useCallback(
@@ -1980,9 +2104,12 @@ export const ProtectedGameShell: React.FC<ProtectedGameShellProps> = ({
         crystal: prev.crystal - crystalCost,
       }));
       setResearch((prev) => ({ ...prev, [key]: prev[key] + 1 }));
+      if (typeof navigator !== 'undefined' && !navigator.onLine) {
+        offlineSyncService.queueOfflineActionLabel(uid, `Researched ${key} Lv.${lv + 1}`);
+      }
       showToast(`🎓 Upgraded ${key} to Level ${lv + 1}!`);
     },
-    [research, resources.crystal, resources.food, showToast]
+    [research, resources.crystal, resources.food, showToast, uid]
   );
 
   const handleToggleEquipItem = useCallback(
@@ -2749,6 +2876,20 @@ export const ProtectedGameShell: React.FC<ProtectedGameShellProps> = ({
         },
         onInsideKingdomStateChange: (state) => {
           setKingdomState(state);
+          setInsideKingdomSnapshot({
+            keepLevel: state.keepLevel,
+            keepPower: state.keepPower,
+            selectedPlotId: state.selectedPlotId,
+            slots: state.plots.map((p) =>
+              p.building
+                ? {
+                    slotIndex: p.slotIndex,
+                    category: p.building.category,
+                    level: p.building.level,
+                  }
+                : null
+            ),
+          });
         },
         onCastlesUpdated: (updatedCastles) => {
           setCastles([...updatedCastles]);
@@ -2841,6 +2982,9 @@ export const ProtectedGameShell: React.FC<ProtectedGameShellProps> = ({
           respawnAt: n.respawnAt ?? undefined,
         });
       }
+      if (initialSim.insideKingdomSnapshot) {
+        wm.restoreInsideKingdomState(initialSim.insideKingdomSnapshot);
+      }
     });
 
     return () => {
@@ -2888,12 +3032,34 @@ export const ProtectedGameShell: React.FC<ProtectedGameShellProps> = ({
             onSpendResources={handleSpendResources}
             onGrantReward={handleGrantInnerReward}
             onSelectPlot={(plotId) => worldMapRef.current?.selectInsidePlot(plotId)}
-            onMergeSelected={() => worldMapRef.current?.mergeSelectedInsideBuilding() || false}
-            onAutoMergeAll={() => worldMapRef.current?.autoMergeInsideKingdom() || 0}
-            onConstructBuilding={(cat: MergeBuildingCategory, prefPlotId?: string) =>
-              Boolean(worldMapRef.current?.constructInsideBuilding(cat, prefPlotId))
-            }
-            onUpgradeKeep={() => worldMapRef.current?.upgradeInsideImperialKeep() || false}
+            onMergeSelected={() => {
+              const merged = worldMapRef.current?.mergeSelectedInsideBuilding() || false;
+              if (merged && typeof navigator !== 'undefined' && !navigator.onLine) {
+                offlineSyncService.queueOfflineActionLabel(uid, 'Merged Courtyard Building');
+              }
+              return merged;
+            }}
+            onAutoMergeAll={() => {
+              const count = worldMapRef.current?.autoMergeInsideKingdom() || 0;
+              if (count > 0 && typeof navigator !== 'undefined' && !navigator.onLine) {
+                offlineSyncService.queueOfflineActionLabel(uid, `Auto-Merged ${count} Pairs`);
+              }
+              return count;
+            }}
+            onConstructBuilding={(cat: MergeBuildingCategory, prefPlotId?: string) => {
+              const built = Boolean(worldMapRef.current?.constructInsideBuilding(cat, prefPlotId));
+              if (built && typeof navigator !== 'undefined' && !navigator.onLine) {
+                offlineSyncService.queueOfflineActionLabel(uid, `Built ${cat}`);
+              }
+              return built;
+            }}
+            onUpgradeKeep={() => {
+              const upgraded = worldMapRef.current?.upgradeInsideImperialKeep() || false;
+              if (upgraded && typeof navigator !== 'undefined' && !navigator.onLine) {
+                offlineSyncService.queueOfflineActionLabel(uid, 'Upgraded Imperial Keep');
+              }
+              return upgraded;
+            }}
             onShowToast={showToast}
             onReturnToWorld={handleReturnToWorld}
           />
@@ -3019,6 +3185,7 @@ export const ProtectedGameShell: React.FC<ProtectedGameShellProps> = ({
           showToast(`World Lighting: ${next.toUpperCase()}`);
         }}
         commanderNameOverride={commanderUsername ? commanderUsername.toUpperCase() : undefined}
+        syncUid={uid}
       />
 
       {/* 3B. Unified 8-Panel Kingdom Command Hub Drawer */}
