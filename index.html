@@ -7,15 +7,16 @@
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <meta name="apple-mobile-web-app-title" content="Himalayan">
+  <meta name="apple-mobile-web-app-title" content="Rising Towers">
   <meta name="screen-orientation" content="landscape">
   <meta name="x5-orientation" content="landscape">
-  <link rel="apple-touch-icon" href="/apple-touch-icon.png">
+  <link rel="icon" href="/favicon.ico" sizes="any">
   <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png">
-  <title>Himalayan Realms</title>
-  <meta name="description" content="Isometric Strategy Prototype set in Himalayan kingdoms">
-  <meta property="og:title" content="Himalayan Realms">
-  <meta property="og:description" content="Isometric Strategy Prototype set in Himalayan kingdoms">
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png">
+  <title>Empire of the Rising Towers</title>
+  <meta name="description" content="UNITE THE KINGDOM · BY NEPGAME — Isometric 3D medieval kingdom strategy across the Himalayas.">
+  <meta property="og:title" content="Empire of the Rising Towers">
+  <meta property="og:description" content="UNITE THE KINGDOM · BY NEPGAME — Isometric 3D medieval kingdom strategy across the Himalayas.">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;500;600;700;800&family=Cinzel:wght@600;700;800;900&family=Inter:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@500;600;700;800&display=swap" rel="stylesheet">
@@ -42,21 +43,41 @@
       flex-direction: column;
       align-items: center;
       justify-content: center;
-      gap: 14px;
+      gap: 12px;
       background: radial-gradient(circle at 50% 38%, #162820 0%, #0a0e14 72%);
       color: #f8fafc;
       font-family: 'Barlow Condensed', system-ui, -apple-system, sans-serif;
       transition: opacity 0.2s ease;
     }
+    #app-boot-splash .boot-crest {
+      width: 104px;
+      height: 104px;
+      border-radius: 20px;
+      border: 1.5px solid rgba(250, 204, 21, 0.65);
+      box-shadow: 0 0 36px rgba(250, 204, 21, 0.22), 0 14px 32px rgba(0, 0, 0, 0.7);
+      object-fit: cover;
+      background: #0a0e14;
+    }
     #app-boot-splash .boot-title {
-      font-size: 32px;
+      font-family: 'Cinzel', 'Barlow Condensed', serif;
+      font-size: clamp(22px, 3.6vw, 32px);
       font-weight: 800;
-      letter-spacing: 0.12em;
+      letter-spacing: 0.1em;
       color: #fde047;
       text-transform: uppercase;
+      text-align: center;
+      padding: 0 16px;
+    }
+    #app-boot-splash .boot-slogan {
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.2em;
+      color: #cbd5e1;
+      text-transform: uppercase;
+      text-align: center;
     }
     #app-boot-splash .boot-sub {
-      font-size: 13px;
+      font-size: 12.5px;
       letter-spacing: 0.08em;
       color: #a7f3d0;
       font-family: system-ui, -apple-system, sans-serif;
@@ -82,10 +103,12 @@
   </style>
 </head>
 <body>
-  <div id="app-boot-splash" aria-label="Loading Himalayan Realms">
-    <div class="boot-title">Himalayan Realms</div>
+  <div id="app-boot-splash" aria-label="Loading Empire of the Rising Towers">
+    <img class="boot-crest" src="/boot-crest.png" alt="Empire of the Rising Towers Royal Crest" />
+    <div class="boot-title">EMPIRE OF THE RISING TOWERS</div>
+    <div class="boot-slogan">UNITE THE KINGDOM · BY NEPGAME</div>
     <div class="boot-bar-track"><div class="boot-bar-fill"></div></div>
-    <div id="app-boot-status" class="boot-sub">Loading realm assets...</div>
+    <div id="app-boot-status" class="boot-sub">Loading citadel assets...</div>
   </div>
   <div id="root"></div>
   <script type="module" src="/src/main.tsx"></script>

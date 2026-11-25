@@ -203,7 +203,7 @@ function createHimalayanSkylineTexture(): THREE.CanvasTexture {
 export class WorldMap {
   public scene!: THREE.Scene;
   public renderer!: THREE.WebGLRenderer;
-  public terrainGenerator!: TerrainGenerator;
+  public terrainGenerator: TerrainGenerator | null = null;
   public cameraController!: CameraController;
 
   private sunLight!: THREE.DirectionalLight;
@@ -566,6 +566,57 @@ export class WorldMap {
   public insideKingdom3D: InsideKingdom3D | null = null;
   public currentSceneMode: 'world' | 'kingdom' = 'world';
   private resizeObserver: ResizeObserver | null = null;
+  private worldMapBuilt = false;
+  private worldBuildStage = 0;
+  private worldBuildRafId: number | null = null;
+  private isBuildingWorldNow = false;
+
+  // Flat animation object caches (eliminates nested group child scans every frame)
+  private animResBelowTags: Array<{ obj: THREE.Object3D; dist: number; y: number }> = [];
+  private animWaterwheels: THREE.Object3D[] = [];
+  private animWindmills: THREE.Object3D[] = [];
+  private animSawBlades: THREE.Object3D[] = [];
+  private animMineWheels: THREE.Object3D[] = [];
+  private animFoliageCanopies: Array<{ obj: THREE.Object3D; idx: number }> = [];
+  private animGoldGlints: Array<{ obj: THREE.Object3D; phase: number }> = [];
+  private animCastleDragonBanners: Array<{ obj: THREE.Object3D; phase: number }> = [];
+  private animCastleBrazierFlames: Array<{ obj: THREE.Object3D; phase: number }> = [];
+  private animBuildingBanners: Array<{ obj: THREE.Object3D; idx: number }> = [];
+  private animBuildingDragonBanners: Array<{ obj: THREE.Object3D; phase: number }> = [];
+  private animBuildingPrayerFlags: Array<{ obj: THREE.Object3D; idx: number }> = [];
+  private animBuildingWardRings: THREE.Object3D[] = [];
+  private animBuildingBlessingRings: THREE.Object3D[] = [];
+  private animBuildingWardOrbs: Array<{ obj: THREE.Object3D; radius: number; speed: number; phase: number }> = [];
+
+  // Adaptive 60fps Quality Governor
+  private qualityTier: 'high' | 'balanced' | 'performance' = 'high';
+  private perfEmaMs = 16.7;
+  private lastPerfTickMs = 0;
+  private perfCooldownFrames = 0;
+  private shadowFrameSkip = 0;
+  private forceShadowUpdate = true;
+  private shrineLightningHz = 16;
+
+  // Queued state updates received while World Map is deferred in Kingdom mode
+  private pendingBarrierStates = new Map<string, boolean>();
+  private pendingConqueredStructures = new Set<string>();
+  private pendingNeutralStructures = new Set<string>();
+  private pendingEntityLivePatches = new Map<
+    string,
+    Partial<Pick<WorldEntity, 'health' | 'maxHealth' | 'yieldAmount' | 'isDefeated' | 'respawnAt' | 'ownerFaction'>>
+  >();
+  private pendingBurningCastles = new Map<
+    string,
+    { isBurning: boolean; currentHp?: number; maxHp?: number }
+  >();
+  private pendingArmyEquipmentTier: {
+    tier: number;
+    ranks: { weapon: number; shield: number; armor: number };
+    heroCrestColor?: string;
+    heroId?: string | null;
+  } | null = null;
+  private pendingMarchVisual: Parameters<WorldMap['setMarchVisual']>[0] | undefined = undefined;
+  private pendingAlliedColumns: Parameters<WorldMap['setAlliedRallyColumns']>[0] | null = null;
 
   constructor(options: WorldMapOptions) {
     this.container = options.container;
@@ -591,29 +642,236 @@ export class WorldMap {
     this.vfxManager = new VFXManager(this.scene, isMobileEnv);
     this.environmentManager = new EnvironmentAnimationManager();
     this.environmentManager.attachLights(this.scene, this.sunLight, this.hemiLight, null, this.vfxManager);
-    this.initTerrain();
-    this.initAtmosphere();
-    this.initKingdomBuildings();
-    this.initStrategicDistanceLines();
-    this.initRandomCastles();
-    this.initMonsters();
-    this.initResources();
-    this.rebuildDebugCollisionBoxes();
-    this.initArmyBattalion();
     this.initTacticalLine();
     this.initSelectionIndicator();
     this.initCameraController(options.onCameraUpdate);
-
-    const myCastle = this.castlesList.find((c) => c.isMyCastle);
-    if (myCastle) {
-      this.cameraController.setHomeCoordinates(myCastle.position[0], myCastle.position[2], true);
-    }
+    this.applyQualityTier(this.isSoftwareGl ? 'performance' : isMobileEnv ? 'balanced' : 'high');
 
     if (options.initialSceneMode === 'kingdom') {
+      // Fast Kingdom-first startup: render only the walled citadel until player enters World Map
       this.setSceneMode('kingdom', true);
+    } else {
+      this.ensureWorldMapBuilt();
     }
 
     this.startLoop();
+  }
+
+  private applyQualityTier(tier: 'high' | 'balanced' | 'performance') {
+    this.qualityTier = tier;
+    const dpr = typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1;
+    const targetPr = this.isSoftwareGl
+      ? 1
+      : tier === 'high'
+        ? Math.min(dpr, 1.5)
+        : tier === 'balanced'
+          ? Math.min(dpr, 1.15)
+          : Math.min(dpr, 0.9);
+
+    if (this.renderer && Math.abs(this.renderer.getPixelRatio() - targetPr) > 0.02) {
+      this.renderer.setPixelRatio(targetPr);
+      const w = Math.max(1, this.container.clientWidth);
+      const h = Math.max(1, this.container.clientHeight);
+      this.renderer.setSize(w, h, false);
+    }
+
+    if (this.renderer) {
+      if (tier === 'high' && !this.isSoftwareGl) {
+        this.renderer.shadowMap.autoUpdate = true;
+      } else {
+        this.renderer.shadowMap.autoUpdate = false;
+        this.forceShadowUpdate = true;
+      }
+    }
+
+    if (this.terrainGenerator) {
+      this.terrainGenerator.setAdaptiveLodBias(
+        tier === 'high' ? 1.0 : tier === 'balanced' ? 0.82 : 0.62
+      );
+    }
+
+    this.shrineLightningHz = tier === 'high' ? 16 : tier === 'balanced' ? 10 : 6;
+  }
+
+  private getGroundHeight(x: number, z: number): number {
+    return this.terrainGenerator ? this.terrainGenerator.getHeightAt(x, z) : 10.0;
+  }
+
+  private runWorldBuildStage(stage: number) {
+    switch (stage) {
+      case 0:
+        this.initTerrain();
+        this.cameraController.setTerrainGenerator(this.terrainGenerator);
+        this.terrainGenerator?.setAdaptiveLodBias(
+          this.qualityTier === 'high' ? 1.0 : this.qualityTier === 'balanced' ? 0.82 : 0.62
+        );
+        break;
+      case 1:
+        this.initAtmosphere();
+        break;
+      case 2:
+        this.initKingdomBuildings();
+        break;
+      case 3:
+        this.initStrategicDistanceLines();
+        break;
+      case 4:
+        this.initRandomCastles();
+        break;
+      case 5:
+        this.initMonsters();
+        break;
+      case 6:
+        this.initResources();
+        break;
+      case 7:
+        this.rebuildDebugCollisionBoxes();
+        break;
+      case 8:
+        this.initArmyBattalion();
+        break;
+    }
+  }
+
+  private finalizeWorldMapBuild() {
+    this.worldMapBuilt = true;
+    this.isBuildingWorldNow = false;
+    this.hasCompiledScene = false;
+    this.forceShadowUpdate = true;
+
+    const myCastle = this.castlesList.find((c) => c.isMyCastle);
+    if (myCastle) {
+      if (this.currentSceneMode === 'kingdom') {
+        this.cameraController.updateHomeCoordsOnly(myCastle.position[0], myCastle.position[2]);
+      } else {
+        this.cameraController.setHomeCoordinates(myCastle.position[0], myCastle.position[2], true);
+      }
+    }
+
+    if (this.currentSceneMode === 'kingdom' && this.terrainGenerator) {
+      this.buildingsGroup.visible = false;
+      this.castlesGroup.visible = false;
+      this.strategicLinesGroup.visible = false;
+      this.monstersGroup.visible = false;
+      this.resourcesGroup.visible = false;
+      this.atmosphereGroup.visible = false;
+      this.armyGroup.visible = false;
+      this.alliedRallyGroup.visible = false;
+      this.terrainGenerator.plotMarkersGroup.visible = false;
+      this.terrainGenerator.mesh.visible = false;
+      this.terrainGenerator.vegetationGroup.visible = false;
+      this.terrainGenerator.waterfallsGroup.visible = false;
+      this.terrainGenerator.mistPuffsGroup.visible = false;
+      this.terrainGenerator.leylineStreamsGroup.visible = false;
+    } else if (this.currentSceneMode === 'world') {
+      if (this.terrainGenerator) {
+        this.terrainGenerator.mesh.visible = true;
+        this.terrainGenerator.vegetationGroup.visible = true;
+        this.terrainGenerator.waterfallsGroup.visible = true;
+        this.terrainGenerator.mistPuffsGroup.visible = true;
+        this.terrainGenerator.leylineStreamsGroup.visible = true;
+        this.terrainGenerator.plotMarkersGroup.visible = true;
+      }
+      this.buildingsGroup.visible = true;
+      this.castlesGroup.visible = true;
+      this.strategicLinesGroup.visible = true;
+      this.atmosphereGroup.visible = true;
+      this.monstersGroup.visible = !this.isStrategicFilterActive;
+      this.resourcesGroup.visible = !this.isStrategicFilterActive;
+      this.armyGroup.visible = this.armyState !== 'IDLE';
+      this.alliedRallyGroup.visible = true;
+      this.cameraController.setPickables(this.pickableObjects);
+    }
+
+    // Flush queued mutations that arrived before World Map was initialized
+    if (this.pendingArmyEquipmentTier) {
+      const q = this.pendingArmyEquipmentTier;
+      this.pendingArmyEquipmentTier = null;
+      this.setArmyEquipmentTier(q.tier, q.ranks, q.heroCrestColor, q.heroId);
+    }
+    if (this.pendingBarrierStates.size > 0) {
+      const entries = Array.from(this.pendingBarrierStates.entries());
+      this.pendingBarrierStates.clear();
+      for (const [id, active] of entries) {
+        this.setStructureBarrierActive(id, active);
+      }
+    }
+    if (this.pendingConqueredStructures.size > 0) {
+      const ids = Array.from(this.pendingConqueredStructures.values());
+      this.pendingConqueredStructures.clear();
+      for (const id of ids) {
+        this.conquerStructureById(id, true);
+      }
+    }
+    if (this.pendingNeutralStructures.size > 0) {
+      const ids = Array.from(this.pendingNeutralStructures.values());
+      this.pendingNeutralStructures.clear();
+      for (const id of ids) {
+        this.setStructureNeutral(id);
+      }
+    }
+    if (this.pendingEntityLivePatches.size > 0) {
+      const entries = Array.from(this.pendingEntityLivePatches.entries());
+      this.pendingEntityLivePatches.clear();
+      for (const [id, patch] of entries) {
+        this.updateEntityLiveState(id, patch);
+      }
+    }
+    if (this.pendingBurningCastles.size > 0) {
+      const entries = Array.from(this.pendingBurningCastles.entries());
+      this.pendingBurningCastles.clear();
+      for (const [id, st] of entries) {
+        this.setCastleBurningState(id, st.isBurning, st.currentHp, st.maxHp);
+      }
+    }
+    if (this.pendingMarchVisual !== undefined) {
+      const mv = this.pendingMarchVisual;
+      this.pendingMarchVisual = undefined;
+      this.setMarchVisual(mv);
+    }
+    if (this.pendingAlliedColumns) {
+      const cols = this.pendingAlliedColumns;
+      this.pendingAlliedColumns = null;
+      this.setAlliedRallyColumns(cols);
+    }
+
+    this.onCastlesUpdated?.([...this.castlesList]);
+  }
+
+  private startAsyncWorldMapBuild() {
+    if (this.worldMapBuilt || this.isDisposed || this.isBuildingWorldNow || this.worldBuildRafId !== null) {
+      return;
+    }
+    this.isBuildingWorldNow = true;
+    const step = () => {
+      this.worldBuildRafId = null;
+      if (this.isDisposed || this.worldMapBuilt) {
+        this.isBuildingWorldNow = false;
+        return;
+      }
+      if (this.worldBuildStage <= 8) {
+        this.runWorldBuildStage(this.worldBuildStage);
+        this.worldBuildStage++;
+        this.worldBuildRafId = requestAnimationFrame(step);
+      } else {
+        this.finalizeWorldMapBuild();
+      }
+    };
+    this.worldBuildRafId = requestAnimationFrame(step);
+  }
+
+  public ensureWorldMapBuilt() {
+    if (this.worldMapBuilt || this.isDisposed) return;
+    if (this.worldBuildRafId !== null) {
+      cancelAnimationFrame(this.worldBuildRafId);
+      this.worldBuildRafId = null;
+    }
+    this.isBuildingWorldNow = true;
+    while (this.worldBuildStage <= 8) {
+      this.runWorldBuildStage(this.worldBuildStage);
+      this.worldBuildStage++;
+    }
+    this.finalizeWorldMapBuild();
   }
 
   private ensureInsideKingdom3D(): InsideKingdom3D {
@@ -741,8 +999,8 @@ export class WorldMap {
   private initTerrain() {
     this.terrainGenerator = new TerrainGenerator();
 
-    // Maximize grazing-angle texture sharpness on terrain
-    const maxAniso = this.renderer.capabilities.getMaxAnisotropy();
+    // Cap terrain anisotropy to 4x for crisp grazing detail without mobile fill-rate stalls
+    const maxAniso = Math.min(4, this.renderer.capabilities.getMaxAnisotropy());
     if (this.terrainGenerator.terrainMaterial.map) {
       this.terrainGenerator.terrainMaterial.map.anisotropy = maxAniso;
     }
@@ -1986,6 +2244,43 @@ export class WorldMap {
     RESERVED_PLOTS.filter((p) => p.type === 'shrine_c').forEach((site, idx) =>
       buildFloatingCrystalShrine(site, 'shrine_c', idx + 30)
     );
+    this.rebuildBuildingAnimCache();
+  }
+
+  private rebuildBuildingAnimCache() {
+    this.animBuildingBanners = [];
+    this.animBuildingDragonBanners = [];
+    this.animBuildingPrayerFlags = [];
+    this.animBuildingWardRings = [];
+    this.animBuildingBlessingRings = [];
+    this.animBuildingWardOrbs = [];
+    const bGroups = this.buildingsGroup.children;
+    for (let idx = 0; idx < bGroups.length; idx++) {
+      const bChildren = bGroups[idx].children;
+      for (let j = 0; j < bChildren.length; j++) {
+        const child = bChildren[j];
+        const ud = child.userData;
+        if (!ud) continue;
+        if (ud.isBanner) {
+          this.animBuildingBanners.push({ obj: child, idx });
+        } else if (ud.isDragonBanner) {
+          this.animBuildingDragonBanners.push({ obj: child, phase: Number(ud.phase || 0) });
+        } else if (ud.isPrayerFlag) {
+          this.animBuildingPrayerFlags.push({ obj: child, idx });
+        } else if (ud.isWardRing) {
+          this.animBuildingWardRings.push(child);
+        } else if (ud.isBlessingRing) {
+          this.animBuildingBlessingRings.push(child);
+        } else if (ud.isWardOrb) {
+          this.animBuildingWardOrbs.push({
+            obj: child,
+            radius: Number(ud.orbitRadius || 7.5),
+            speed: Number(ud.orbitSpeed || 1.6),
+            phase: Number(ud.orbitPhase || 0),
+          });
+        }
+      }
+    }
   }
 
   /**
@@ -2263,10 +2558,18 @@ export class WorldMap {
    */
   private initRandomCastles() {
     this.scene.add(this.castlesGroup);
-    this.relocateCastles(false);
+    this.populateCastles(false);
   }
 
   public relocateCastles(focusMyCastle = true): CastleSpawnData[] {
+    if (!this.worldMapBuilt) {
+      this.ensureWorldMapBuilt();
+      if (!focusMyCastle) return this.castlesList;
+    }
+    return this.populateCastles(focusMyCastle);
+  }
+
+  private populateCastles(focusMyCastle = true): CastleSpawnData[] {
     // 1. Clean up old castle meshes, entities, and pickables
     for (const oldPick of this.castlePickables) {
       const idx = this.pickableObjects.indexOf(oldPick);
@@ -2613,6 +2916,7 @@ export class WorldMap {
     if (myCastle) {
       this.spawnStarterResourcesAroundMyCastle(myCastle);
     }
+    this.rebuildCastleAnimCache();
 
     this.rebuildDebugCollisionBoxes();
     this.onCastlesUpdated?.(this.castlesList);
@@ -2623,6 +2927,25 @@ export class WorldMap {
     }
 
     return this.castlesList;
+  }
+
+  private rebuildCastleAnimCache() {
+    this.animCastleDragonBanners = [];
+    this.animCastleBrazierFlames = [];
+    const castleGroups = this.castlesGroup.children;
+    for (let idx = 0; idx < castleGroups.length; idx++) {
+      const cChildren = castleGroups[idx].children;
+      for (let j = 0; j < cChildren.length; j++) {
+        const child = cChildren[j];
+        const ud = child.userData;
+        if (!ud) continue;
+        if (ud.isDragonBanner) {
+          this.animCastleDragonBanners.push({ obj: child, phase: Number(ud.phase || 0) });
+        } else if (ud.isBrazierFlame) {
+          this.animCastleBrazierFlames.push({ obj: child, phase: Number(ud.phase || 0) });
+        }
+      }
+    }
   }
 
   private spawnStarterResourcesAroundMyCastle(myCastle: CastleSpawnData) {
@@ -2751,6 +3074,7 @@ export class WorldMap {
       this.starterResourceIds.push(entity.id);
       this.resourcesGroup.add(rGroup);
     }
+    this.rebuildResourceAnimCache();
   }
 
   private createResourceBelowTag(entity: WorldEntity): THREE.Sprite {
@@ -3478,6 +3802,45 @@ export class WorldMap {
       const rGroup = this.buildRealisticResourceGroup(rData);
       registerResource(rGroup, rData);
     }
+    this.rebuildResourceAnimCache();
+  }
+
+  private rebuildResourceAnimCache() {
+    this.animResBelowTags = [];
+    this.animWaterwheels = [];
+    this.animWindmills = [];
+    this.animSawBlades = [];
+    this.animMineWheels = [];
+    this.animFoliageCanopies = [];
+    this.animGoldGlints = [];
+    const resGroups = this.resourcesGroup.children;
+    for (let idx = 0; idx < resGroups.length; idx++) {
+      const rChildren = resGroups[idx].children;
+      for (let j = 0; j < rChildren.length; j++) {
+        const mesh = rChildren[j];
+        const ud = mesh.userData;
+        if (!ud) continue;
+        if (ud.belowTagDist) {
+          this.animResBelowTags.push({
+            obj: mesh,
+            dist: Number(ud.belowTagDist),
+            y: Number(ud.belowTagY ?? 0.9),
+          });
+        } else if (ud.isWaterwheel) {
+          this.animWaterwheels.push(mesh);
+        } else if (ud.isWindmillBlades) {
+          this.animWindmills.push(mesh);
+        } else if (ud.isSawBlade) {
+          this.animSawBlades.push(mesh);
+        } else if (ud.isMineWheel) {
+          this.animMineWheels.push(mesh);
+        } else if (ud.isFoliageCanopy) {
+          this.animFoliageCanopies.push({ obj: mesh, idx });
+        } else if (ud.isGoldGlint) {
+          this.animGoldGlints.push({ obj: mesh, phase: Number(ud.phase || 0) });
+        }
+      }
+    }
   }
 
   // ============================================================
@@ -3740,6 +4103,15 @@ export class WorldMap {
     heroCrestColor?: string,
     heroId?: string | null
   ) {
+    if (!this.worldMapBuilt) {
+      this.pendingArmyEquipmentTier = {
+        tier: infantryTier,
+        ranks,
+        heroCrestColor,
+        heroId,
+      };
+      return;
+    }
     const tier = Math.max(1, Math.min(5, Math.round(infantryTier || 1))) as TroopLevel;
     this.currentArmyTier = tier;
     const totalForgeRank = Math.max(0, (ranks.weapon || 0) + (ranks.shield || 0) + (ranks.armor || 0));
@@ -4053,6 +4425,10 @@ export class WorldMap {
   }
 
   public setStructureBarrierActive(structureId: string, active: boolean) {
+    if (!this.worldMapBuilt) {
+      this.pendingBarrierStates.set(structureId, active);
+      return;
+    }
     const group = this.buildingMeshesMap.get(structureId);
     const entity = this.entitiesMap.get(structureId);
     if (!group || !entity) return;
@@ -4084,6 +4460,11 @@ export class WorldMap {
     id: string,
     patch: Partial<Pick<WorldEntity, 'health' | 'maxHealth' | 'yieldAmount' | 'isDefeated' | 'respawnAt' | 'ownerFaction'>>
   ) {
+    if (!this.worldMapBuilt) {
+      const prev = this.pendingEntityLivePatches.get(id) || {};
+      this.pendingEntityLivePatches.set(id, { ...prev, ...patch });
+      return;
+    }
     const ent = this.entitiesMap.get(id);
     if (!ent) return;
     const wasDefeated = Boolean(ent.isDefeated);
@@ -4115,6 +4496,10 @@ export class WorldMap {
   }
 
   public setCastleBurningState(castleId: string, isBurning: boolean, currentHp?: number, maxHp?: number) {
+    if (!this.worldMapBuilt) {
+      this.pendingBurningCastles.set(castleId, { isBurning, currentHp, maxHp });
+      return;
+    }
     const entity = this.entitiesMap.get(castleId);
     if (entity) {
       if (typeof currentHp === 'number') entity.health = currentHp;
@@ -4152,6 +4537,7 @@ export class WorldMap {
     castleId: string,
     forcedPos?: [number, number, number]
   ): [number, number, number] | null {
+    this.ensureWorldMapBuilt();
     const castle = this.castlesList.find((c) => c.id === castleId && c.faction === 'enemy');
     const cGroup = this.buildingMeshesMap.get(castleId);
     const entity = this.entitiesMap.get(castleId);
@@ -4172,7 +4558,7 @@ export class WorldMap {
         minCastleDist: 96,
         oldPos,
         minJumpFromOld: 340,
-        getHeightAt: (x, z) => this.terrainGenerator.getHeightAt(x, z),
+        getHeightAt: (x, z) => this.getGroundHeight(x, z),
       });
 
     // Departure destruction + portal shockwave at the fallen citadel coordinates
@@ -4235,6 +4621,10 @@ export class WorldMap {
       resourceType?: string;
     } | null
   ) {
+    if (!this.worldMapBuilt) {
+      this.pendingMarchVisual = visual;
+      return;
+    }
     this.externalMarchVisual = visual;
     if (!visual) {
       if (this.armyState === 'IDLE') {
@@ -4247,7 +4637,7 @@ export class WorldMap {
     const t = Math.max(0, Math.min(1, visual.progress01));
     const ax = THREE.MathUtils.lerp(visual.from[0], visual.to[0], t);
     const az = THREE.MathUtils.lerp(visual.from[2], visual.to[2], t);
-    const ay = this.terrainGenerator.getHeightAt(ax, az);
+    const ay = this.getGroundHeight(ax, az);
 
     this.armyGroup.position.set(ax, ay, az);
     this.armyPos.set(ax, ay, az);
@@ -4261,7 +4651,7 @@ export class WorldMap {
 
     this.tacticalLine.visible = this.currentSceneMode === 'world';
     this._linePts[0].set(ax, ay + 0.35, az);
-    this._linePts[1].set(visual.to[0], this.terrainGenerator.getHeightAt(visual.to[0], visual.to[2]) + 0.35, visual.to[2]);
+    this._linePts[1].set(visual.to[0], this.getGroundHeight(visual.to[0], visual.to[2]) + 0.35, visual.to[2]);
     this.tacticalLine.geometry.setFromPoints(this._linePts);
   }
 
@@ -4452,6 +4842,10 @@ export class WorldMap {
       isReturning?: boolean;
     }>
   ) {
+    if (!this.worldMapBuilt) {
+      this.pendingAlliedColumns = columns;
+      return;
+    }
     const activeIds = new Set<string>();
     for (const col of columns) {
       activeIds.add(col.id);
@@ -4484,7 +4878,7 @@ export class WorldMap {
       const t = Math.max(0, Math.min(1, col.progress01));
       const ax = THREE.MathUtils.lerp(col.from[0], col.to[0], t);
       const az = THREE.MathUtils.lerp(col.from[2], col.to[2], t);
-      const ay = this.terrainGenerator.getHeightAt(ax, az);
+      const ay = this.getGroundHeight(ax, az);
 
       entry.group.position.set(ax, ay, az);
       entry.group.visible = this.currentSceneMode === 'world';
@@ -4495,7 +4889,7 @@ export class WorldMap {
         entry.group.rotation.y = Math.atan2(dx, dz);
       }
 
-      const toY = this.terrainGenerator.getHeightAt(col.to[0], col.to[2]);
+      const toY = this.getGroundHeight(col.to[0], col.to[2]);
       entry.pts[0].set(ax, ay + 0.4, az);
       entry.pts[1].set(col.to[0], toY + 0.4, col.to[2]);
       entry.line.geometry.setFromPoints(entry.pts);
@@ -4550,6 +4944,11 @@ export class WorldMap {
   }
 
   public conquerStructureById(structureId: string, silent = false) {
+    if (!this.worldMapBuilt) {
+      this.pendingNeutralStructures.delete(structureId);
+      this.pendingConqueredStructures.add(structureId);
+      return;
+    }
     const ent = this.entitiesMap.get(structureId);
     const meshGroup = this.buildingMeshesMap.get(structureId);
     if (ent && meshGroup) {
@@ -4743,6 +5142,11 @@ export class WorldMap {
   }
 
   public setStructureNeutral(structureId: string) {
+    if (!this.worldMapBuilt) {
+      this.pendingConqueredStructures.delete(structureId);
+      this.pendingNeutralStructures.add(structureId);
+      return;
+    }
     const entity = this.entitiesMap.get(structureId);
     const meshGroup = this.buildingMeshesMap.get(structureId);
     if (!entity || !meshGroup) return;
@@ -5087,6 +5491,30 @@ export class WorldMap {
         }
       }
 
+      const nowMs = performance.now();
+      if (this.lastPerfTickMs > 0) {
+        const frameGap = Math.min(120, Math.max(4, nowMs - this.lastPerfTickMs));
+        this.perfEmaMs = this.perfEmaMs * 0.92 + frameGap * 0.08;
+        if (this.perfCooldownFrames > 0) {
+          this.perfCooldownFrames--;
+        } else if (!this.isSoftwareGl) {
+          if (this.qualityTier === 'high' && this.perfEmaMs > 26) {
+            this.applyQualityTier('balanced');
+            this.perfCooldownFrames = 120;
+          } else if (this.qualityTier === 'balanced' && this.perfEmaMs > 36) {
+            this.applyQualityTier('performance');
+            this.perfCooldownFrames = 140;
+          } else if (this.qualityTier === 'performance' && this.perfEmaMs < 18.2) {
+            this.applyQualityTier('balanced');
+            this.perfCooldownFrames = 180;
+          } else if (this.qualityTier === 'balanced' && this.perfEmaMs < 17.4) {
+            this.applyQualityTier('high');
+            this.perfCooldownFrames = 200;
+          }
+        }
+      }
+      this.lastPerfTickMs = nowMs;
+
       const delta = Math.min(0.1, this.clock.getDelta());
       const elapsed = this.clock.getElapsedTime();
 
@@ -5097,11 +5525,15 @@ export class WorldMap {
         this.scene.fog.density = 0.00042 * Math.min(1.0, Math.max(0.06, (this.cameraController.zoom - 0.015) / 0.85));
       }
 
-      // 0. Update Regional LOD Chunks, Waterfalls, Smooth Rivers & Mist
-      this.terrainGenerator.updateTerrainOverflow(delta, elapsed, this.cameraController.camera);
+      const isWorldVisible = this.currentSceneMode === 'world' && this.worldMapBuilt;
+
+      // 0. Update Regional LOD Chunks, Waterfalls, Smooth Rivers & Mist (paused while inside Kingdom)
+      if (isWorldVisible && this.terrainGenerator) {
+        this.terrainGenerator.updateTerrainOverflow(delta, elapsed, this.cameraController.camera);
+      }
 
       // 0b. Update Drifting Clouds & Soaring Himalayan Birds
-      if (this.atmosphereGroup.visible) {
+      if (isWorldVisible && this.atmosphereGroup.visible) {
         for (let i = 0; i < this.atmosphericClouds.length; i++) {
           const c = this.atmosphericClouds[i];
           c.group.position.x += c.speedX * delta;
@@ -5136,6 +5568,7 @@ export class WorldMap {
       const camRightX = camMatrixElems[0];
       const camRightZ = camMatrixElems[2];
 
+      if (isWorldVisible) {
       // 1. Monsters idle breathing, dynamic East-West camera-relative facing, contact shadow & aura chevron
       this.monsterMeshesMap.forEach((mGroup, id) => {
         const ent = this.entitiesMap.get(id);
@@ -5217,49 +5650,43 @@ export class WorldMap {
         }
       });
 
-      // 2. Resources animations (waterwheel, windmill blades, saw blade, hoist pulley, swaying canopy, gold glints, below tags)
-      const resGroups = this.resourcesGroup.children;
-      for (let idx = 0; idx < resGroups.length; idx++) {
-        const rChildren = resGroups[idx].children;
-        for (let j = 0; j < rChildren.length; j++) {
-          const mesh = rChildren[j];
-          const ud = mesh.userData;
-          if (ud?.belowTagDist) {
-            mesh.position.set(sinYaw * ud.belowTagDist, ud.belowTagY ?? 0.9, cosYaw * ud.belowTagDist);
-          } else if (ud?.isWaterwheel) {
-            mesh.rotation.z += delta * 1.8;
-          } else if (ud?.isWindmillBlades) {
-            mesh.rotation.z -= delta * 1.35;
-          } else if (ud?.isSawBlade) {
-            mesh.rotation.x += delta * 9.0;
-          } else if (ud?.isMineWheel) {
-            mesh.rotation.z += delta * 2.2;
-          } else if (ud?.isFoliageCanopy) {
-            mesh.rotation.z = Math.sin(elapsed * 1.5 + idx) * 0.05;
-          } else if (ud?.isGoldGlint) {
-            const ph = ud.phase || 0;
-            mesh.position.x = Math.cos(elapsed * 2.2 + ph) * 2.2;
-            mesh.position.z = Math.sin(elapsed * 2.2 + ph) * 2.2;
-            mesh.rotation.y += delta * 2.0;
-          }
-        }
+      // 2. Resources animations via flat typed caches (zero nested child scans)
+      for (let i = 0; i < this.animResBelowTags.length; i++) {
+        const t = this.animResBelowTags[i];
+        t.obj.position.set(sinYaw * t.dist, t.y, cosYaw * t.dist);
+      }
+      for (let i = 0; i < this.animWaterwheels.length; i++) {
+        this.animWaterwheels[i].rotation.z += delta * 1.8;
+      }
+      for (let i = 0; i < this.animWindmills.length; i++) {
+        this.animWindmills[i].rotation.z -= delta * 1.35;
+      }
+      for (let i = 0; i < this.animSawBlades.length; i++) {
+        this.animSawBlades[i].rotation.x += delta * 9.0;
+      }
+      for (let i = 0; i < this.animMineWheels.length; i++) {
+        this.animMineWheels[i].rotation.z += delta * 2.2;
+      }
+      for (let i = 0; i < this.animFoliageCanopies.length; i++) {
+        const f = this.animFoliageCanopies[i];
+        f.obj.rotation.z = Math.sin(elapsed * 1.5 + f.idx) * 0.05;
+      }
+      for (let i = 0; i < this.animGoldGlints.length; i++) {
+        const g = this.animGoldGlints[i];
+        g.obj.position.x = Math.cos(elapsed * 2.2 + g.phase) * 2.2;
+        g.obj.position.z = Math.sin(elapsed * 2.2 + g.phase) * 2.2;
+        g.obj.rotation.y += delta * 2.0;
       }
 
-      // 3. Buildings & Castles animations
-      const castleGroups = this.castlesGroup.children;
-      for (let idx = 0; idx < castleGroups.length; idx++) {
-        const cChildren = castleGroups[idx].children;
-        for (let j = 0; j < cChildren.length; j++) {
-          const child = cChildren[j];
-          const ud = child.userData;
-          if (!ud) continue;
-          if (ud.isDragonBanner) {
-            child.rotation.y = Math.sin(elapsed * 3.2 + (ud.phase || 0)) * 0.22;
-          } else if (ud.isBrazierFlame) {
-            const flicker = 0.88 + Math.sin(elapsed * 14.0 + (ud.phase || 0)) * 0.2;
-            child.scale.set(1, flicker, 1);
-          }
-        }
+      // 3. Castles animations via flat caches
+      for (let i = 0; i < this.animCastleDragonBanners.length; i++) {
+        const b = this.animCastleDragonBanners[i];
+        b.obj.rotation.y = Math.sin(elapsed * 3.2 + b.phase) * 0.22;
+      }
+      for (let i = 0; i < this.animCastleBrazierFlames.length; i++) {
+        const fl = this.animCastleBrazierFlames[i];
+        const flicker = 0.88 + Math.sin(elapsed * 14.0 + fl.phase) * 0.2;
+        fl.obj.scale.set(1, flicker, 1);
       }
 
       // 3a. Burning Enemy Castle Destruction Flames & Rising Siege Smoke Plumes
@@ -5307,32 +5734,30 @@ export class WorldMap {
         }
       });
 
-      const bGroups = this.buildingsGroup.children;
-      for (let idx = 0; idx < bGroups.length; idx++) {
-        const bChildren = bGroups[idx].children;
-        for (let j = 0; j < bChildren.length; j++) {
-          const child = bChildren[j];
-          const ud = child.userData;
-          if (!ud) continue;
-          if (ud.isBanner) {
-            child.rotation.y = Math.sin(elapsed * 4.2 + idx) * 0.16;
-          } else if (ud.isDragonBanner) {
-            child.rotation.y = Math.sin(elapsed * 3.2 + (ud.phase || 0)) * 0.24;
-          } else if (ud.isPrayerFlag) {
-            child.rotation.z = Math.sin(elapsed * 3.8 + idx) * 0.12;
-          } else if (ud.isWardRing) {
-            child.rotation.z += delta * 0.55;
-          } else if (ud.isBlessingRing) {
-            child.rotation.z += delta * 0.45;
-          } else if (ud.isWardOrb) {
-            const rad = ud.orbitRadius || 7.5;
-            const spd = ud.orbitSpeed || 1.6;
-            const ph = ud.orbitPhase || 0;
-            child.position.x = Math.cos(elapsed * spd + ph) * rad;
-            child.position.z = Math.sin(elapsed * spd + ph) * rad;
-            child.position.y = 13.0 + Math.sin(elapsed * 2.5 + ph) * 0.4;
-          }
-        }
+      // Buildings animations via flat caches
+      for (let i = 0; i < this.animBuildingBanners.length; i++) {
+        const b = this.animBuildingBanners[i];
+        b.obj.rotation.y = Math.sin(elapsed * 4.2 + b.idx) * 0.16;
+      }
+      for (let i = 0; i < this.animBuildingDragonBanners.length; i++) {
+        const b = this.animBuildingDragonBanners[i];
+        b.obj.rotation.y = Math.sin(elapsed * 3.2 + b.phase) * 0.24;
+      }
+      for (let i = 0; i < this.animBuildingPrayerFlags.length; i++) {
+        const f = this.animBuildingPrayerFlags[i];
+        f.obj.rotation.z = Math.sin(elapsed * 3.8 + f.idx) * 0.12;
+      }
+      for (let i = 0; i < this.animBuildingWardRings.length; i++) {
+        this.animBuildingWardRings[i].rotation.z += delta * 0.55;
+      }
+      for (let i = 0; i < this.animBuildingBlessingRings.length; i++) {
+        this.animBuildingBlessingRings[i].rotation.z += delta * 0.45;
+      }
+      for (let i = 0; i < this.animBuildingWardOrbs.length; i++) {
+        const orb = this.animBuildingWardOrbs[i];
+        orb.obj.position.x = Math.cos(elapsed * orb.speed + orb.phase) * orb.radius;
+        orb.obj.position.z = Math.sin(elapsed * orb.speed + orb.phase) * orb.radius;
+        orb.obj.position.y = 13.0 + Math.sin(elapsed * 2.5 + orb.phase) * 0.4;
       }
 
       // 3b. Animated Floating Crystal Shrines (Hover Crystal, Twin Gold Orbit Rings, Colored Flames, Crackling Lightning)
@@ -5378,8 +5803,8 @@ export class WorldMap {
           sh.banners[b].rotation.x = 0.05 + Math.sin(elapsed * 3.4 + ph + b) * 0.09;
         }
 
-        // Crackling stepped ~16 Hz 3D lightning arcs between corner spires and hovering crystal
-        const boltBucket = Math.floor(elapsed * 16 + ph * 3.1);
+        // Crackling adaptive-Hz 3D lightning arcs between corner spires and hovering crystal
+        const boltBucket = Math.floor(elapsed * this.shrineLightningHz + ph * 3.1);
         const burstPulse = Math.sin(elapsed * 9.5 + ph * 2.1);
         sh.lightningMat.opacity = burstPulse > -0.15 ? 0.55 + Math.abs(Math.sin(elapsed * 29.0 + ph)) * 0.45 : 0.12;
 
@@ -5477,7 +5902,7 @@ export class WorldMap {
             this.externalMiningTimer = 0;
             this._tempDest.set(
               this.externalMarchVisual.to[0],
-              this.terrainGenerator.getHeightAt(this.externalMarchVisual.to[0], this.externalMarchVisual.to[2]),
+              this.getGroundHeight(this.externalMarchVisual.to[0], this.externalMarchVisual.to[2]),
               this.externalMarchVisual.to[2]
             );
             this.spawnDebrisChips(this._tempDest, this.externalMarchVisual.resourceType || 'stone');
@@ -5512,7 +5937,7 @@ export class WorldMap {
               this._tempDir.subVectors(this._tempDest, curPos).normalize();
               const marchSpeed = this.armyState === 'GATHERING' ? 24.0 : 20.0;
               curPos.addScaledVector(this._tempDir, delta * marchSpeed);
-              curPos.y = this.terrainGenerator.getHeightAt(curPos.x, curPos.z);
+              curPos.y = this.getGroundHeight(curPos.x, curPos.z);
               this.armyGroup.rotation.y = Math.atan2(this._tempDir.x, this._tempDir.z);
 
               this.dustTimer += delta;
@@ -5625,7 +6050,7 @@ export class WorldMap {
           if (distHome > 2.0) {
             this._tempDir.subVectors(this.armyHomePos, curPos).normalize();
             curPos.addScaledVector(this._tempDir, delta * 24.0);
-            curPos.y = this.terrainGenerator.getHeightAt(curPos.x, curPos.z);
+            curPos.y = this.getGroundHeight(curPos.x, curPos.z);
             this.armyGroup.rotation.y = Math.atan2(this._tempDir.x, this._tempDir.z);
             this.armyPos.copy(curPos);
 
@@ -5686,6 +6111,7 @@ export class WorldMap {
           }
         }
       }
+      } // end if (isWorldVisible)
 
       // Process Marching Dust Trail Puffs
       for (let i = this.activeDustPuffs.length - 1; i >= 0; i--) {
@@ -5870,9 +6296,11 @@ export class WorldMap {
       // 6. Section 13 Live VFX, Shader Barriers & 3D Vanguard AnimationMixer
       this.vfxManager.setZoomLod(worldLod);
       this.vfxManager.update(delta);
-      this.shaderBarrierMap.forEach((b) => updateProtectionBarrier(b, delta, elapsed));
+      if (isWorldVisible) {
+        this.shaderBarrierMap.forEach((b) => updateProtectionBarrier(b, delta, elapsed));
+      }
 
-      if (this.vanguard3DRig && this.armyGroup.visible) {
+      if (isWorldVisible && this.vanguard3DRig && this.armyGroup.visible) {
         this.vanguard3DRig.controller.setZoomLod(worldLod);
         const desiredState: 'IDLE' | 'MARCH' | 'ATTACK' | 'MINE' = this.externalMarchVisual?.inCombatOrGathering
           ? this.externalMarchVisual.resourceType
@@ -5888,6 +6316,16 @@ export class WorldMap {
           this.vanguard3DRig.controller.playState(desiredState, { force: true, fadeDuration: 0.2 });
         }
         this.vanguard3DRig.controller.update(delta);
+      }
+
+      if (this.sunLight.castShadow && this.qualityTier !== 'high' && !this.isSoftwareGl) {
+        this.shadowFrameSkip++;
+        const interval = this.qualityTier === 'balanced' ? 2 : 4;
+        if (this.forceShadowUpdate || this.shadowFrameSkip >= interval) {
+          this.shadowFrameSkip = 0;
+          this.forceShadowUpdate = false;
+          this.renderer.shadowMap.needsUpdate = true;
+        }
       }
 
       this.renderer.render(this.scene, this.cameraController.camera);
@@ -5926,10 +6364,12 @@ export class WorldMap {
   };
 
   public panTo(x: number, z: number) {
+    this.ensureWorldMapBuilt();
     this.cameraController.panTo(x, z);
   }
 
   public selectEntityById(entityId: string): boolean {
+    this.ensureWorldMapBuilt();
     for (const obj of this.pickableObjects) {
       const ent = obj.userData?.gameEntity as WorldEntity | undefined;
       if (ent && ent.id === entityId && !ent.isDefeated) {
@@ -5986,12 +6426,14 @@ export class WorldMap {
       this.alliedRallyGroup.visible = false;
       this.tacticalLine.visible = false;
       this.selectionIndicator.visible = false;
-      this.terrainGenerator.plotMarkersGroup.visible = false;
-      this.terrainGenerator.mesh.visible = false;
-      this.terrainGenerator.vegetationGroup.visible = false;
-      this.terrainGenerator.waterfallsGroup.visible = false;
-      this.terrainGenerator.mistPuffsGroup.visible = false;
-      this.terrainGenerator.leylineStreamsGroup.visible = false;
+      if (this.terrainGenerator) {
+        this.terrainGenerator.plotMarkersGroup.visible = false;
+        this.terrainGenerator.mesh.visible = false;
+        this.terrainGenerator.vegetationGroup.visible = false;
+        this.terrainGenerator.waterfallsGroup.visible = false;
+        this.terrainGenerator.mistPuffsGroup.visible = false;
+        this.terrainGenerator.leylineStreamsGroup.visible = false;
+      }
 
       const inside3D = this.ensureInsideKingdom3D();
       inside3D.rootGroup.visible = true;
@@ -6002,19 +6444,28 @@ export class WorldMap {
       if (this.insideKingdom3D) {
         this.insideKingdom3D.rootGroup.visible = false;
       }
+      this.forceShadowUpdate = true;
 
-      this.terrainGenerator.mesh.visible = true;
-      this.terrainGenerator.vegetationGroup.visible = true;
-      this.terrainGenerator.waterfallsGroup.visible = true;
-      this.terrainGenerator.mistPuffsGroup.visible = true;
-      this.terrainGenerator.leylineStreamsGroup.visible = true;
+      if (!this.worldMapBuilt) {
+        this.startAsyncWorldMapBuild();
+        this.cameraController.resetToHome();
+        return;
+      }
+
+      if (this.terrainGenerator) {
+        this.terrainGenerator.mesh.visible = true;
+        this.terrainGenerator.vegetationGroup.visible = true;
+        this.terrainGenerator.waterfallsGroup.visible = true;
+        this.terrainGenerator.mistPuffsGroup.visible = true;
+        this.terrainGenerator.leylineStreamsGroup.visible = true;
+        this.terrainGenerator.plotMarkersGroup.visible = true;
+      }
       this.buildingsGroup.visible = true;
       this.castlesGroup.visible = true;
       this.strategicLinesGroup.visible = true;
       this.atmosphereGroup.visible = true;
       this.monstersGroup.visible = !this.isStrategicFilterActive;
       this.resourcesGroup.visible = !this.isStrategicFilterActive;
-      this.terrainGenerator.plotMarkersGroup.visible = true;
       this.armyGroup.visible = this.armyState !== 'IDLE';
       this.alliedRallyGroup.visible = true;
 
@@ -6075,22 +6526,28 @@ export class WorldMap {
   }
 
   public zoomOutTo100() {
+    this.ensureWorldMapBuilt();
     this.cameraController.zoomOutTo100();
   }
 
   public setTerrainLodMode(mode: TerrainLodMode) {
-    this.terrainGenerator.setLodMode(mode);
+    this.ensureWorldMapBuilt();
+    this.terrainGenerator?.setLodMode(mode);
   }
 
   public setShowHexGrid(show: boolean) {
-    this.terrainGenerator.setShowHexGrid(show);
+    this.ensureWorldMapBuilt();
+    this.terrainGenerator?.setShowHexGrid(show);
   }
 
   public setHighlightedBiome(biome: TerrainBiomeType | null) {
-    this.terrainGenerator.setHighlightedBiome(biome);
+    this.ensureWorldMapBuilt();
+    this.terrainGenerator?.setHighlightedBiome(biome);
   }
 
   public getHexTileAt(x: number, z: number): HexTileData | null {
+    this.ensureWorldMapBuilt();
+    if (!this.terrainGenerator) return null;
     const tile = this.terrainGenerator.getHexTileAt(x, z);
     if (this.terrainGenerator.showHexGrid) {
       this.terrainGenerator.focusHexTile(tile);
@@ -6099,6 +6556,16 @@ export class WorldMap {
   }
 
   public getTerrainStats() {
+    if (!this.terrainGenerator) {
+      return {
+        biomeCounts: {},
+        totalTrianglesByLod: { high: 0, medium: 0, low: 0 },
+        totalHexes: 0,
+        lodMode: 'auto' as TerrainLodMode,
+        showHexGrid: false,
+        highlightedBiome: null,
+      };
+    }
     return {
       biomeCounts: this.terrainGenerator.biomeCounts,
       totalTrianglesByLod: this.terrainGenerator.totalTrianglesByLod,
@@ -6263,6 +6730,11 @@ export class WorldMap {
 
   public dispose() {
     this.isDisposed = true;
+    this.isBuildingWorldNow = false;
+    if (this.worldBuildRafId !== null) {
+      cancelAnimationFrame(this.worldBuildRafId);
+      this.worldBuildRafId = null;
+    }
     cancelAnimationFrame(this.animFrameId);
     clearTimeout(this.animFrameId);
     window.removeEventListener('resize', this.onResize);

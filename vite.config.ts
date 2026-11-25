@@ -55,12 +55,12 @@ export default defineConfig({
     react(),
     VitePWA({
       registerType: 'autoUpdate',
-      includeAssets: ['favicon-32x32.png', 'apple-touch-icon.png', 'pwa-192x192.png', 'pwa-512x512.png'],
+      includeAssets: ['favicon.ico', 'favicon-32x32.png', 'apple-touch-icon.png', 'boot-crest.png', 'pwa-192x192.png', 'pwa-512x512.png', 'pwa-maskable-512x512.png'],
       manifest: {
         id: '/',
-        name: 'Himalayan Realms',
-        short_name: 'Himalayan',
-        description: 'Isometric Strategy Prototype set in Himalayan kingdoms',
+        name: 'Empire of the Rising Towers',
+        short_name: 'Rising Towers',
+        description: 'UNITE THE KINGDOM · BY NEPGAME — Isometric 3D medieval kingdom strategy across the Himalayas.',
         theme_color: '#0a0e14',
         background_color: '#0a0e14',
         display: 'fullscreen',
@@ -89,9 +89,24 @@ export default defineConfig({
         ],
       },
       workbox: {
-        maximumFileSizeToCacheInBytes: 5 * 1024 * 1024,
-        globPatterns: ['**/*.{js,css,html,ico,png,svg,woff,woff2}'],
+        maximumFileSizeToCacheInBytes: 3 * 1024 * 1024,
+        globPatterns: ['**/*.{js,css,html,ico,svg,woff,woff2}', 'boot-crest.png', 'pwa-*.png', 'apple-touch-icon.png', 'favicon-*.png'],
+        globIgnores: ['**/assets/aistudio/**', '**/assets/images/**'],
         runtimeCaching: [
+          {
+            urlPattern: ({ url }) => url.pathname.startsWith('/assets/'),
+            handler: 'CacheFirst',
+            options: {
+              cacheName: 'realm-runtime-assets',
+              expiration: {
+                maxEntries: 40,
+                maxAgeSeconds: 60 * 60 * 24 * 30,
+              },
+              cacheableResponse: {
+                statuses: [0, 200],
+              },
+            },
+          },
           {
             urlPattern: /^https:\/\/fonts\.googleapis\.com\/.*/i,
             handler: 'CacheFirst',
@@ -142,6 +157,12 @@ export default defineConfig({
         manualChunks(id) {
           if (id.includes('node_modules/three')) {
             return 'three-vendor';
+          }
+          if (id.includes('node_modules/firebase') || id.includes('node_modules/@firebase')) {
+            return 'firebase-vendor';
+          }
+          if (id.includes('node_modules/react') || id.includes('node_modules/react-dom')) {
+            return 'react-vendor';
           }
           return undefined;
         },

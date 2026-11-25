@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
-import fortressSceneImg from '../assets/images/login_himalayan_fortress_1795507273124.jpg';
-import royalCrestImg from '../assets/images/kingdom_royal_crest_1795507272952.jpg';
+import fortressSceneImg from '../assets/images/login_fortress_opt.webp';
+import royalCrestImg from '../assets/images/royal_crest_ui.webp';
 import { useAuth } from '../context/AuthContext';
 import {
   evaluatePasswordStrength,
@@ -331,12 +331,13 @@ export const AuthGatewayScreen: React.FC = () => {
                 src={royalCrestImg}
                 alt="Empire of the Rising Towers Royal Crest"
                 className="kg-crest-img"
+                decoding="async"
                 referrerPolicy="no-referrer"
               />
             </div>
             <div>
               <h1 className="kg-game-title">EMPIRE OF THE RISING TOWERS</h1>
-              <p className="kg-game-subtitle">UNITE THE KINGDOMS</p>
+              <p className="kg-game-subtitle">UNITE THE KINGDOM · BY NEPGAME</p>
             </div>
           </div>
 
@@ -385,7 +386,7 @@ export const AuthGatewayScreen: React.FC = () => {
                   {successHeadline}
                 </h2>
                 <p className="kg-card-subtitle" style={{ margin: 0 }}>
-                  Preparing your Royal Game Lobby and citadel archives...
+                  Preparing your citadel and realm archives...
                 </p>
                 <span className="kg-spinner" style={{ width: '24px', height: '24px', color: '#facc15' }} />
               </div>

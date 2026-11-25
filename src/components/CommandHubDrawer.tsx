@@ -40,6 +40,7 @@ import {
 import { MonsterPortrait } from './MonsterPortrait';
 import { HeroPortrait } from './HeroPortrait';
 import { MagarChartSprite } from './MagarChartSprite';
+import { SimCountdownText, SimProgressFill } from '../game/simClockStore';
 
 export type CommandHubTab =
   | 'resources'
@@ -95,7 +96,6 @@ interface CommandHubDrawerProps {
   nodeStates: Record<string, LiveNodeStatus>;
   monsterStates: Record<string, LiveMonsterStatus>;
   commanderXp: number;
-  nowMs: number;
   onPanTo: (x: number, z: number) => void;
   onTrainTroops: (classId: TroopClassId, level: TroopLevel, count: number) => void;
   onInstantFinishTraining: (id: string) => void;
@@ -192,7 +192,6 @@ export const CommandHubDrawer: React.FC<CommandHubDrawerProps> = ({
   nodeStates,
   monsterStates,
   commanderXp,
-  nowMs,
   onPanTo,
   onTrainTroops,
   onInstantFinishTraining,
@@ -854,7 +853,6 @@ export const CommandHubDrawer: React.FC<CommandHubDrawerProps> = ({
                   const live = nodeStates[node.id];
                   const maxY = live?.maxYield ?? node.maxYieldAmount ?? node.yieldAmount ?? 5000;
                   const remY = live?.remainingYield ?? maxY;
-                  const respSec = live?.respawnAt ? Math.max(0, (live.respawnAt - nowMs) / 1000) : 0;
                   const isDepleted = remY <= 0;
 
                   return (
@@ -864,7 +862,15 @@ export const CommandHubDrawer: React.FC<CommandHubDrawerProps> = ({
                           {node.name} (Lv.{node.level})
                         </span>
                         <span style={{ fontSize: '10px', color: isDepleted ? '#f87171' : '#34d399', fontWeight: 700 }}>
-                          {isDepleted ? `Respawn ${formatDurationSec(respSec)}` : 'ACTIVE'}
+                          {isDepleted ? (
+                            live?.respawnAt ? (
+                              <SimCountdownText targetMs={live.respawnAt} format="duration" prefix="Respawn " />
+                            ) : (
+                              'Respawn 0s'
+                            )
+                          ) : (
+                            'ACTIVE'
+                          )}
                         </span>
                       </div>
                       <div style={{ fontSize: '11px', color: '#cbd5e1', fontVariantNumeric: 'tabular-nums' }}>
@@ -946,7 +952,6 @@ export const CommandHubDrawer: React.FC<CommandHubDrawerProps> = ({
                   const curHp = live?.currentHp ?? mCfg.hp;
                   const maxHp = live?.maxHp ?? mCfg.hp;
                   const isDefeated = live?.isDefeated ?? false;
-                  const respSec = live?.respawnAt ? Math.max(0, (live.respawnAt - nowMs) / 1000) : 0;
 
                   return (
                     <div key={mon.id} style={{ ...panelBg, padding: '9px 10px', display: 'flex', flexDirection: 'column', gap: '5px' }}>
@@ -964,7 +969,15 @@ export const CommandHubDrawer: React.FC<CommandHubDrawerProps> = ({
                               {mon.name} (Lv.{mon.level})
                             </span>
                             <span style={{ fontSize: '10px', color: isDefeated ? '#fbbf24' : '#34d399', fontWeight: 700, flexShrink: 0 }}>
-                              {isDefeated ? `Respawn ${formatDurationSec(respSec)}` : 'ALIVE'}
+                              {isDefeated ? (
+                                live?.respawnAt ? (
+                                  <SimCountdownText targetMs={live.respawnAt} format="duration" prefix="Respawn " />
+                                ) : (
+                                  'Respawn 0s'
+                                )
+                              ) : (
+                                'ALIVE'
+                              )}
                             </span>
                           </div>
                           <div style={{ fontSize: '10.5px', color: '#e2e8f0', fontVariantNumeric: 'tabular-nums' }}>
@@ -1197,39 +1210,37 @@ export const CommandHubDrawer: React.FC<CommandHubDrawerProps> = ({
                 {trainingQueue.length > 0 && (
                   <div style={{ borderTop: '1px solid rgba(148,163,184,0.2)', paddingTop: '8px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
                     <div style={{ fontSize: '11px', color: '#38bdf8', fontWeight: 700 }}>TRAINING QUEUE</div>
-                    {trainingQueue.map((item) => {
-                      const remSec = Math.max(0, (item.completesAt - nowMs) / 1000);
-                      const pct = Math.min(100, Math.round(((nowMs - item.startedAt) / Math.max(1, item.completesAt - item.startedAt)) * 100));
-                      return (
-                        <div key={item.id} style={{ background: 'rgba(2,6,23,0.55)', padding: '6px 8px', borderRadius: '6px', fontSize: '11px' }}>
-                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                            <span>+{item.count.toLocaleString()} {balanceConfig.troops[item.classId].name} Lv.{item.level}</span>
-                            <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
-                              <span style={{ color: '#fef08a', fontVariantNumeric: 'tabular-nums' }}>{formatDurationSec(remSec)}</span>
-                              <button
-                                type="button"
-                                onClick={() => onInstantFinishTraining(item.id)}
-                                style={{
-                                  minHeight: '28px',
-                                  padding: '2px 8px',
-                                  borderRadius: '5px',
-                                  background: '#b45309',
-                                  border: '1px solid #fde047',
-                                  color: '#fef08a',
-                                  font: "700 10px 'Barlow Condensed', sans-serif",
-                                  cursor: 'pointer',
-                                }}
-                              >
-                                Finish Now
-                              </button>
-                            </div>
-                          </div>
-                          <div style={{ marginTop: '4px', height: '4px', background: 'rgba(255,255,255,0.08)', borderRadius: '2px', overflow: 'hidden' }}>
-                            <div style={{ width: `${pct}%`, height: '100%', background: '#34d399' }} />
+                    {trainingQueue.map((item) => (
+                      <div key={item.id} style={{ background: 'rgba(2,6,23,0.55)', padding: '6px 8px', borderRadius: '6px', fontSize: '11px' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <span>+{item.count.toLocaleString()} {balanceConfig.troops[item.classId].name} Lv.{item.level}</span>
+                          <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                            <span style={{ color: '#fef08a', fontVariantNumeric: 'tabular-nums' }}>
+                              <SimCountdownText targetMs={item.completesAt} format="duration" />
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => onInstantFinishTraining(item.id)}
+                              style={{
+                                minHeight: '28px',
+                                padding: '2px 8px',
+                                borderRadius: '5px',
+                                background: '#b45309',
+                                border: '1px solid #fde047',
+                                color: '#fef08a',
+                                font: "700 10px 'Barlow Condensed', sans-serif",
+                                cursor: 'pointer',
+                              }}
+                            >
+                              Finish Now
+                            </button>
                           </div>
                         </div>
-                      );
-                    })}
+                        <div style={{ marginTop: '4px', height: '4px', background: 'rgba(255,255,255,0.08)', borderRadius: '2px', overflow: 'hidden' }}>
+                          <SimProgressFill startedAt={item.startedAt} completesAt={item.completesAt} background="#34d399" />
+                        </div>
+                      </div>
+                    ))}
                   </div>
                 )}
               </div>
@@ -1293,14 +1304,12 @@ export const CommandHubDrawer: React.FC<CommandHubDrawerProps> = ({
                         );
                       })
                     )}
-                    {hospitalQueue.map((hq) => {
-                      const remSec = Math.max(0, (hq.completesAt - nowMs) / 1000);
-                      return (
-                        <div key={hq.id} style={{ fontSize: '11px', color: '#86efac', background: 'rgba(16,185,129,0.12)', padding: '6px 8px', borderRadius: '6px' }}>
-                          Recovering +{hq.count.toLocaleString()} {balanceConfig.troops[hq.classId].name} Lv.{hq.level} · ETA {formatDurationSec(remSec)}
-                        </div>
-                      );
-                    })}
+                    {hospitalQueue.map((hq) => (
+                      <div key={hq.id} style={{ fontSize: '11px', color: '#86efac', background: 'rgba(16,185,129,0.12)', padding: '6px 8px', borderRadius: '6px' }}>
+                        Recovering +{hq.count.toLocaleString()} {balanceConfig.troops[hq.classId].name} Lv.{hq.level} · ETA{' '}
+                        <SimCountdownText targetMs={hq.completesAt} format="duration" />
+                      </div>
+                    ))}
                   </div>
                 )}
 
@@ -1894,9 +1903,7 @@ export const CommandHubDrawer: React.FC<CommandHubDrawerProps> = ({
                 </div>
               ) : (
                 activeMarches.map((march) => {
-                  const elapsedMs = Math.max(0, nowMs - march.phaseStartedAt);
-                  const pct = Math.min(100, Math.round((elapsedMs / Math.max(1, march.phaseDurationMs)) * 100));
-                  const remSec = Math.max(0, (march.phaseDurationMs - elapsedMs) / 1000);
+                  const targetMs = march.phaseStartedAt + march.phaseDurationMs;
                   const heroCfg = getHeroById(march.heroId);
                   const mMetrics = calculateArmyMetrics(march.stacks, balanceConfig, bonuses, heroCfg, activeInfantryGear);
 
@@ -1917,7 +1924,7 @@ export const CommandHubDrawer: React.FC<CommandHubDrawerProps> = ({
                               </span>
                             )}
                             <span style={{ marginLeft: '8px', fontSize: '11px', color: '#38bdf8', textTransform: 'uppercase', fontWeight: 700 }}>
-                              · {march.status} ({formatDurationSec(remSec)})
+                              · {march.status} (<SimCountdownText targetMs={targetMs} format="duration" />)
                             </span>
                           </div>
                         </div>
@@ -1952,12 +1959,10 @@ export const CommandHubDrawer: React.FC<CommandHubDrawerProps> = ({
                       )}
 
                       <div style={{ height: '6px', background: 'rgba(255,255,255,0.08)', borderRadius: '3px', overflow: 'hidden' }}>
-                        <div
-                          style={{
-                            width: `${pct}%`,
-                            height: '100%',
-                            background: march.status === 'gathering' ? '#34d399' : march.status === 'returning' ? '#facc15' : '#38bdf8',
-                          }}
+                        <SimProgressFill
+                          startedAt={march.phaseStartedAt}
+                          completesAt={targetMs}
+                          background={march.status === 'gathering' ? '#34d399' : march.status === 'returning' ? '#facc15' : '#38bdf8'}
                         />
                       </div>
                     </div>

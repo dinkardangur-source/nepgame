@@ -238,10 +238,17 @@ export class InsideKingdom3D {
   private plotBuildingMeshesMap = new Map<string, THREE.Group>();
   private plotHighlightRingsMap = new Map<string, THREE.Mesh>();
   private plotLabelSpritesMap = new Map<string, THREE.Sprite>();
+  private plotLabelKeysMap = new Map<string, string>();
   private radialShadowMat: THREE.MeshBasicMaterial;
   private octagonalShadowMat: THREE.MeshBasicMaterial;
   private contactShadowEntries: ContactShadowEntry[] = [];
   private plotShadowEntriesMap = new Map<string, ContactShadowEntry>();
+
+  private animWaterwheels: THREE.Object3D[] = [];
+  private animWardRings: THREE.Object3D[] = [];
+  private animBlessingRings: THREE.Object3D[] = [];
+  private animDragonBanners: Array<{ obj: THREE.Object3D; phase: number }> = [];
+  private animPrayerFlags: THREE.Object3D[] = [];
 
   private keepGroup = new THREE.Group();
   private keepLevel = 20;
@@ -252,6 +259,7 @@ export class InsideKingdom3D {
   // Active 3D scale-pop animations when merging or constructing
   private activePopAnimations: Array<{
     group: THREE.Group;
+    baseScale: number;
     elapsed: number;
     duration: number;
   }> = [];
@@ -335,7 +343,31 @@ export class InsideKingdom3D {
     this.initWalledCourtyardEnvironment();
     this.initCentralImperialKeep();
     this.initMergePlots();
+    this.refreshAnimatedPartsCache();
     this.refreshHighlightsAndLabels();
+  }
+
+  private refreshAnimatedPartsCache() {
+    this.animWaterwheels = [];
+    this.animWardRings = [];
+    this.animBlessingRings = [];
+    this.animDragonBanners = [];
+    this.animPrayerFlags = [];
+    this.rootGroup.traverse((obj) => {
+      const ud = obj.userData;
+      if (!ud) return;
+      if (ud.isWaterwheel) {
+        this.animWaterwheels.push(obj);
+      } else if (ud.isWardRing) {
+        this.animWardRings.push(obj);
+      } else if (ud.isBlessingRing) {
+        this.animBlessingRings.push(obj);
+      } else if (ud.isDragonBanner) {
+        this.animDragonBanners.push({ obj, phase: Number(ud.phase || 0) });
+      } else if (ud.isPrayerFlag) {
+        this.animPrayerFlags.push(obj);
+      }
+    });
   }
 
   public setCallbacks(callbacks: {
@@ -1189,6 +1221,7 @@ export class InsideKingdom3D {
       oldSprite.material.dispose();
       this.plotLabelSpritesMap.delete(plot.plotId);
     }
+    this.plotLabelKeysMap.delete(plot.plotId);
 
     const plotShadowEntry = this.plotShadowEntriesMap.get(plot.plotId);
 
@@ -1201,6 +1234,7 @@ export class InsideKingdom3D {
       // Empty plot marker: subtle holographic construction anvil plinth
       const emptyGroup = new THREE.Group();
       emptyGroup.position.y = 0.8;
+      emptyGroup.userData.baseScale = 1;
       const holoMat = new THREE.MeshBasicMaterial({
         color: 0x38bdf8,
         wireframe: true,
@@ -1221,6 +1255,8 @@ export class InsideKingdom3D {
       emptySprite.scale.set(10.5, 2.6, 1);
       plotGroup.add(emptySprite);
       this.plotLabelSpritesMap.set(plot.plotId, emptySprite);
+      this.plotLabelKeysMap.set(plot.plotId, 'empty|0');
+      this.refreshAnimatedPartsCache();
       return;
     }
 
@@ -1230,6 +1266,7 @@ export class InsideKingdom3D {
 
     // Scale increases subtly with each merged tier + extra stories/ornaments
     const tierScale = 1.0 + Math.min(level - 1, 6) * 0.085;
+    bGroup.userData.baseScale = tierScale;
     bGroup.scale.setScalar(tierScale);
     if (plotShadowEntry) {
       plotShadowEntry.baseScaleX = 1.04 * tierScale;
@@ -1434,6 +1471,7 @@ export class InsideKingdom3D {
 
     plotGroup.add(bGroup);
     this.plotBuildingMeshesMap.set(plot.plotId, bGroup);
+    this.refreshAnimatedPartsCache();
   }
 
   /**
@@ -1529,7 +1567,15 @@ export class InsideKingdom3D {
         ring.visible = false;
       }
 
-      // Rebuild label sprite to reflect current level or Merge Candidate status
+      const labelKey = plot.building
+        ? `${plot.building.category}|${plot.building.level}|${plot.building.powerBonus}|${isMatchingTwin ? 1 : 0}`
+        : `empty|${selectedBldg ? 1 : 0}`;
+      if (this.plotLabelKeysMap.get(plot.plotId) === labelKey && this.plotLabelSpritesMap.has(plot.plotId)) {
+        continue;
+      }
+      this.plotLabelKeysMap.set(plot.plotId, labelKey);
+
+      // Rebuild label sprite only when level, power, or merge-candidate state actually changes
       const oldSprite = this.plotLabelSpritesMap.get(plot.plotId);
       if (oldSprite) {
         plotGroup.remove(oldSprite);
@@ -1580,8 +1626,16 @@ export class InsideKingdom3D {
   private triggerPopAnimation(plotId: string) {
     const bGroup = this.plotBuildingMeshesMap.get(plotId);
     if (!bGroup) return;
+    const baseScale = typeof bGroup.userData?.baseScale === 'number' ? bGroup.userData.baseScale : 1;
+    const existing = this.activePopAnimations.find((a) => a.group === bGroup);
+    if (existing) {
+      existing.baseScale = baseScale;
+      existing.elapsed = 0;
+      return;
+    }
     this.activePopAnimations.push({
       group: bGroup,
+      baseScale,
       elapsed: 0,
       duration: 0.42,
     });
@@ -1828,32 +1882,33 @@ export class InsideKingdom3D {
       }
     });
 
-    // Animate 3D building parts (waterwheels, ward rings, banners)
-    this.rootGroup.traverse((obj) => {
-      const ud = obj.userData;
-      if (!ud) return;
-      if (ud.isWaterwheel) {
-        obj.rotation.x += delta * 2.2;
-      } else if (ud.isWardRing) {
-        obj.rotation.z += delta * 0.65;
-      } else if (ud.isBlessingRing) {
-        obj.rotation.z -= delta * 0.55;
-      } else if (ud.isDragonBanner) {
-        obj.rotation.y = Math.sin(elapsed * 3.4 + (ud.phase || 0)) * 0.18;
-      } else if (ud.isPrayerFlag) {
-        obj.rotation.z = Math.sin(elapsed * 4.0) * 0.1;
-      }
-    });
+    // Animate cached 3D building parts without scene graph traversal
+    for (let i = 0; i < this.animWaterwheels.length; i++) {
+      this.animWaterwheels[i].rotation.x += delta * 2.2;
+    }
+    for (let i = 0; i < this.animWardRings.length; i++) {
+      this.animWardRings[i].rotation.z += delta * 0.65;
+    }
+    for (let i = 0; i < this.animBlessingRings.length; i++) {
+      this.animBlessingRings[i].rotation.z -= delta * 0.55;
+    }
+    for (let i = 0; i < this.animDragonBanners.length; i++) {
+      const b = this.animDragonBanners[i];
+      b.obj.rotation.y = Math.sin(elapsed * 3.4 + b.phase) * 0.18;
+    }
+    for (let i = 0; i < this.animPrayerFlags.length; i++) {
+      this.animPrayerFlags[i].rotation.z = Math.sin(elapsed * 4.0) * 0.1;
+    }
 
-    // Process elastic scale-pop animations on newly merged / constructed 3D buildings
+    // Process elastic scale-pop animations preserving tier baseScale
     for (let i = this.activePopAnimations.length - 1; i >= 0; i--) {
       const anim = this.activePopAnimations[i];
       anim.elapsed += delta;
       const t = Math.min(1, anim.elapsed / anim.duration);
-      // Overshoot bounce curve
       const bounce = 1 + Math.sin(t * Math.PI) * 0.32;
-      anim.group.scale.setScalar(bounce);
+      anim.group.scale.setScalar(anim.baseScale * bounce);
       if (t >= 1) {
+        anim.group.scale.setScalar(anim.baseScale);
         this.activePopAnimations.splice(i, 1);
       }
     }

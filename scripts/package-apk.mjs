@@ -51,29 +51,29 @@ function copyPair(srcPath, rollingName, versionedName) {
 if (hasDebugApk) {
   copyPair(
     debugApkSrc,
-    'Himalayan-Realms-debug.apk',
-    `Himalayan-Realms-v${versionName}-b${versionCode}-debug.apk`
+    'Empire-of-the-Rising-Towers-debug.apk',
+    `Empire-of-the-Rising-Towers-v${versionName}-b${versionCode}-debug.apk`
   );
 }
 if (hasReleaseApk) {
   copyPair(
     releaseApkSrc,
-    'Himalayan-Realms-release.apk',
-    `Himalayan-Realms-v${versionName}-b${versionCode}-release.apk`
+    'Empire-of-the-Rising-Towers-release.apk',
+    `Empire-of-the-Rising-Towers-v${versionName}-b${versionCode}-release.apk`
   );
 }
 if (hasDebugAab) {
   copyPair(
     debugAabSrc,
-    'Himalayan-Realms-debug.aab',
-    `Himalayan-Realms-v${versionName}-b${versionCode}-debug.aab`
+    'Empire-of-the-Rising-Towers-debug.aab',
+    `Empire-of-the-Rising-Towers-v${versionName}-b${versionCode}-debug.aab`
   );
 }
 if (hasReleaseAab) {
   copyPair(
     releaseAabSrc,
-    'Himalayan-Realms-release.aab',
-    `Himalayan-Realms-v${versionName}-b${versionCode}-release.aab`
+    'Empire-of-the-Rising-Towers-release.aab',
+    `Empire-of-the-Rising-Towers-v${versionName}-b${versionCode}-release.aab`
   );
 }
 

@@ -1,5 +1,6 @@
 import React from 'react';
 import { Resources } from '../types/game';
+import royalCrestImg from '../assets/images/royal_crest_ui.webp';
 
 interface TopbarProps {
   resources: Resources;
@@ -20,10 +21,16 @@ export const Topbar: React.FC<TopbarProps> = ({
 }) => {
   return (
     <header className="topbar">
-      <div className="brand-mark">HR</div>
+      <div className="brand-mark">
+        <img
+          src={royalCrestImg}
+          alt="Empire of the Rising Towers Royal Crest"
+          className="brand-crest-img"
+        />
+      </div>
       <div className="brand-copy">
-        <div className="eyebrow">REALM COMMAND</div>
-        <h1>Himalayan Realms</h1>
+        <div className="eyebrow">UNITE THE KINGDOM · BY NEPGAME</div>
+        <h1>Empire of the Rising Towers</h1>
       </div>
 
       <div className="top-resources">

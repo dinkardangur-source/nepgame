@@ -2,7 +2,7 @@ import type { CapacitorConfig } from '@capacitor/cli';
 
 const config: CapacitorConfig = {
   appId: 'com.himalayanrealms.strategy',
-  appName: 'Himalayan Realms',
+  appName: 'Empire of the Rising Towers',
   webDir: 'dist',
   android: {
     allowMixedContent: true,

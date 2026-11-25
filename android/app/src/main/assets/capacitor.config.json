@@ -1,6 +1,6 @@
 {
 	"appId": "com.himalayanrealms.strategy",
-	"appName": "Himalayan Realms",
+	"appName": "Empire of the Rising Towers",
 	"webDir": "dist",
 	"android": {
 		"allowMixedContent": true,

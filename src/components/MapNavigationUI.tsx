@@ -45,8 +45,10 @@ import { AllianceHeadquartersModal, AllianceHqTab } from './AllianceHeadquarters
 import { CommanderProfileModal } from './CommanderProfileModal';
 import { Profile3DBadge } from './Profile3DEmblems';
 import { getHeroPortraitUrl } from '../game/HeroPortraits';
+import { SimCountdownText } from '../game/simClockStore';
+import royalCrestImg from '../assets/images/royal_crest_ui.webp';
 
-const CASTLE_EMBLEM_SRC = '/assets/aistudio/Gemini_Generated_Image_fzxzmyfzxzmyfzxz_6436d71f.jfif';
+const CASTLE_EMBLEM_SRC = royalCrestImg;
 
 interface MapNavigationUIProps {
   cameraInfo: { x: number; y: number; z: number; zoom: number };
@@ -104,7 +106,6 @@ interface MapNavigationUIProps {
   shrineGarrisons: Record<string, ShrineGarrisonState>;
   onRelinquishStructure: (structureId: string) => void;
   infantryGear?: InfantryGearState;
-  nowMs?: number;
   onRecallMarch?: (marchId: string) => void;
   onSelectWorldTarget?: (entityId: string, x: number, z: number) => void;
   isCollisionDebugVisible?: boolean;
@@ -205,7 +206,6 @@ export const MapNavigationUI: React.FC<MapNavigationUIProps> = ({
   shrineGarrisons,
   onRelinquishStructure,
   infantryGear,
-  nowMs,
   onRecallMarch,
   onSelectWorldTarget,
   isCollisionDebugVisible,
@@ -227,20 +227,10 @@ export const MapNavigationUI: React.FC<MapNavigationUIProps> = ({
   const isOnline = useOnlineStatus();
   const [showAndroidModal, setShowAndroidModal] = useState(false);
 
-  // Tactile Spring Press & Rune Sparkle Animations
-  const [pressedBtnKey, setPressedBtnKey] = useState<string | null>(null);
+  // Tactile Spring Pop & Rune Sparkle Animations
   const [springPopKey, setSpringPopKey] = useState<string | null>(null);
 
-  const handleHudPointerDown = (key: string) => {
-    setPressedBtnKey(key);
-  };
-
-  const handleHudPointerLeave = (key: string) => {
-    setPressedBtnKey((prev) => (prev === key ? null : prev));
-  };
-
   const triggerTouchVfx = (_e: React.PointerEvent<HTMLElement> | React.MouseEvent<HTMLElement>, key: string) => {
-    setPressedBtnKey(null);
     setSpringPopKey(key);
     window.setTimeout(() => {
       setSpringPopKey((prev) => (prev === key ? null : prev));
@@ -2009,12 +1999,7 @@ export const MapNavigationUI: React.FC<MapNavigationUIProps> = ({
             >
               {activeMarches.map((march) => {
                 const isSelected = selectedMarchTooltipId === march.id;
-                const remSec = Math.max(
-                  0,
-                  Math.ceil((march.phaseStartedAt + march.phaseDurationMs - (nowMs ?? Date.now())) / 1000)
-                );
-                const mm = String(Math.floor(remSec / 60)).padStart(2, '0');
-                const ss = String(remSec % 60).padStart(2, '0');
+                const marchTargetMs = march.phaseStartedAt + march.phaseDurationMs;
                 const isGather = march.kind === 'gather';
                 const isReinf = march.kind === 'reinforce_structure';
                 const isRallyMarch = Boolean(march.isRally);
@@ -2084,7 +2069,7 @@ export const MapNavigationUI: React.FC<MapNavigationUIProps> = ({
                           lineHeight: 1,
                         }}
                       >
-                        {mm}:{ss}
+                        <SimCountdownText targetMs={marchTargetMs} format="mmss" />
                       </span>
                     </div>
                   </button>
@@ -2093,14 +2078,6 @@ export const MapNavigationUI: React.FC<MapNavigationUIProps> = ({
             </div>
 
             {activeTooltipMarch && (() => {
-              const remSec = Math.max(
-                0,
-                Math.ceil(
-                  (activeTooltipMarch.phaseStartedAt + activeTooltipMarch.phaseDurationMs - (nowMs ?? Date.now())) / 1000
-                )
-              );
-              const mm = String(Math.floor(remSec / 60)).padStart(2, '0');
-              const ss = String(remSec % 60).padStart(2, '0');
               const tx = Math.round(activeTooltipMarch.targetPosition[0]);
               const ty = Math.round(activeTooltipMarch.targetPosition[2]);
               const statusBadge =
@@ -2174,7 +2151,10 @@ export const MapNavigationUI: React.FC<MapNavigationUIProps> = ({
                       {kindTitle} · <strong style={{ color: '#38bdf8' }}>{statusBadge}</strong>
                     </span>
                     <span style={{ color: '#86efac', fontWeight: 700 }}>
-                      {mm}:{ss}
+                      <SimCountdownText
+                        targetMs={activeTooltipMarch.phaseStartedAt + activeTooltipMarch.phaseDurationMs}
+                        format="mmss"
+                      />
                     </span>
                   </div>
 
@@ -2639,13 +2619,11 @@ export const MapNavigationUI: React.FC<MapNavigationUIProps> = ({
 
           <button
             type="button"
-            onPointerDown={() => handleHudPointerDown('settings')}
-            onPointerLeave={() => handleHudPointerLeave('settings')}
             onClick={(e) => {
               triggerTouchVfx(e, 'settings');
               setIsSettingsOpen(true);
             }}
-            className={springPopKey === 'settings' ? 'hud-spring-pop' : undefined}
+            className={`hud-pressable${springPopKey === 'settings' ? ' hud-spring-pop' : ''}`}
             style={{
               padding: '4px 8px',
               borderRadius: '7px',
@@ -2659,8 +2637,7 @@ export const MapNavigationUI: React.FC<MapNavigationUIProps> = ({
               font: "700 11px 'Barlow Condensed'",
               cursor: 'pointer',
               whiteSpace: 'nowrap',
-              transform: pressedBtnKey === 'settings' ? 'scale(0.91)' : undefined,
-              transition: 'transform 0.12s cubic-bezier(0.34, 1.56, 0.64, 1)',
+              touchAction: 'manipulation',
             }}
             title="Strategy Settings, Keybinds & Android APK"
           >
@@ -2670,20 +2647,18 @@ export const MapNavigationUI: React.FC<MapNavigationUIProps> = ({
           {!isInstalled && (
             <button
               type="button"
-              onPointerDown={() => handleHudPointerDown('install-app')}
-              onPointerLeave={() => handleHudPointerLeave('install-app')}
               onClick={async (e) => {
                 triggerTouchVfx(e, 'install-app');
                 if (isInstallable) {
                   const accepted = await installPWA();
                   if (accepted) {
-                    onShowToast?.('📱 Himalayan Realms installed to Home Screen!');
+                    onShowToast?.('📱 Empire of the Rising Towers installed to Home Screen!');
                   }
                 } else {
                   setShowAndroidModal(true);
                 }
               }}
-              className={springPopKey === 'install-app' ? 'hud-spring-pop' : undefined}
+              className={`hud-pressable${springPopKey === 'install-app' ? ' hud-spring-pop' : ''}`}
               style={{
                 padding: '4px 9px',
                 borderRadius: '7px',
@@ -2700,8 +2675,7 @@ export const MapNavigationUI: React.FC<MapNavigationUIProps> = ({
                 alignItems: 'center',
                 gap: '4px',
                 whiteSpace: 'nowrap',
-                transform: pressedBtnKey === 'install-app' ? 'scale(0.91)' : undefined,
-                transition: 'transform 0.12s cubic-bezier(0.34, 1.56, 0.64, 1)',
+                touchAction: 'manipulation',
               }}
               title={isInstallable ? 'Install App to Android Home Screen' : 'Android App & APK Export'}
             >
@@ -3162,10 +3136,7 @@ export const MapNavigationUI: React.FC<MapNavigationUIProps> = ({
         return (
           <button
             type="button"
-            className="hud-bottom-compass"
-            onPointerDown={() => handleHudPointerDown('compass')}
-            onPointerLeave={() => handleHudPointerLeave('compass')}
-            onPointerCancel={() => handleHudPointerLeave('compass')}
+            className="hud-bottom-compass hud-compass-pressable"
             onClick={(e) => {
               triggerTouchVfx(e, 'compass');
               if (selectedEntity && isAtCastle) {
@@ -3183,7 +3154,6 @@ export const MapNavigationUI: React.FC<MapNavigationUIProps> = ({
               position: 'absolute',
               bottom: '12px',
               left: '50%',
-              transform: pressedBtnKey === 'compass' ? 'translateX(-50%) scale(0.94)' : 'translateX(-50%)',
               zIndex: 55,
               display: 'flex',
               alignItems: 'center',
@@ -3202,7 +3172,6 @@ export const MapNavigationUI: React.FC<MapNavigationUIProps> = ({
               pointerEvents: 'auto',
               touchAction: 'manipulation',
               textAlign: 'left',
-              transition: 'transform 0.14s cubic-bezier(0.34, 1.56, 0.64, 1)',
             }}
           >
             {/* Brass Compass Rose Icon with Live Rotating Bearing Needle */}
@@ -5054,7 +5023,7 @@ export const MapNavigationUI: React.FC<MapNavigationUIProps> = ({
                       const ok = await installPWA();
                       if (ok) {
                         setIsSettingsOpen(false);
-                        onShowToast?.('📱 Himalayan Realms installed on Home Screen!');
+                        onShowToast?.('📱 Empire of the Rising Towers installed on Home Screen!');
                       }
                     }}
                     style={{
@@ -5803,10 +5772,10 @@ export const MapNavigationUI: React.FC<MapNavigationUIProps> = ({
                 />
                 <div>
                   <h2 style={{ margin: 0, font: "800 18px 'Barlow Condensed'", color: '#a7f3d0' }}>
-                    📲 HIMALAYAN REALMS — ANDROID APP & APK
+                    📲 EMPIRE OF THE RISING TOWERS — ANDROID APP &amp; BUNDLE
                   </h2>
                   <div style={{ fontSize: '11px', color: '#86efac', fontVariantNumeric: 'tabular-nums' }}>
-                    Version v{__APP_VERSION__} · Build #{__APK_VERSION_CODE__} · Auto-Replace Enabled
+                    UNITE THE KINGDOM · BY NEPGAME · v{__APP_VERSION__} (b{__APK_VERSION_CODE__})
                   </div>
                 </div>
               </div>
@@ -5835,7 +5804,7 @@ export const MapNavigationUI: React.FC<MapNavigationUIProps> = ({
                   const ok = await installPWA();
                   if (ok) {
                     setShowAndroidModal(false);
-                    onShowToast?.('📱 Himalayan Realms added to Android Home Screen!');
+                    onShowToast?.('📱 Empire of the Rising Towers added to Android Home Screen!');
                   }
                 }}
                 style={{
@@ -5876,12 +5845,12 @@ export const MapNavigationUI: React.FC<MapNavigationUIProps> = ({
               <div style={{ font: "800 13px 'Barlow Condensed'", color: '#7dd3fc', marginBottom: '4px' }}>
                 📦 AUTO-VERSIONED NATIVE .APK &amp; GITHUB RELEASES
               </div>
-              Every push to <code>main</code> (or local build) automatically increments <code>versionCode</code> in <code>android/app/build.gradle</code> and publishes a signed debug APK (<code>Himalayan-Realms-debug.apk</code>) to GitHub Releases &amp; Actions Artifacts so mobile installs cleanly replace the previous version.
+              Every push to <code>main</code> (or local build) automatically increments <code>versionCode</code> in <code>android/app/build.gradle</code> and publishes signed APK (<code>Empire-of-the-Rising-Towers-debug.apk</code>) and Android App Bundle (<code>Empire-of-the-Rising-Towers-release.aab</code>) builds so mobile installs cleanly replace the previous version.
               <pre style={{ margin: '6px 0 0', padding: '7px 9px', background: '#020617', borderRadius: '6px', fontSize: '10.5px', color: '#fef08a', overflowX: 'auto' }}>
                 npm run android:apk
               </pre>
               <div style={{ fontSize: '10.5px', color: '#94a3b8', marginTop: '4px' }}>
-                Local APK output: <code>android-apk/Himalayan-Realms-debug.apk</code>
+                Local output: <code>android-apk/Empire-of-the-Rising-Towers-debug.apk</code> &amp; <code>Empire-of-the-Rising-Towers-release.aab</code>
               </div>
             </div>
           </div>
@@ -5937,6 +5906,21 @@ export const MapNavigationUI: React.FC<MapNavigationUIProps> = ({
         }
         .hud-spring-pop {
           animation: hudSpringPop 0.42s cubic-bezier(0.34, 1.56, 0.64, 1);
+        }
+        .hud-pressable {
+          transition: transform 0.12s cubic-bezier(0.34, 1.56, 0.64, 1);
+          touch-action: manipulation;
+        }
+        .hud-pressable:active {
+          transform: scale(0.91);
+        }
+        .hud-compass-pressable {
+          transform: translateX(-50%);
+          transition: transform 0.14s cubic-bezier(0.34, 1.56, 0.64, 1);
+          touch-action: manipulation;
+        }
+        .hud-compass-pressable:active {
+          transform: translateX(-50%) scale(0.94);
         }
         @keyframes hudGoldRipple {
           0% {

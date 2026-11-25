@@ -15,7 +15,7 @@ import { TerrainGenerator } from './TerrainGenerator';
 export interface CameraControllerOptions {
   domElement: HTMLElement;
   camera: THREE.PerspectiveCamera | THREE.OrthographicCamera;
-  terrainGenerator: TerrainGenerator;
+  terrainGenerator?: TerrainGenerator | null;
   initialTarget?: [number, number, number];
   minZoom?: number;
   maxZoom?: number;
@@ -27,7 +27,7 @@ export interface CameraControllerOptions {
 export class CameraController {
   public camera: THREE.PerspectiveCamera;
   private domElement: HTMLElement;
-  private terrainGenerator: TerrainGenerator;
+  private terrainGenerator: TerrainGenerator | null;
 
   // Camera Target in World Coordinates (Focused on My Castle / Center of 3200x3200 Continent)
   public target = new THREE.Vector3(1600, 10, 1568);
@@ -87,7 +87,7 @@ export class CameraController {
 
   constructor(options: CameraControllerOptions) {
     this.domElement = options.domElement;
-    this.terrainGenerator = options.terrainGenerator;
+    this.terrainGenerator = options.terrainGenerator ?? null;
     this.minZoom = options.minZoom ?? 0.048;
     this.maxZoom = options.maxZoom ?? 3.2;
     this.onUpdate = options.onUpdate;
@@ -124,14 +124,27 @@ export class CameraController {
     this.desiredTarget.z = clamped.z;
   }
 
+  public setTerrainGenerator(terrainGenerator: TerrainGenerator | null) {
+    this.terrainGenerator = terrainGenerator;
+  }
+
+  private getGroundHeight(x: number, z: number): number {
+    return this.terrainGenerator ? this.terrainGenerator.getHeightAt(x, z) : 10.0;
+  }
+
   public setPickables(pickables: THREE.Object3D[]) {
     this.pickableObjects = pickables;
+  }
+
+  public updateHomeCoordsOnly(x: number, z: number) {
+    const clamped = WorldCoordinates.clampToMap(x, z);
+    this.homeCoords = { x: clamped.x, z: clamped.z };
   }
 
   public setHomeCoordinates(x: number, z: number, snapImmediately = false) {
     const clamped = WorldCoordinates.clampToMap(x, z);
     this.homeCoords = { x: clamped.x, z: clamped.z };
-    const y = this.terrainGenerator.getHeightAt(clamped.x, clamped.z);
+    const y = this.getGroundHeight(clamped.x, clamped.z);
     if (snapImmediately) {
       this.target.set(clamped.x, y, clamped.z);
       this.desiredTarget.set(clamped.x, y, clamped.z);
@@ -147,7 +160,7 @@ export class CameraController {
   public resetToHome() {
     this.desiredTarget.set(
       this.homeCoords.x,
-      this.terrainGenerator.getHeightAt(this.homeCoords.x, this.homeCoords.z),
+      this.getGroundHeight(this.homeCoords.x, this.homeCoords.z),
       this.homeCoords.z
     );
     this.desiredZoom = 0.5016;
@@ -176,7 +189,7 @@ export class CameraController {
    * Zoom Out 100 (Full 100% strategic realm overview across the 3200x3200 continent)
    */
   public zoomOutTo100() {
-    this.desiredTarget.set(1600, this.terrainGenerator.getHeightAt(1600, 1600), 1600);
+    this.desiredTarget.set(1600, this.getGroundHeight(1600, 1600), 1600);
     this.desiredZoom = this.minZoom;
     this.desiredYaw = 0.0;
     this.desiredPitch = 0.98;
@@ -189,7 +202,7 @@ export class CameraController {
     this.desiredTarget.x = x;
     this.desiredTarget.z = z;
     this.clampDesiredTargetToMap();
-    const y = this.terrainGenerator.getHeightAt(this.desiredTarget.x, this.desiredTarget.z);
+    const y = this.getGroundHeight(this.desiredTarget.x, this.desiredTarget.z);
     this.desiredTarget.y = y;
   }
 
@@ -652,7 +665,7 @@ export class CameraController {
       }
     }
 
-    this.desiredTarget.y = this.terrainGenerator.getHeightAt(this.desiredTarget.x, this.desiredTarget.z);
+    this.desiredTarget.y = this.getGroundHeight(this.desiredTarget.x, this.desiredTarget.z);
 
     // Smooth frame-rate independent exponential damping
     const dampSpeed = 10.0;

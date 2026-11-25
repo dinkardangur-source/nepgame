@@ -82,6 +82,65 @@ export function dismissBootSplashOverlay(): void {
   }, 260);
 }
 
+const AUTH_CACHE_PREFIX = 'erot_auth_cache_v1_';
+
+function readCachedAuthDocs(uid: string): { profile: PlayerProfile; privateAccount: PrivateAccount | null } | null {
+  try {
+    const raw = localStorage.getItem(`${AUTH_CACHE_PREFIX}${uid}`);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as { profile?: PlayerProfile; privateAccount?: PrivateAccount | null };
+    if (parsed?.profile && parsed.profile.uid === uid) {
+      return { profile: parsed.profile, privateAccount: parsed.privateAccount ?? null };
+    }
+  } catch {
+    // Ignore storage read errors
+  }
+  return null;
+}
+
+function writeCachedAuthDocs(uid: string, profile: PlayerProfile, privateAccount: PrivateAccount | null): void {
+  try {
+    localStorage.setItem(`${AUTH_CACHE_PREFIX}${uid}`, JSON.stringify({ profile, privateAccount }));
+  } catch {
+    // Ignore storage quota errors
+  }
+}
+
+function buildFallbackProfile(firebaseUser: User): { profile: PlayerProfile; privateAccount: PrivateAccount } {
+  const email = firebaseUser.email || '';
+  const baseName =
+    firebaseUser.displayName?.trim() ||
+    (email ? email.split('@')[0] : '') ||
+    'Commander';
+  const sanitized = baseName.replace(/[^a-zA-Z0-9_ ]/g, '').trim() || 'Commander';
+  const username = sanitized.slice(0, 24);
+  const usernameLower = (username.toLowerCase().replace(/[^a-z0-9_]/g, '_') || 'commander').slice(0, 24);
+  const isGoogle = firebaseUser.providerData.some((p) => p?.providerId === 'google.com');
+  const nowIso = new Date().toISOString();
+  return {
+    profile: {
+      uid: firebaseUser.uid,
+      username,
+      usernameLower,
+      avatarId: 'hero_bhimsen',
+      kingdomName: 'Royal Citadel',
+      level: 1,
+      provider: isGoogle ? 'google.com' : 'password',
+      emailVerified: firebaseUser.emailVerified,
+      createdAt: nowIso,
+      lastLoginAt: nowIso,
+    },
+    privateAccount: {
+      uid: firebaseUser.uid,
+      email,
+      allowFriendRequests: true,
+      showOnlineStatus: true,
+      showKingdomStats: true,
+      updatedAt: nowIso,
+    },
+  };
+}
+
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<User | null>(null);
   const [profile, setProfile] = useState<PlayerProfile | null>(null);
@@ -100,7 +159,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }, []);
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
+    let active = true;
+    const unsubscribe = onAuthStateChanged(auth, (firebaseUser) => {
+      if (!active) return;
+
       if (!firebaseUser) {
         setUser(null);
         setProfile(null);
@@ -115,22 +177,41 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setUser(firebaseUser);
       setAuthSyncError(null);
 
-      // If an explicit login/signup call is already provisioning docs, avoid racing it
+      // Hydrate immediately from per-UID cache or Firebase User snapshot so UI enters game with zero network stall
       if (!manualAuthInFlightRef.current) {
-        try {
-          const docs = await ensurePlayerProfileDocs(firebaseUser);
-          setProfile(docs.profile);
-          setPrivateAccount(docs.privateAccount);
-        } catch (err) {
-          setAuthSyncError(err instanceof Error ? err.message : 'Unable to load kingdom profile.');
+        const cached = readCachedAuthDocs(firebaseUser.uid);
+        if (cached) {
+          setProfile(cached.profile);
+          if (cached.privateAccount) setPrivateAccount(cached.privateAccount);
+        } else {
+          const fallback = buildFallbackProfile(firebaseUser);
+          setProfile(fallback.profile);
+          setPrivateAccount(fallback.privateAccount);
         }
       }
 
       setAuthStatus('authenticated');
-      dismissBootSplashOverlay();
+
+      // Sync authoritative Firestore player docs non-blockingly in the background
+      if (!manualAuthInFlightRef.current) {
+        void ensurePlayerProfileDocs(firebaseUser)
+          .then((docs) => {
+            if (!active || auth.currentUser?.uid !== firebaseUser.uid) return;
+            setProfile(docs.profile);
+            setPrivateAccount(docs.privateAccount);
+            writeCachedAuthDocs(firebaseUser.uid, docs.profile, docs.privateAccount);
+          })
+          .catch((err) => {
+            if (!active) return;
+            setAuthSyncError(err instanceof Error ? err.message : 'Unable to load kingdom profile.');
+          });
+      }
     });
 
-    return () => unsubscribe();
+    return () => {
+      active = false;
+      unsubscribe();
+    };
   }, []);
 
   // Periodic + focus session token expiration validation
@@ -177,6 +258,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         setUser(res.user);
         setProfile(res.profile);
         setPrivateAccount(res.privateAccount);
+        writeCachedAuthDocs(res.user.uid, res.profile, res.privateAccount);
         setWelcomeBanner('WELCOME BACK, COMMANDER.');
         setAuthStatus('authenticated');
       } finally {
@@ -199,6 +281,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         setUser(res.user);
         setProfile(res.profile);
         setPrivateAccount(res.privateAccount);
+        writeCachedAuthDocs(res.user.uid, res.profile, res.privateAccount);
         setWelcomeBanner('YOUR KINGDOM BEGINS NOW.');
         setAuthStatus('authenticated');
       } finally {
@@ -215,6 +298,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setUser(res.user);
       setProfile(res.profile);
       setPrivateAccount(res.privateAccount);
+      writeCachedAuthDocs(res.user.uid, res.profile, res.privateAccount);
       setWelcomeBanner(res.isNewUser ? 'YOUR KINGDOM BEGINS NOW.' : 'WELCOME BACK, COMMANDER.');
       setAuthStatus('authenticated');
       return { isNewUser: res.isNewUser };
@@ -250,9 +334,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       if (!user || !profile) throw new Error('Not authenticated.');
       const next = await updatePlayerAccountProfile(user.uid, profile, updates);
       setProfile(next);
+      writeCachedAuthDocs(user.uid, next, privateAccount);
       return next;
     },
-    [profile, user]
+    [privateAccount, profile, user]
   );
 
   const updatePrivacy = useCallback(
@@ -264,9 +349,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       if (!user || !privateAccount) throw new Error('Not authenticated.');
       const next = await updatePrivacySettings(user.uid, privateAccount, updates);
       setPrivateAccount(next);
+      if (profile) writeCachedAuthDocs(user.uid, profile, next);
       return next;
     },
-    [privateAccount, user]
+    [privateAccount, profile, user]
   );
 
   const updateAccountPassword = useCallback(async (currentPassword: string, newPassword: string) => {

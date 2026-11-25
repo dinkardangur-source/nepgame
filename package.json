@@ -9,6 +9,7 @@
     "build": "vite build",
     "lint": "tsc --noEmit",
     "version:bump": "node scripts/bump-apk-version.mjs",
+    "android:icons": "node scripts/generate-brand-icons.mjs",
     "android:sync": "node scripts/bump-apk-version.mjs --sync && npm run build && npx cap sync android",
     "android:bundle": "node scripts/bump-apk-version.mjs && npm run build && npx cap sync android && cd android && chmod +x gradlew && ./gradlew bundleDebug bundleRelease && cd .. && node scripts/package-apk.mjs",
     "android:apk": "node scripts/bump-apk-version.mjs && npm run build && npx cap sync android && cd android && chmod +x gradlew && ./gradlew assembleDebug bundleDebug bundleRelease && cd .. && node scripts/package-apk.mjs"

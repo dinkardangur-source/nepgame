@@ -363,6 +363,11 @@ export class TerrainGenerator {
   public showHexGrid = false;
   public highlightedBiome: TerrainBiomeType | null = null;
   public totalTrianglesByLod = { lod0: 0, lod1: 0, lod2: 0 };
+  private lodBiasScale = 1.0;
+  private lastLodBiasApplied = 1.0;
+  private lastLodCamX = Number.NaN;
+  private lastLodCamZ = Number.NaN;
+  private lodFrameCounter = 0;
 
   constructor() {
     this.createSeamlessModularTerrain();
@@ -416,12 +421,17 @@ export class TerrainGenerator {
       return Math.max(3.5, outerY);
     }
 
-    // 1. Reserved Flat Plots Override (The Congress & 36 Shrines) with smooth skirt blend
-    for (const plot of RESERVED_PLOTS) {
-      const dist = Math.hypot(x - plot.position[0], z - plot.position[2]);
+    // 1. Reserved Flat Plots Override (The Congress & 36 Shrines) with fast AABB precheck + smooth skirt blend
+    for (let i = 0; i < RESERVED_PLOTS.length; i++) {
+      const plot = RESERVED_PLOTS[i];
+      const dx = x - plot.position[0];
+      const dz = z - plot.position[2];
+      const maxR = plot.radius + 14.0;
+      if (dx > maxR || dx < -maxR || dz > maxR || dz < -maxR) continue;
+      const dist = Math.hypot(dx, dz);
       if (dist < plot.radius) {
         return plot.position[1];
-      } else if (dist < plot.radius + 14.0) {
+      } else if (dist < maxR) {
         const t = (dist - plot.radius) / 14.0;
         const smoothT = t * t * (3 - 2 * t);
         const rawH = this.getSmoothTerraceHeight(x, z);
@@ -815,6 +825,7 @@ export class TerrainGenerator {
 
       const step = chunkSize / segments;
       const uvScale = 0.044;
+      const eps = 3.5;
 
       let vIdx = 0;
       for (let iz = 0; iz <= segments; iz++) {
@@ -823,18 +834,24 @@ export class TerrainGenerator {
           const wx = THREE.MathUtils.clamp(startX + ix * step, 0.5, 3199.5);
           const wy = this.getHeightAt(wx, wz);
 
-          // Centered gradient evaluation so East/South borders & all 4 corners share identical slopes
-          const hL = this.getHeightAt(wx - 4, wz);
-          const hR = this.getHeightAt(wx + 4, wz);
-          const hD = this.getHeightAt(wx, wz - 4);
-          const hU = this.getHeightAt(wx, wz + 4);
+          // Single-pass centered gradient evaluation used for both slope biome tinting and analytical normal
+          const hL = this.getHeightAt(wx - eps, wz);
+          const hR = this.getHeightAt(wx + eps, wz);
+          const hD = this.getHeightAt(wx, wz - eps);
+          const hU = this.getHeightAt(wx, wz + eps);
           const slope = Math.hypot((hR - hL) * 0.5, (hU - hD) * 0.5);
 
           positions[vIdx * 3] = wx - originX;
           positions[vIdx * 3 + 1] = wy;
           positions[vIdx * 3 + 2] = wz - originZ;
 
-          this.computeAnalyticalNormal(wx, wz, normals, vIdx * 3);
+          const nx = hL - hR;
+          const ny = 2.0 * eps;
+          const nz = hD - hU;
+          const invLen = 1.0 / (Math.hypot(nx, ny, nz) || 1.0);
+          normals[vIdx * 3] = nx * invLen;
+          normals[vIdx * 3 + 1] = ny * invLen;
+          normals[vIdx * 3 + 2] = nz * invLen;
 
           uvs[vIdx * 2] = wx * uvScale;
           uvs[vIdx * 2 + 1] = wz * uvScale;
@@ -2010,6 +2027,21 @@ export class TerrainGenerator {
     // Corner snow mist removed cleanly for crisp full-map green visibility
   }
 
+  public setAdaptiveLodBias(scale: number) {
+    const clamped = THREE.MathUtils.clamp(scale, 0.55, 1.0);
+    if (Math.abs(clamped - this.lodBiasScale) < 0.02) return;
+    this.lodBiasScale = clamped;
+    const d1 = Math.round(460 * clamped);
+    const d2 = Math.round(900 * clamped);
+    for (let i = 0; i < this.lodChunks.length; i++) {
+      const lvls = this.lodChunks[i].levels;
+      if (lvls.length >= 3) {
+        lvls[1].distance = d1;
+        lvls[2].distance = d2;
+      }
+    }
+  }
+
   /**
    * Living Animation Update for Terrain (LOD Chunks, Flowing Nile River, High-Ridge Mist)
    */
@@ -2017,8 +2049,21 @@ export class TerrainGenerator {
     this.grassWindUniform.value = elapsed;
 
     if (this.currentLodMode === 'auto' && camera) {
-      for (const lod of this.lodChunks) {
-        lod.update(camera);
+      this.lodFrameCounter++;
+      const dx = camera.position.x - this.lastLodCamX;
+      const dz = camera.position.z - this.lastLodCamZ;
+      const movedEnough =
+        Number.isNaN(this.lastLodCamX) ||
+        dx * dx + dz * dz > 36 ||
+        this.lastLodBiasApplied !== this.lodBiasScale ||
+        this.lodFrameCounter % 3 === 0;
+      if (movedEnough) {
+        this.lastLodCamX = camera.position.x;
+        this.lastLodCamZ = camera.position.z;
+        this.lastLodBiasApplied = this.lodBiasScale;
+        for (let i = 0; i < this.lodChunks.length; i++) {
+          this.lodChunks[i].update(camera);
+        }
       }
     }
 
