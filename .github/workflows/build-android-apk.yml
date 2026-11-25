@@ -79,11 +79,14 @@ jobs:
 
       - name: Install Dependencies, Version APK & Sync Capacitor
         id: apk_version
+        env:
+          VITE_GITHUB_REPO: ${{ github.repository }}
         run: |
           npm install --no-audit --no-fund
           node scripts/bump-apk-version.mjs --ci-run "${{ github.run_number }}"
           npm run build
           npx cap sync android
+          node -e "const v = require('./apk-version.json'); console.log('version_name=' + v.versionName); console.log('version_code=' + v.versionCode);" >> "$GITHUB_OUTPUT"
 
       - name: Build Debug APK & Android App Bundle (.aab)
         run: |
@@ -96,11 +99,11 @@ jobs:
           cd android
           ./gradlew assembleDebug bundleDebug bundleRelease --no-daemon
 
-      - name: Package & Overwrite Android APK + App Bundle
+      - name: Package & Overwrite Empire-of-the-Rising-Towers.apk + Bundle
         run: |
           node scripts/package-apk.mjs
           mkdir -p /tmp/release-apks
-          cp android-apk/*.apk android-apk/*.aab /tmp/release-apks/
+          cp android-apk/*.apk android-apk/*.aab android-apk/latest.json /tmp/release-apks/
 
       - name: Commit & Push Overwritten APK & Bundle to Repository
         if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
@@ -109,7 +112,7 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A android-apk apk-version.json package.json android/app/build.gradle
           if ! git diff --cached --quiet; then
-            git commit -m "chore(apk): update Empire-of-the-Rising-Towers v${{ steps.apk_version.outputs.version_name }} (b${{ steps.apk_version.outputs.version_code }}) APK & AAB [skip ci]"
+            git commit -m "chore(apk): update Empire-of-the-Rising-Towers.apk v${{ steps.apk_version.outputs.version_name }} (b${{ steps.apk_version.outputs.version_code }}) [skip ci]"
             git pull --rebase origin "${{ github.ref_name }}" || true
             git push origin "HEAD:${{ github.ref_name }}"
           else
@@ -129,7 +132,7 @@ jobs:
           name: Empire of the Rising Towers Latest (v${{ steps.apk_version.outputs.version_name }} Build ${{ steps.apk_version.outputs.version_code }})
           body: |
             Automated latest Android APK & App Bundle build (`v${{ steps.apk_version.outputs.version_name }}`, build `${{ steps.apk_version.outputs.version_code }}`) from commit `${{ github.sha }}`.
-            Download `Empire-of-the-Rising-Towers-debug.apk` or `Empire-of-the-Rising-Towers-release.aab` below (automatically overwritten on every push).
+            Download `Empire-of-the-Rising-Towers.apk` or `Empire-of-the-Rising-Towers.aab` below (automatically overwritten on every push).
           overwrite_files: true
           make_latest: true
           files: /tmp/release-apks/*

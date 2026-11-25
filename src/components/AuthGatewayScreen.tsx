@@ -10,6 +10,8 @@ import {
   validateUsernameInput,
 } from '../services/playerAuthService';
 import { AccessiblePasswordField } from './AccessiblePasswordField';
+import { AndroidApkModal } from './AndroidApkModal';
+import { usePWAInstall } from '../hooks/usePWAInstall';
 
 type AuthPanelMode = 'login' | 'signup' | 'forgot';
 type LegalModalKind = 'terms' | 'privacy' | null;
@@ -40,6 +42,8 @@ export const AuthGatewayScreen: React.FC = () => {
 
   const [mode, setMode] = useState<AuthPanelMode>('login');
   const [legalModal, setLegalModal] = useState<LegalModalKind>(null);
+  const [showAndroidModal, setShowAndroidModal] = useState(false);
+  const { isInstallable, isInstalled, isIOS, isAndroid, install: installPWA } = usePWAInstall();
 
   // Login fields
   const [loginEmail, setLoginEmail] = useState('');
@@ -368,11 +372,11 @@ export const AuthGatewayScreen: React.FC = () => {
               >
                 <div
                   style={{
-                    width: '64px',
-                    height: '64px',
-                    borderRadius: '14px',
-                    border: '2px solid #facc15',
+                    width: '68px',
+                    height: '68px',
+                    borderRadius: '15px',
                     overflow: 'hidden',
+                    background: '#0a0e14',
                     boxShadow: '0 0 28px rgba(250, 204, 21, 0.35)',
                   }}
                 >
@@ -750,6 +754,35 @@ export const AuthGatewayScreen: React.FC = () => {
                 </div>
               </form>
             )}
+
+            <div
+              style={{
+                marginTop: '14px',
+                paddingTop: '12px',
+                borderTop: '1px solid rgba(148, 163, 184, 0.16)',
+                display: 'flex',
+                justifyContent: 'center',
+              }}
+            >
+              <button
+                type="button"
+                onClick={() => setShowAndroidModal(true)}
+                style={{
+                  minHeight: '38px',
+                  padding: '6px 14px',
+                  borderRadius: '8px',
+                  background: 'rgba(16, 185, 129, 0.12)',
+                  border: '1px solid rgba(52, 211, 153, 0.35)',
+                  color: '#86efac',
+                  font: "700 12px 'Barlow Condensed', sans-serif",
+                  letterSpacing: '0.04em',
+                  cursor: 'pointer',
+                  touchAction: 'manipulation',
+                }}
+              >
+                Download Empire-of-the-Rising-Towers.apk (Android)
+              </button>
+            </div>
           </div>
         </main>
       </div>
@@ -802,6 +835,16 @@ export const AuthGatewayScreen: React.FC = () => {
           </div>
         </div>
       )}
+
+      <AndroidApkModal
+        isOpen={showAndroidModal}
+        onClose={() => setShowAndroidModal(false)}
+        isInstallable={isInstallable}
+        isInstalled={isInstalled}
+        isIOS={isIOS}
+        isAndroid={isAndroid}
+        onInstallPWA={installPWA}
+      />
     </div>
   );
 };

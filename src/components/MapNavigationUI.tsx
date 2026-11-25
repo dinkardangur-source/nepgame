@@ -46,9 +46,7 @@ import { CommanderProfileModal } from './CommanderProfileModal';
 import { Profile3DBadge } from './Profile3DEmblems';
 import { getHeroPortraitUrl } from '../game/HeroPortraits';
 import { SimCountdownText } from '../game/simClockStore';
-import royalCrestImg from '../assets/images/royal_crest_ui.webp';
-
-const CASTLE_EMBLEM_SRC = royalCrestImg;
+import { AndroidApkModal } from './AndroidApkModal';
 
 interface MapNavigationUIProps {
   cameraInfo: { x: number; y: number; z: number; zoom: number };
@@ -2644,45 +2642,36 @@ export const MapNavigationUI: React.FC<MapNavigationUIProps> = ({
             ⚙️
           </button>
 
-          {!isInstalled && (
-            <button
-              type="button"
-              onClick={async (e) => {
-                triggerTouchVfx(e, 'install-app');
-                if (isInstallable) {
-                  const accepted = await installPWA();
-                  if (accepted) {
-                    onShowToast?.('📱 Empire of the Rising Towers installed to Home Screen!');
-                  }
-                } else {
-                  setShowAndroidModal(true);
-                }
-              }}
-              className={`hud-pressable${springPopKey === 'install-app' ? ' hud-spring-pop' : ''}`}
-              style={{
-                padding: '4px 9px',
-                borderRadius: '7px',
-                background: 'linear-gradient(180deg, #059669, #065f46)',
-                borderTop: '1px solid #34d399',
-                borderLeft: '1px solid #34d399',
-                borderRight: '1px solid #34d399',
-                borderBottom: '3px solid #022c22',
-                boxShadow: '0 3px 8px rgba(0,0,0,0.5)',
-                color: '#ecfdf5',
-                font: "800 11px 'Barlow Condensed'",
-                cursor: 'pointer',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '4px',
-                whiteSpace: 'nowrap',
-                touchAction: 'manipulation',
-              }}
-              title={isInstallable ? 'Install App to Android Home Screen' : 'Android App & APK Export'}
-            >
-              <span>📲</span>
-              <span>{isInstallable ? 'Install' : 'APK'}</span>
-            </button>
-          )}
+          <button
+            type="button"
+            onClick={(e) => {
+              triggerTouchVfx(e, 'install-app');
+              setShowAndroidModal(true);
+            }}
+            className={`hud-pressable${springPopKey === 'install-app' ? ' hud-spring-pop' : ''}`}
+            style={{
+              padding: '4px 9px',
+              borderRadius: '7px',
+              background: 'linear-gradient(180deg, #059669, #065f46)',
+              borderTop: '1px solid #34d399',
+              borderLeft: '1px solid #34d399',
+              borderRight: '1px solid #34d399',
+              borderBottom: '3px solid #022c22',
+              boxShadow: '0 3px 8px rgba(0,0,0,0.5)',
+              color: '#ecfdf5',
+              font: "800 11px 'Barlow Condensed'",
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '4px',
+              whiteSpace: 'nowrap',
+              touchAction: 'manipulation',
+            }}
+            title="Download Empire-of-the-Rising-Towers.apk or Install Android App"
+          >
+            <span>📲</span>
+            <span>APK</span>
+          </button>
 
           <button
             type="button"
@@ -5061,7 +5050,7 @@ export const MapNavigationUI: React.FC<MapNavigationUIProps> = ({
                     cursor: 'pointer',
                   }}
                 >
-                  📦 View APK Build & Install Guide
+                  📦 Download Empire-of-the-Rising-Towers.apk
                 </button>
               </div>
             </div>
@@ -5728,134 +5717,18 @@ export const MapNavigationUI: React.FC<MapNavigationUIProps> = ({
       />
 
       {/* ============================================================ */}
-      {/* 16. ANDROID APK BUILD & INSTALL MODAL + OFFLINE INDICATOR    */}
+      {/* 16. ANDROID APK DOWNLOAD MODAL + OFFLINE INDICATOR           */}
       {/* ============================================================ */}
-      {showAndroidModal && (
-        <div
-          style={{
-            position: 'fixed',
-            inset: 0,
-            background: 'rgba(2, 6, 23, 0.88)',
-            zIndex: 112,
-            display: 'grid',
-            placeItems: 'center',
-            padding: '16px',
-            pointerEvents: 'auto',
-          }}
-          onClick={() => setShowAndroidModal(false)}
-        >
-          <div
-            style={{
-              width: '100%',
-              maxWidth: '520px',
-              background: 'linear-gradient(180deg, #0f172a 0%, #090d16 100%)',
-              borderTop: '2px solid #34d399',
-              borderLeft: '2px solid #34d399',
-              borderRight: '2px solid #34d399',
-              borderBottom: '5px solid #064e3b',
-              borderRadius: '14px',
-              padding: '18px 20px',
-              boxShadow: '0 24px 64px rgba(0,0,0,0.9)',
-              color: '#f8fafc',
-              display: 'flex',
-              flexDirection: 'column',
-              gap: '12px',
-            }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid rgba(52,211,153,0.25)', paddingBottom: '10px' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                <img
-                  src={CASTLE_EMBLEM_SRC}
-                  alt="App Icon"
-                  style={{ width: '38px', height: '38px', borderRadius: '8px', objectFit: 'cover' }}
-                />
-                <div>
-                  <h2 style={{ margin: 0, font: "800 18px 'Barlow Condensed'", color: '#a7f3d0' }}>
-                    📲 EMPIRE OF THE RISING TOWERS — ANDROID APP &amp; BUNDLE
-                  </h2>
-                  <div style={{ fontSize: '11px', color: '#86efac', fontVariantNumeric: 'tabular-nums' }}>
-                    UNITE THE KINGDOM · BY NEPGAME · v{__APP_VERSION__} (b{__APK_VERSION_CODE__})
-                  </div>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => setShowAndroidModal(false)}
-                style={{ background: 'transparent', border: 'none', color: '#94a3b8', fontSize: '18px', cursor: 'pointer' }}
-              >
-                ✕
-              </button>
-            </div>
-
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'rgba(16, 185, 129, 0.12)', border: '1px solid rgba(52, 211, 153, 0.35)', borderRadius: '8px', padding: '8px 12px', fontSize: '11.5px', color: '#d1fae5', fontVariantNumeric: 'tabular-nums' }}>
-              <span>
-                <b>Package ID:</b> <code>com.himalayanrealms.strategy</code>
-              </span>
-              <span style={{ color: '#fde047', fontWeight: 700 }}>
-                v{__APP_VERSION__} (code {__APK_VERSION_CODE__})
-              </span>
-            </div>
-
-            {isInstallable ? (
-              <button
-                type="button"
-                onClick={async () => {
-                  const ok = await installPWA();
-                  if (ok) {
-                    setShowAndroidModal(false);
-                    onShowToast?.('📱 Empire of the Rising Towers added to Android Home Screen!');
-                  }
-                }}
-                style={{
-                  width: '100%',
-                  padding: '10px 14px',
-                  borderRadius: '9px',
-                  background: 'linear-gradient(180deg, #059669, #065f46)',
-                  borderTop: '1.5px solid #34d399',
-                  borderLeft: '1.5px solid #34d399',
-                  borderRight: '1.5px solid #34d399',
-                  borderBottom: '3.5px solid #022c22',
-                  color: '#fef08a',
-                  font: "800 14px 'Barlow Condensed'",
-                  cursor: 'pointer',
-                }}
-              >
-                📲 Install Fullscreen Android App Directly
-              </button>
-            ) : (
-              <div style={{ background: 'rgba(6, 78, 59, 0.3)', border: '1px solid rgba(52,211,153,0.35)', borderRadius: '8px', padding: '10px 12px', fontSize: '12px', color: '#d1fae5', lineHeight: 1.5 }}>
-                {isIOS ? (
-                  <>
-                    <b>Install on iPhone / iPad:</b> Tap <b>Share</b> in Safari and choose <b>Add to Home Screen</b>.
-                  </>
-                ) : isAndroid ? (
-                  <>
-                    <b>Install on Android Chrome:</b> Open Chrome menu (⋮) → <b>Add to Home screen</b> → <b>Install</b> for fullscreen app mode with your Castle Crest icon.
-                  </>
-                ) : (
-                  <>
-                    <b>Quick Mobile Install:</b> Open this URL in Android Chrome and tap <b>Install App</b> in the browser bar/menu for fullscreen standalone play.
-                  </>
-                )}
-              </div>
-            )}
-
-            <div style={{ background: 'rgba(15, 23, 42, 0.9)', border: '1px solid rgba(56,189,248,0.3)', borderRadius: '8px', padding: '10px 12px', fontSize: '11.5px', color: '#cbd5e1', lineHeight: 1.5 }}>
-              <div style={{ font: "800 13px 'Barlow Condensed'", color: '#7dd3fc', marginBottom: '4px' }}>
-                📦 AUTO-VERSIONED NATIVE .APK &amp; GITHUB RELEASES
-              </div>
-              Every push to <code>main</code> (or local build) automatically increments <code>versionCode</code> in <code>android/app/build.gradle</code> and publishes signed APK (<code>Empire-of-the-Rising-Towers-debug.apk</code>) and Android App Bundle (<code>Empire-of-the-Rising-Towers-release.aab</code>) builds so mobile installs cleanly replace the previous version.
-              <pre style={{ margin: '6px 0 0', padding: '7px 9px', background: '#020617', borderRadius: '6px', fontSize: '10.5px', color: '#fef08a', overflowX: 'auto' }}>
-                npm run android:apk
-              </pre>
-              <div style={{ fontSize: '10.5px', color: '#94a3b8', marginTop: '4px' }}>
-                Local output: <code>android-apk/Empire-of-the-Rising-Towers-debug.apk</code> &amp; <code>Empire-of-the-Rising-Towers-release.aab</code>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
+      <AndroidApkModal
+        isOpen={showAndroidModal}
+        onClose={() => setShowAndroidModal(false)}
+        isInstallable={isInstallable}
+        isInstalled={isInstalled}
+        isIOS={isIOS}
+        isAndroid={isAndroid}
+        onInstallPWA={installPWA}
+        onShowToast={onShowToast}
+      />
 
       {!isOnline && (
         <div

@@ -1,6 +1,7 @@
 import React, { Suspense, lazy } from 'react';
 import { AuthErrorBoundary } from './components/AuthErrorBoundary';
 import { AuthProvider, useAuth } from './context/AuthContext';
+import { UpdatePromptBanner } from './components/UpdatePromptBanner';
 import royalCrestImg from './assets/images/royal_crest_ui.webp';
 
 const AuthGatewayScreen = lazy(() =>
@@ -84,6 +85,7 @@ export const App: React.FC = () => {
     <AuthErrorBoundary>
       <AuthProvider>
         <AppGate />
+        <UpdatePromptBanner />
       </AuthProvider>
     </AuthErrorBoundary>
   );

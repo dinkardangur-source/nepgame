@@ -32,7 +32,7 @@ if (fs.existsSync(versionFile)) {
 
 fs.mkdirSync(outDir, { recursive: true });
 for (const entry of fs.readdirSync(outDir)) {
-  if (entry.endsWith('.apk') || entry.endsWith('.aab')) {
+  if (entry.endsWith('.apk') || entry.endsWith('.aab') || entry === 'latest.json') {
     fs.unlinkSync(path.join(outDir, entry));
   }
 }
@@ -44,37 +44,50 @@ function copyPair(srcPath, rollingName, versionedName) {
   const versionedDest = path.join(outDir, versionedName);
   fs.copyFileSync(srcPath, rollingDest);
   fs.copyFileSync(srcPath, versionedDest);
-  const sizeMb = (fs.statSync(versionedDest).size / (1024 * 1024)).toFixed(2);
-  packaged.push(`${versionedName} & ${rollingName} (${sizeMb} MB)`);
+  const sizeBytes = fs.statSync(versionedDest).size;
+  const sizeMb = (sizeBytes / (1024 * 1024)).toFixed(2);
+  packaged.push(`${rollingName} & ${versionedName} (${sizeMb} MB)`);
+  return sizeBytes;
 }
 
-if (hasDebugApk) {
-  copyPair(
-    debugApkSrc,
-    'Empire-of-the-Rising-Towers-debug.apk',
-    `Empire-of-the-Rising-Towers-v${versionName}-b${versionCode}-debug.apk`
-  );
+let primaryApkBytes = 0;
+const primaryApkName = 'Empire-of-the-Rising-Towers.apk';
+const versionedApkName = `Empire-of-the-Rising-Towers-v${versionName}-b${versionCode}.apk`;
+
+// Primary APK: prefer release APK if present, else debug APK, packaged cleanly as Empire-of-the-Rising-Towers.apk + versioned copy
+const primaryApkSrc = hasReleaseApk ? releaseApkSrc : debugApkSrc;
+if (primaryApkSrc && fs.existsSync(primaryApkSrc)) {
+  primaryApkBytes = copyPair(primaryApkSrc, primaryApkName, versionedApkName);
 }
-if (hasReleaseApk) {
+
+let primaryAabName = null;
+if (hasReleaseAab) {
+  primaryAabName = 'Empire-of-the-Rising-Towers.aab';
   copyPair(
-    releaseApkSrc,
-    'Empire-of-the-Rising-Towers-release.apk',
-    `Empire-of-the-Rising-Towers-v${versionName}-b${versionCode}-release.apk`
+    releaseAabSrc,
+    primaryAabName,
+    `Empire-of-the-Rising-Towers-v${versionName}-b${versionCode}.aab`
   );
-}
-if (hasDebugAab) {
+} else if (hasDebugAab) {
+  primaryAabName = 'Empire-of-the-Rising-Towers-debug.aab';
   copyPair(
     debugAabSrc,
-    'Empire-of-the-Rising-Towers-debug.aab',
+    primaryAabName,
     `Empire-of-the-Rising-Towers-v${versionName}-b${versionCode}-debug.aab`
   );
 }
-if (hasReleaseAab) {
-  copyPair(
-    releaseAabSrc,
-    'Empire-of-the-Rising-Towers-release.aab',
-    `Empire-of-the-Rising-Towers-v${versionName}-b${versionCode}-release.aab`
-  );
-}
+
+const latestManifest = {
+  appName: 'Empire of the Rising Towers',
+  packageId: 'com.himalayanrealms.strategy',
+  versionName,
+  versionCode,
+  apkFile: primaryApkBytes > 0 ? primaryApkName : null,
+  versionedApkFile: primaryApkBytes > 0 ? versionedApkName : null,
+  apkSizeBytes: primaryApkBytes,
+  aabFile: primaryAabName,
+  updatedAt: new Date().toISOString(),
+};
+fs.writeFileSync(path.join(outDir, 'latest.json'), `${JSON.stringify(latestManifest, null, 2)}\n`, 'utf8');
 
 console.log(`[Android Packaged] ${packaged.join(' | ')}`);

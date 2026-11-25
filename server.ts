@@ -1,5 +1,6 @@
 import express from 'express';
 import type { Request, Response, NextFunction } from 'express';
+import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { GoogleGenAI, GenerateVideosOperation } from '@google/genai';
@@ -205,9 +206,77 @@ const staticOptions = {
     }
   }
 };
+const apkDir = path.join(__dirname, 'android-apk');
+
+function resolveLocalApkInfo() {
+  const versionFilePath = path.join(__dirname, 'apk-version.json');
+  const latestManifestPath = path.join(apkDir, 'latest.json');
+  let versionName = '1.0.0';
+  let versionCode = 1;
+
+  if (fs.existsSync(versionFilePath)) {
+    try {
+      const parsed = JSON.parse(fs.readFileSync(versionFilePath, 'utf8'));
+      if (typeof parsed.versionName === 'string') versionName = parsed.versionName;
+      if (typeof parsed.versionCode === 'number') versionCode = parsed.versionCode;
+    } catch {
+      // Ignore parse errors
+    }
+  }
+
+  let fileName = 'Empire-of-the-Rising-Towers.apk';
+  let filePath = path.join(apkDir, fileName);
+  let updatedAt: string | null = null;
+
+  if (fs.existsSync(latestManifestPath)) {
+    try {
+      const manifest = JSON.parse(fs.readFileSync(latestManifestPath, 'utf8'));
+      if (typeof manifest.versionName === 'string') versionName = manifest.versionName;
+      if (typeof manifest.versionCode === 'number') versionCode = manifest.versionCode;
+      if (typeof manifest.updatedAt === 'string') updatedAt = manifest.updatedAt;
+      if (typeof manifest.apkFile === 'string') {
+        const candidate = path.join(apkDir, manifest.apkFile);
+        if (fs.existsSync(candidate)) {
+          fileName = manifest.apkFile;
+          filePath = candidate;
+        }
+      }
+    } catch {
+      // Ignore parse errors
+    }
+  }
+
+  if (!fs.existsSync(filePath) && fs.existsSync(apkDir)) {
+    const entries = fs.readdirSync(apkDir).filter((f) => f.endsWith('.apk'));
+    if (entries.length > 0) {
+      const preferred =
+        entries.find((f) => f === 'Empire-of-the-Rising-Towers.apk') ||
+        entries.find((f) => f.startsWith('Empire-of-the-Rising-Towers')) ||
+        entries[0];
+      fileName = preferred;
+      filePath = path.join(apkDir, preferred);
+    }
+  }
+
+  const available = fs.existsSync(filePath);
+  const stat = available ? fs.statSync(filePath) : null;
+
+  return {
+    available,
+    fileName: 'Empire-of-the-Rising-Towers.apk',
+    actualFileName: fileName,
+    filePath,
+    versionName,
+    versionCode,
+    sizeBytes: stat ? stat.size : 0,
+    updatedAt: updatedAt || (stat ? stat.mtime.toISOString() : null),
+    downloadUrl: available ? '/download/apk' : null,
+  };
+}
+
 app.use('/assets', express.static(path.join(__dirname, 'public/assets'), staticOptions));
 app.use('/assets', express.static(path.join(__dirname, 'assets'), staticOptions));
-app.use('/android-apk', express.static(path.join(__dirname, 'android-apk'), {
+app.use('/android-apk', express.static(apkDir, {
   setHeaders: (res: Response, filePath: string) => {
     if (filePath.endsWith('.apk')) {
       res.setHeader('Content-Type', 'application/vnd.android.package-archive');
@@ -215,6 +284,29 @@ app.use('/android-apk', express.static(path.join(__dirname, 'android-apk'), {
     }
   }
 }));
+
+app.get('/api/apk-info', (_req: Request, res: Response) => {
+  const info = resolveLocalApkInfo();
+  res.json({
+    available: info.available,
+    fileName: info.fileName,
+    versionName: info.versionName,
+    versionCode: info.versionCode,
+    sizeBytes: info.sizeBytes,
+    updatedAt: info.updatedAt,
+    downloadUrl: info.downloadUrl,
+  });
+});
+
+app.get('/download/apk', (_req: Request, res: Response) => {
+  const info = resolveLocalApkInfo();
+  if (!info.available) {
+    return res.status(404).json({ error: 'Local APK build not generated yet.' });
+  }
+  res.setHeader('Content-Type', 'application/vnd.android.package-archive');
+  res.setHeader('Content-Disposition', 'attachment; filename="Empire-of-the-Rising-Towers.apk"');
+  return res.sendFile(info.filePath);
+});
 
 app.get('/api/health', (_req: Request, res: Response) => {
   res.json({ status: 'ok' });

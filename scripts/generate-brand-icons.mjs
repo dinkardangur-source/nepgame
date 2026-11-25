@@ -6,7 +6,7 @@ import sharp from 'sharp';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
 const imgAssetsDir = path.join(rootDir, 'src', 'assets', 'images');
-const srcCrestPath = path.join(imgAssetsDir, 'kingdom_royal_crest_1795507272952.jpg');
+const srcCrestPath = path.join(imgAssetsDir, 'royal_crest_master.png');
 const srcFortressPath = path.join(imgAssetsDir, 'login_himalayan_fortress_1795507273124.jpg');
 const publicDir = path.join(rootDir, 'public');
 const resDir = path.join(rootDir, 'android', 'app', 'src', 'main', 'res');
@@ -14,18 +14,11 @@ const resDir = path.join(rootDir, 'android', 'app', 'src', 'main', 'res');
 const BG_COLOR = { r: 10, g: 14, b: 20, alpha: 1 }; // #0a0e14
 const BG_HEX = '#0a0e14';
 
-function createRadialFeatherMask(size, innerRadiusRatio = 0.38, outerRadiusRatio = 0.5) {
-  const rInner = Math.round(size * innerRadiusRatio);
-  const rOuter = Math.round(size * outerRadiusRatio);
+function createRoundedRectMask(size, radiusRatio = 0.21) {
+  const r = Math.max(2, Math.round(size * radiusRatio));
   const svg = `
     <svg width="${size}" height="${size}" xmlns="http://www.w3.org/2000/svg">
-      <defs>
-        <radialGradient id="fade" cx="50%" cy="50%" r="50%">
-          <stop offset="${Math.round((rInner / rOuter) * 100)}%" stop-color="white" stop-opacity="1"/>
-          <stop offset="100%" stop-color="white" stop-opacity="0"/>
-        </radialGradient>
-      </defs>
-      <rect width="${size}" height="${size}" fill="url(#fade)"/>
+      <rect x="0" y="0" width="${size}" height="${size}" rx="${r}" ry="${r}" fill="white"/>
     </svg>
   `;
   return Buffer.from(svg);
@@ -42,39 +35,60 @@ function createCircleClipMask(size) {
   return Buffer.from(svg);
 }
 
-async function renderCrestOnBackground(
-  size,
-  crestScale,
-  { transparent = false, circleClip = false, feather = true, format = 'png', quality = 90 } = {}
-) {
-  if (crestScale >= 1.0) {
-    const srcMeta = await sharp(srcCrestPath).metadata();
-    const srcDim = Math.min(srcMeta.width || 1024, srcMeta.height || 1024);
-    const cropDim = Math.max(64, Math.round(srcDim / crestScale));
-    const offset = Math.floor((srcDim - cropDim) / 2);
-    const pipeline = sharp(srcCrestPath)
-      .extract({ left: offset, top: offset, width: cropDim, height: cropDim })
-      .resize(size, size, { fit: 'cover', kernel: sharp.kernel.lanczos3 })
-      .removeAlpha();
-    if (format === 'webp') {
-      return pipeline.webp({ quality, effort: 5 }).toBuffer();
-    }
-    return pipeline.png({ compressionLevel: 9, palette: size <= 256 }).toBuffer();
+/**
+ * Extracts the inner rounded-square royal crest cleanly (trimming any outer screenshot margin),
+ * upscales cleanly with lanczos3, and clips outer corner pixels so edges sit seamlessly on #0a0e14.
+ */
+async function extractCleanCrestSquare(targetSize, { roundCornerClip = true } = {}) {
+  const meta = await sharp(srcCrestPath).metadata();
+  const w = meta.width || 140;
+  const h = meta.height || 136;
+
+  // For the 140x136 master badge, the gold squircle rim spans x: 9..131, y: 7..129 (123x123).
+  const isDefaultMaster = w === 140 && h === 136;
+  const cropBox = isDefaultMaster
+    ? { left: 9, top: 7, width: 123, height: 123 }
+    : (() => {
+        const side = Math.min(w, h);
+        const trim = Math.round(side * 0.05);
+        const dim = Math.max(32, side - trim * 2);
+        return {
+          left: Math.floor((w - dim) / 2),
+          top: Math.floor((h - dim) / 2),
+          width: dim,
+          height: dim,
+        };
+      })();
+
+  let pipeline = sharp(srcCrestPath)
+    .extract(cropBox)
+    .resize(targetSize, targetSize, { fit: 'cover', kernel: sharp.kernel.lanczos3 })
+    .ensureAlpha();
+
+  if (targetSize >= 64) {
+    pipeline = pipeline.sharpen({ sigma: 0.6, m1: 0.4, m2: 1.2 });
   }
 
-  const crestSize = Math.min(size, Math.max(12, Math.round(size * crestScale)));
-  let crestBuf = await sharp(srcCrestPath)
-    .resize(crestSize, crestSize, { fit: 'cover', kernel: sharp.kernel.lanczos3 })
-    .ensureAlpha()
-    .toBuffer();
+  let buf = await pipeline.png().toBuffer();
 
-  if (feather) {
-    const mask = createRadialFeatherMask(crestSize, 0.37, 0.495);
-    crestBuf = await sharp(crestBuf)
+  if (roundCornerClip) {
+    const mask = createRoundedRectMask(targetSize, 0.215);
+    buf = await sharp(buf)
       .composite([{ input: mask, blend: 'dest-in' }])
       .png()
       .toBuffer();
   }
+
+  return buf;
+}
+
+async function renderCrestOnBackground(
+  size,
+  crestScale = 0.94,
+  { transparent = false, circleClip = false, format = 'png', quality = 90 } = {}
+) {
+  const crestSize = Math.min(size, Math.max(12, Math.round(size * crestScale)));
+  const crestBuf = await extractCleanCrestSquare(crestSize, { roundCornerClip: true });
 
   const base = sharp({
     create: {
@@ -103,25 +117,15 @@ async function renderCrestOnBackground(
     if (format === 'webp') {
       return out.webp({ quality, effort: 5 }).toBuffer();
     }
-    return out.png({ compressionLevel: 9 }).toBuffer();
+    return out.png({ compressionLevel: 9, palette: size <= 256 }).toBuffer();
   }
   return composited;
 }
 
 async function renderSplash(width, height) {
   const shortSide = Math.min(width, height);
-  const crestSize = Math.round(shortSide * 0.6);
-
-  let crestBuf = await sharp(srcCrestPath)
-    .resize(crestSize, crestSize, { fit: 'cover', kernel: sharp.kernel.lanczos3 })
-    .ensureAlpha()
-    .toBuffer();
-
-  const mask = createRadialFeatherMask(crestSize, 0.36, 0.49);
-  crestBuf = await sharp(crestBuf)
-    .composite([{ input: mask, blend: 'dest-in' }])
-    .png()
-    .toBuffer();
+  const crestSize = Math.round(shortSide * 0.56);
+  const crestBuf = await extractCleanCrestSquare(crestSize, { roundCornerClip: true });
 
   const glowSvg = Buffer.from(`
     <svg width="${width}" height="${height}" xmlns="http://www.w3.org/2000/svg">
@@ -170,13 +174,13 @@ function packPngsAsIco(entries) {
 }
 
 async function optimizeWebAppImages() {
-  // Tightly framed, featherweight Royal Crest UI asset (~16-22 KB instead of 955 KB)
+  // Tightly framed, featherweight Royal Crest UI asset
   fs.writeFileSync(
     path.join(imgAssetsDir, 'royal_crest_ui.webp'),
-    await renderCrestOnBackground(256, 1.16, { format: 'webp', quality: 88 })
+    await renderCrestOnBackground(256, 0.96, { format: 'webp', quality: 92 })
   );
 
-  // Compressed login fortress scene (~100-140 KB instead of 874 KB)
+  // Compressed login fortress scene
   if (fs.existsSync(srcFortressPath)) {
     await sharp(srcFortressPath)
       .resize({ width: 1280, withoutEnlargement: true, kernel: sharp.kernel.lanczos3 })
@@ -184,7 +188,7 @@ async function optimizeWebAppImages() {
       .toFile(path.join(imgAssetsDir, 'login_fortress_opt.webp'));
   }
 
-  // Lightweight hero portrait WebPs (~28-40 KB each instead of ~750-900 KB each)
+  // Lightweight hero portrait WebPs
   const heroFiles = [
     ['hero_bhimsen_thapa_1795354185737.jpg', 'hero_bhimsen_thapa.webp'],
     ['hero_bhakti_thapa_1795354185265.jpg', 'hero_bhakti_thapa.webp'],
@@ -210,10 +214,10 @@ async function main() {
 
   await optimizeWebAppImages();
 
-  // 1. Web & PWA Icons (public/) — tighter zoom on small favicons for bold silhouette clarity
-  const favicon16 = await renderCrestOnBackground(16, 1.22);
-  const favicon32 = await renderCrestOnBackground(32, 1.2);
-  const favicon48 = await renderCrestOnBackground(48, 1.16);
+  // 1. Web & PWA Icons (public/)
+  const favicon16 = await renderCrestOnBackground(16, 0.98);
+  const favicon32 = await renderCrestOnBackground(32, 0.98);
+  const favicon48 = await renderCrestOnBackground(48, 0.96);
   const icoBuffer = packPngsAsIco([
     { size: 16, data: favicon16 },
     { size: 32, data: favicon32 },
@@ -223,18 +227,18 @@ async function main() {
   fs.writeFileSync(path.join(publicDir, 'favicon-32x32.png'), favicon32);
   fs.writeFileSync(path.join(publicDir, 'favicon.ico'), icoBuffer);
   fs.writeFileSync(path.join(rootDir, 'favicon.ico'), icoBuffer);
-  fs.writeFileSync(path.join(publicDir, 'apple-touch-icon.png'), await renderCrestOnBackground(180, 1.08));
-  fs.writeFileSync(path.join(publicDir, 'pwa-192x192.png'), await renderCrestOnBackground(192, 1.08));
-  fs.writeFileSync(path.join(publicDir, 'pwa-512x512.png'), await renderCrestOnBackground(512, 1.08));
-  // Maskable icon preserves 13% safe-zone padding on all sides (0.74 centered)
+  fs.writeFileSync(path.join(publicDir, 'apple-touch-icon.png'), await renderCrestOnBackground(180, 0.92));
+  fs.writeFileSync(path.join(publicDir, 'pwa-192x192.png'), await renderCrestOnBackground(192, 0.94));
+  fs.writeFileSync(path.join(publicDir, 'pwa-512x512.png'), await renderCrestOnBackground(512, 0.94));
+  // Maskable icon preserves ~14% safe-zone padding on all sides (0.72 centered on #0a0e14)
   fs.writeFileSync(
     path.join(publicDir, 'pwa-maskable-512x512.png'),
-    await renderCrestOnBackground(512, 0.74, { transparent: false, feather: true })
+    await renderCrestOnBackground(512, 0.72, { transparent: false })
   );
   // Compact boot crest image for index.html splash screen
   fs.writeFileSync(
     path.join(publicDir, 'boot-crest.png'),
-    await renderCrestOnBackground(256, 1.16)
+    await renderCrestOnBackground(256, 0.96)
   );
 
   // 2. Android Mipmap Launcher Icons
@@ -249,14 +253,14 @@ async function main() {
   for (const { dir, icon, fg } of mipmapSizes) {
     const outDir = path.join(resDir, dir);
     fs.mkdirSync(outDir, { recursive: true });
-    fs.writeFileSync(path.join(outDir, 'ic_launcher.png'), await renderCrestOnBackground(icon, 1.08));
+    fs.writeFileSync(path.join(outDir, 'ic_launcher.png'), await renderCrestOnBackground(icon, 0.94));
     fs.writeFileSync(
       path.join(outDir, 'ic_launcher_round.png'),
-      await renderCrestOnBackground(icon, 0.96, { transparent: true, circleClip: true })
+      await renderCrestOnBackground(icon, 0.8, { transparent: false, circleClip: true })
     );
     fs.writeFileSync(
       path.join(outDir, 'ic_launcher_foreground.png'),
-      await renderCrestOnBackground(fg, 0.65, { transparent: true, feather: true })
+      await renderCrestOnBackground(fg, 0.64, { transparent: true })
     );
   }
 
@@ -281,7 +285,7 @@ async function main() {
     fs.writeFileSync(path.join(outDir, 'splash.png'), await renderSplash(w, h));
   }
 
-  console.log('[generate-brand-icons] Generated tightly framed Royal Crest WebP/PNG/ICO assets, compressed login/hero images, Android mipmaps, and splashes.');
+  console.log('[generate-brand-icons] Generated all web, PWA, UI, Android mipmap, and splash icons from royal_crest_master.png.');
 }
 
 main().catch((err) => {
